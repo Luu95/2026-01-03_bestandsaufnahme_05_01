@@ -410,6 +410,33 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     );
   }
 
+  /// Öffnet den Dialog zum Hinzufügen eines neuen Bauteils unter einer Anlage.
+  void _showAddBauteilDialog(Anlage parent) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => GenericAnlageDialog(
+        discipline: widget.discipline,
+        buildingId: widget.building.id,
+        floorId: widget.floor.id,
+        parentId: parent.id,
+        existingAnlage: null,
+        index: null,
+        onSave: (newBauteil, _) async {
+          setState(() {
+            _alleAnlagen.add(newBauteil);
+            _expandedAnlagenIds.add(parent.id); // Parent nach dem Erstellen automatisch aufklappen
+          });
+          await _saveAnlagen();
+          await _loadAnlagen();
+        },
+      ),
+    );
+  }
+
   /// Von außen aufrufbar, um den Hinzufügen-Dialog zu öffnen.
   void openAddDialog() {
     _showAddDialog();
@@ -867,8 +894,40 @@ class SystemsPageState extends ConsumerState<SystemsPage>
               ))
         : null;
 
-    final trailing = (!isChild && hasChildren)
-        ? Container(
+    Widget? trailing;
+    if (_isSelectionMode) {
+      trailing = baseTrailing;
+    } else {
+      final actions = <Widget>[];
+
+      // Plus nur für Anlagen (nicht für Bauteile) anzeigen
+      if (!isChild) {
+        actions.add(
+          Container(
+            margin: const EdgeInsets.only(right: 4),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => _showAddBauteilDialog(a),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.add,
+                    color: Theme.of(context).primaryColor,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      // Expand-Arrow nur wenn Kinder vorhanden
+      if (!isChild && hasChildren) {
+        actions.add(
+          Container(
             margin: const EdgeInsets.only(right: 4),
             child: Material(
               color: Colors.transparent,
@@ -879,16 +938,23 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                   padding: const EdgeInsets.all(8),
                   child: Icon(
                     isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    color: isExpanded 
-                        ? Theme.of(context).primaryColor 
-                        : Colors.grey[600],
+                    color: isExpanded ? Theme.of(context).primaryColor : Colors.grey[600],
                     size: 24,
                   ),
                 ),
               ),
             ),
-          )
-        : baseTrailing;
+          ),
+        );
+      }
+
+      if (actions.isNotEmpty) {
+        trailing = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: actions,
+        );
+      }
+    }
 
     // Bestimme die Hintergrundfarbe basierend auf dem Status und Typ
     Color? cardBackgroundColor;

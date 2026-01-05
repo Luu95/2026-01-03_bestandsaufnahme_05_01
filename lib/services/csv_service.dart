@@ -29,6 +29,68 @@ class CsvService {
   static const String _delimiter = ';';
   static const Uuid _uuid = Uuid();
 
+  /// Sortiert Anlagen für den Export so, dass Bauteile (child, parentId != null)
+  /// direkt unter ihrer zugehörigen Anlage (parent) erscheinen.
+  static List<Anlage> _orderAnlagenHierarchically(List<Anlage> anlagen) {
+    final parentsInOrder = <String, Anlage>{};
+    final parentOrder = <String>[];
+    final childrenByParent = <String, List<Anlage>>{};
+    final orphans = <Anlage>[];
+
+    for (final a in anlagen) {
+      final pid = a.parentId;
+      if (pid == null || pid.isEmpty) {
+        if (!parentsInOrder.containsKey(a.id)) {
+          parentsInOrder[a.id] = a;
+          parentOrder.add(a.id);
+        }
+      } else {
+        (childrenByParent[pid] ??= <Anlage>[]).add(a);
+      }
+    }
+
+    final ordered = <Anlage>[];
+    for (final parentId in parentOrder) {
+      final parent = parentsInOrder[parentId];
+      if (parent == null) continue;
+      ordered.add(parent);
+      final kids = childrenByParent[parent.id];
+      if (kids != null && kids.isNotEmpty) {
+        ordered.addAll(kids);
+      }
+    }
+
+    // Falls Kinder ohne Parent exportiert werden sollen (z.B. gefilterte Liste)
+    // hängen wir sie am Ende an.
+    final exportedIds = ordered.map((e) => e.id).toSet();
+    for (final a in anlagen) {
+      if (!exportedIds.contains(a.id)) {
+        if (a.parentId != null && a.parentId!.isNotEmpty) {
+          orphans.add(a);
+        } else {
+          ordered.add(a);
+        }
+      }
+    }
+    ordered.addAll(orphans);
+
+    return ordered;
+  }
+
+  static bool _isAnlageBauteilKey(String key) {
+    final k = key.trim().toLowerCase();
+    return k == 'anlage/bautel' || k == 'anlage/bauteil';
+  }
+
+  static String _getAnlageBauteilFlag(Anlage anlage) {
+    // Kinder sind immer "B". Für Parents "A", außer wenn explizit gesetzt.
+    if (anlage.parentId != null && anlage.parentId!.trim().isNotEmpty) return 'B';
+    final existing = (anlage.params['Anlage/Bautel'] ?? anlage.params['Anlage/Bauteil'] ?? '')
+        .toString()
+        .trim();
+    return existing.isNotEmpty ? existing : 'A';
+  }
+
   /// Importiert Anlagen aus einer CSV-Datei.
   /// 
   /// CSV-Struktur:
@@ -753,6 +815,13 @@ class CsvService {
     }
 
     try {
+      // CSV-Einstellungen laden (Spaltenzuordnung)
+      final csvSettings = await _loadCsvSettings(projectId);
+      final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
+      final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
+      final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
+      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
+
       // Bestimme alle eindeutigen Schemas aus den Disziplinen
       // Wir brauchen eine Vereinigung aller Schema-Keys, um konsistente Spalten zu haben
       final allSchemaKeys = <String>{};
@@ -760,7 +829,7 @@ class CsvService {
         if (anlage.discipline.schema.isNotEmpty) {
           for (final schemaEntry in anlage.discipline.schema) {
             final key = schemaEntry['key'] ?? schemaEntry['label'] ?? '';
-            if (key.isNotEmpty && key != 'lfdNummer') {
+            if (key.isNotEmpty && key != 'lfdNummer' && !_isAnlageBauteilKey(key)) {
               // lfdNummer wird separat behandelt, nicht als Schema-Key
               allSchemaKeys.add(key);
             }
@@ -776,17 +845,19 @@ class CsvService {
       // CSV-Daten erstellen
       final csvData = <List<String>>[];
 
-      // Header-Zeile erstellen - Standard-Reihenfolge: lfd Nummer, Name, Gewerk, dann Parameter, dann Fotonummern
-      final headerRow = <String>[
-        'lfd Nummer',
-        'Name',
-        'Gewerk',
-        ...sortedSchemaKeys,
-        'Foto1',
-        'Foto2',
-        'Foto3',
-        'Foto4',
-      ];
+      // Header-Zeile erstellen basierend auf den CSV-Einstellungen (Spaltenzuordnung)
+      final fixedColumns = <int>[lfdNummerIdx, nameIdx, disciplineIdx];
+      if (anlageBauteilIdx != null) fixedColumns.add(anlageBauteilIdx);
+      final maxFixedColumn = fixedColumns.reduce((a, b) => a > b ? a : b);
+      final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+      headerRow[lfdNummerIdx] = 'lfd Nummer';
+      headerRow[nameIdx] = 'Name';
+      headerRow[disciplineIdx] = 'Gewerk';
+      if (anlageBauteilIdx != null) {
+        headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
+      }
+      headerRow.addAll(sortedSchemaKeys);
+      headerRow.addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']);
 
       csvData.add(headerRow);
 
@@ -795,26 +866,33 @@ class CsvService {
       // Zähler für neue Anlagen ohne lfdNummer
       int neueAnlagenZaehler = 1;
 
-      // Daten-Zeilen
-      for (final anlage in anlagen) {
-        final dataRow = <String>[];
+      // Hierarchisch anordnen: Parent-Anlage, dann Bauteile darunter
+      final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
 
-        // Spalte 0: Laufende Nummer aus params
-        // Wenn keine vorhanden, generiere "Neu_0001", "Neu_0002", etc.
+      // Daten-Zeilen
+      for (final anlage in orderedAnlagen) {
+        final dataRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+
+        // Laufende Nummer aus params
         String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
         if (lfdNummer.isEmpty || lfdNummer.trim().isEmpty) {
           lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
           neueAnlagenZaehler++;
         }
-        dataRow.add(lfdNummer);
+        dataRow[lfdNummerIdx] = lfdNummer;
 
-        // Spalte 1: Anlagenname
-        dataRow.add(anlage.name);
+        // Name
+        dataRow[nameIdx] = anlage.name;
 
-        // Spalte 2: Gewerk (Disziplin-Label)
-        dataRow.add(anlage.discipline.label);
+        // Gewerk
+        dataRow[disciplineIdx] = anlage.discipline.label;
 
-        // Spalten 3+: Parameter aus Schema der Disziplin
+        // Anlage/Bauteil (a/b)
+        if (anlageBauteilIdx != null) {
+          dataRow[anlageBauteilIdx] = _getAnlageBauteilFlag(anlage);
+        }
+
+        // Parameter aus Schema der Disziplin (beginnen nach den festen Spalten)
         for (final schemaKey in sortedSchemaKeys) {
           final paramValue = anlage.params[schemaKey];
           if (paramValue != null) {
@@ -889,6 +967,13 @@ class CsvService {
     }
 
     try {
+      // CSV-Einstellungen laden (Spaltenzuordnung)
+      final csvSettings = await _loadCsvSettings(projectId);
+      final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
+      final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
+      final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
+      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
+
       // Temporäres Verzeichnis für Export erstellen
       final tempDir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -904,7 +989,7 @@ class CsvService {
         if (anlage.discipline.schema.isNotEmpty) {
           for (final schemaEntry in anlage.discipline.schema) {
             final key = schemaEntry['key'] ?? schemaEntry['label'] ?? '';
-            if (key.isNotEmpty && key != 'lfdNummer') {
+            if (key.isNotEmpty && key != 'lfdNummer' && !_isAnlageBauteilKey(key)) {
               allSchemaKeys.add(key);
             }
           }
@@ -917,16 +1002,18 @@ class CsvService {
       final csvData = <List<String>>[];
 
       // Header-Zeile
-      final headerRow = <String>[
-        'lfd Nummer',
-        'Name',
-        'Gewerk',
-        ...sortedSchemaKeys,
-        'Foto1',
-        'Foto2',
-        'Foto3',
-        'Foto4',
-      ];
+      final fixedColumns = <int>[lfdNummerIdx, nameIdx, disciplineIdx];
+      if (anlageBauteilIdx != null) fixedColumns.add(anlageBauteilIdx);
+      final maxFixedColumn = fixedColumns.reduce((a, b) => a > b ? a : b);
+      final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+      headerRow[lfdNummerIdx] = 'lfd Nummer';
+      headerRow[nameIdx] = 'Name';
+      headerRow[disciplineIdx] = 'Gewerk';
+      if (anlageBauteilIdx != null) {
+        headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
+      }
+      headerRow.addAll(sortedSchemaKeys);
+      headerRow.addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']);
       csvData.add(headerRow);
 
       // Zähler für neue Anlagen ohne lfdNummer
@@ -949,25 +1036,33 @@ class CsvService {
       // Map für Gewerk-Ordner (bei byGewerk)
       final Map<String, Directory> gewerkDirs = {};
 
-      // Verarbeite jede Anlage
-      for (final anlage in anlagen) {
-        final dataRow = <String>[];
+      // Hierarchisch anordnen: Parent-Anlage, dann Bauteile darunter
+      final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
 
-        // Spalte 0: Laufende Nummer
+      // Verarbeite jede Anlage
+      for (final anlage in orderedAnlagen) {
+        final dataRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+
+        // Laufende Nummer
         String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
         if (lfdNummer.isEmpty || lfdNummer.trim().isEmpty) {
           lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
           neueAnlagenZaehler++;
         }
-        dataRow.add(lfdNummer);
+        dataRow[lfdNummerIdx] = lfdNummer;
 
-        // Spalte 1: Anlagenname
-        dataRow.add(anlage.name);
+        // Name
+        dataRow[nameIdx] = anlage.name;
 
-        // Spalte 2: Gewerk
-        dataRow.add(anlage.discipline.label);
+        // Gewerk
+        dataRow[disciplineIdx] = anlage.discipline.label;
 
-        // Spalten 3+: Parameter
+        // Anlage/Bauteil (a/b)
+        if (anlageBauteilIdx != null) {
+          dataRow[anlageBauteilIdx] = _getAnlageBauteilFlag(anlage);
+        }
+
+        // Parameter
         for (final schemaKey in sortedSchemaKeys) {
           final paramValue = anlage.params[schemaKey];
           if (paramValue != null) {

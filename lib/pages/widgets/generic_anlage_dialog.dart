@@ -81,6 +81,9 @@ class GenericAnlageDialog extends StatefulWidget {
   final Disziplin discipline;
   final String buildingId;
   final String floorId;
+  /// Optional: Parent-Anlage-ID (für Bauteile). Wenn gesetzt, wird beim Speichern
+  /// `parentId` am neuen/editierten Datensatz entsprechend gesetzt.
+  final String? parentId;
   final Anlage? existingAnlage;
   final int? index;
   final void Function(Anlage anlage, int? index) onSave;
@@ -90,6 +93,7 @@ class GenericAnlageDialog extends StatefulWidget {
     required this.discipline,
     required this.buildingId,
     required this.floorId,
+    this.parentId,
     this.existingAnlage,
     this.index,
     required this.onSave,
@@ -471,7 +475,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                 // Erstelle temporäre Anlage für Status-Updates (mit bereits aktualisierten _params)
                 var tempAnlage = Anlage(
                   id: widget.existingAnlage?.id ?? '',
-                  parentId: widget.existingAnlage?.parentId,
+                  parentId: widget.parentId ?? widget.existingAnlage?.parentId,
                   name: _nameController.text.trim(),
                   params: Map<String, dynamic>.from(_params),
                   floorId: widget.floorId,
@@ -811,7 +815,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   void _toggleFieldValidation(String key) {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
-      parentId: widget.existingAnlage?.parentId,
+      parentId: widget.parentId ?? widget.existingAnlage?.parentId,
       name: _nameController.text.trim(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
@@ -831,7 +835,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   void _toggleFieldMissing(String key) {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
-      parentId: widget.existingAnlage?.parentId,
+      parentId: widget.parentId ?? widget.existingAnlage?.parentId,
       name: _nameController.text.trim(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
@@ -855,7 +859,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
     // Erstelle temporäre Anlage für Status-Prüfung
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
-      parentId: widget.existingAnlage?.parentId,
+      parentId: widget.parentId ?? widget.existingAnlage?.parentId,
       name: _nameController.text.trim(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
@@ -1018,7 +1022,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                       if (wasEmpty && val.trim().isNotEmpty) {
                         final updatedTempAnlage = Anlage(
                           id: widget.existingAnlage?.id ?? '',
-                          parentId: widget.existingAnlage?.parentId,
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
                           name: _nameController.text.trim(),
                           params: Map<String, dynamic>.from(_params),
                           floorId: widget.floorId,
@@ -1071,7 +1075,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                       if (wasEmpty && val.trim().isNotEmpty) {
                         final updatedTempAnlage = Anlage(
                           id: widget.existingAnlage?.id ?? '',
-                          parentId: widget.existingAnlage?.parentId,
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
                           name: _nameController.text.trim(),
                           params: Map<String, dynamic>.from(_params),
                           floorId: widget.floorId,
@@ -1104,6 +1108,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.existingAnlage != null;
+    final isBauteilCreate = !isEdit && widget.parentId != null;
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
 
     return ClipRRect(
@@ -1159,7 +1164,9 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  isEdit ? 'Anlage bearbeiten' : 'Neue Anlage erfassen',
+                                  isEdit
+                                      ? 'Anlage bearbeiten'
+                                      : (isBauteilCreate ? 'Neues Bauteil erfassen' : 'Neue Anlage erfassen'),
                                   style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w600,
@@ -1340,7 +1347,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         // Erstelle Anlage
                         var anlage = Anlage(
                           id: widget.existingAnlage?.id ?? const Uuid().v4(),
-                          parentId: widget.existingAnlage?.parentId,
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
                           name: name,
                           params: _params,
                           floorId: widget.floorId,
