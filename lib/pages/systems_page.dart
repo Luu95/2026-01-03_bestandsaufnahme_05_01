@@ -17,6 +17,7 @@ import '../services/anlage_validation_service.dart';
 
 // Widgets für Anlage-Dialoge (relativ zu lib/pages/)
 import 'widgets/generic_anlage_dialog.dart';
+import 'widgets/move_anlagen_dialog.dart';
 
 
 
@@ -41,6 +42,9 @@ class SystemsPage extends ConsumerStatefulWidget {
   /// Wird aufgerufen, wenn ein neues Bauteil (Child) gespeichert wurde (auch bei Bulk-Add).
   final VoidCallback? onBauteilCreated;
 
+  /// Wird aufgerufen, wenn Anlagen verschoben wurden (für Neuladen aller betroffenen Gewerke).
+  final VoidCallback? onAnlagenMoved;
+
   const SystemsPage({
     Key? key,
     required this.building,
@@ -50,6 +54,7 @@ class SystemsPage extends ConsumerStatefulWidget {
     this.isAnySelectionActive,
     this.onAnlageCreated,
     this.onBauteilCreated,
+    this.onAnlagenMoved,
   }) : super(key: key);
 
   @override
@@ -449,6 +454,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final toDeleteIds = _selectedAnlagenIds.toList();
 
     // Alle ausgewählten Anlagen aus der Datenbank löschen
+    // deleteAnlage löscht rekursiv alle Kinder (Bauteile) automatisch
     for (final id in toDeleteIds) {
       await dbService.deleteAnlage(id);
     }
@@ -457,8 +463,65 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       _alleAnlagen.removeWhere((a) => toDeleteIds.contains(a.id));
       _selectedAnlagenIds.clear();
     });
+    // Liste neu laden, um auch die gelöschten Kinder aus der UI zu entfernen
     await _loadAnlagen();
     _exitSelectionMode();
+  }
+
+  /// Öffnet den Dialog zum Verschieben der ausgewählten Anlagen.
+  Future<void> moveSelectedAnlagen() async {
+    final toMoveIds = _selectedAnlagenIds.toList();
+    final objectsToMove = _alleAnlagen
+        .where((a) => toMoveIds.contains(a.id))
+        .toList();
+
+    if (objectsToMove.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Keine Anlagen ausgewählt'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => MoveAnlagenDialog(
+        anlagenToMove: objectsToMove,
+        currentBuildingId: widget.building.id,
+        currentFloorId: widget.floor.id,
+        currentDiscipline: widget.discipline,
+      ),
+    );
+
+    if (result == true) {
+      // Erfolgreich verschoben
+      setState(() {
+        _selectedAnlagenIds.clear();
+        _isSelectionMode = false;
+      });
+      
+      // Liste neu laden, da Elemente weg sein könnten (anderes Gewerk/Floor)
+      await _loadAnlagen();
+      _exitSelectionMode();
+
+      // Callback aufrufen, um alle betroffenen Gewerke neu zu laden
+      widget.onAnlagenMoved?.call();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${toMoveIds.length} Element(e) verschoben'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
 
@@ -1011,8 +1074,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final itemKey = _anlageKeys[a.id]!;
 
     final anlageBautel = a.params['Anlage/Bautel']?.toString() ?? '';
+    
+    // Prüfe, ob irgendwo ein Selection-Mode aktiv ist (gewerkeübergreifend)
+    final anySelectionActive = widget.isAnySelectionActive?.call() ?? false;
+    final showSelectionCircles = _isSelectionMode || anySelectionActive;
 
-    final baseTrailing = _isSelectionMode
+    final baseTrailing = showSelectionCircles
         ? (isSelected
             ? Container(
                 padding: const EdgeInsets.all(4),
@@ -1037,7 +1104,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         : null;
 
     Widget? trailing;
-    if (_isSelectionMode) {
+    if (showSelectionCircles) {
       trailing = baseTrailing;
     } else {
       final actions = <Widget>[];
@@ -1178,27 +1245,28 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
           onTap: () {
-            if (_isSelectionMode) {
-              setState(() {
-                if (isSelected) {
-                  _selectedAnlagenIds.remove(a.id);
-                  if (_selectedAnlagenIds.isEmpty) {
-                    _exitSelectionMode();
-                  }
-                } else {
-                  _selectedAnlagenIds.add(a.id);
-                  widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
-                }
-              });
-            } else {
-              // Wenn bereits eine Selection in einem anderen Gewerk aktiv ist,
-              // dann diese Anlage auswählen statt den Edit-Dialog zu öffnen
-              if (widget.isAnySelectionActive != null && widget.isAnySelectionActive!()) {
+            if (showSelectionCircles) {
+              // Wenn Selection-Mode aktiv ist (eigener oder gewerkeübergreifend)
+              if (!_isSelectionMode) {
+                // Aktiviere Selection-Mode für diese SystemsPage
                 _enterSelectionMode(a.id);
               } else {
-                // Hier öffnet sich wieder Dein GenericAnlageDialog:
-                _showEditDialog(a);
+                // Toggle Selection
+                setState(() {
+                  if (isSelected) {
+                    _selectedAnlagenIds.remove(a.id);
+                    if (_selectedAnlagenIds.isEmpty) {
+                      _exitSelectionMode();
+                    }
+                  } else {
+                    _selectedAnlagenIds.add(a.id);
+                    widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
+                  }
+                });
               }
+            } else {
+              // Hier öffnet sich wieder Dein GenericAnlageDialog:
+              _showEditDialog(a);
             }
           },
           onLongPress: () {

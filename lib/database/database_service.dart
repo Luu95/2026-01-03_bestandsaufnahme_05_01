@@ -549,6 +549,50 @@ class DatabaseService {
     );
   }
 
+  /// Verschiebt eine oder mehrere Anlagen (inkl. aller Kinder rekursiv).
+  /// Aktualisiert floorId, parentId, buildingId und/oder discipline.
+  Future<void> moveAnlagen(
+    List<String> anlageIds, {
+    String? newFloorId,
+    String? newParentId,
+    String? newBuildingId,
+    Disziplin? newDiscipline,
+  }) async {
+    for (final anlageId in anlageIds) {
+      // Lade aktuelle Anlage
+      final currentAnlage = await getAnlageById(anlageId);
+      if (currentAnlage == null) continue;
+
+      // Erstelle aktualisierte Anlage
+      final updatedAnlage = models.Anlage(
+        id: currentAnlage.id,
+        parentId: newParentId ?? currentAnlage.parentId,
+        name: currentAnlage.name,
+        params: currentAnlage.params, // Behalte alle Parameter
+        floorId: newFloorId ?? currentAnlage.floorId,
+        buildingId: newBuildingId ?? currentAnlage.buildingId,
+        isMarker: currentAnlage.isMarker,
+        markerInfo: currentAnlage.markerInfo,
+        markerType: newDiscipline?.label ?? currentAnlage.markerType,
+        discipline: newDiscipline ?? currentAnlage.discipline,
+      );
+
+      await updateAnlage(updatedAnlage);
+
+      // WICHTIG: Verschiebe auch alle Kinder rekursiv
+      final children = await getAnlagenByParentId(anlageId);
+      if (children.isNotEmpty) {
+        await moveAnlagen(
+          children.map((c) => c.id).toList(),
+          newFloorId: newFloorId,
+          newParentId: anlageId, // Parent bleibt gleich (die verschobene Anlage)
+          newBuildingId: newBuildingId,
+          newDiscipline: newDiscipline,
+        );
+      }
+    }
+  }
+
   Future<List<models.Anlage>> getAnlagenByBuildingId(String buildingId) async {
     final rows = await _db.getAnlagenByBuildingId(buildingId);
     final disciplinesMap = await _getDisciplinesMap(buildingId);
@@ -575,6 +619,17 @@ class DatabaseService {
     return _anlageRowToModelWithCurrentDiscipline(row, currentDiscipline);
   }
 
+  Future<List<models.Anlage>> getAnlagenByParentId(String parentId) async {
+    final rows = await _db.getAnlagenByParentId(parentId);
+    final anlagen = <models.Anlage>[];
+    for (final row in rows) {
+      final disciplinesMap = await _getDisciplinesMap(row.buildingId);
+      final currentDiscipline = disciplinesMap[row.markerType.toLowerCase()];
+      anlagen.add(_anlageRowToModelWithCurrentDiscipline(row, currentDiscipline));
+    }
+    return anlagen;
+  }
+
   /// Findet eine Anlage anhand der laufenden Nummer (lfdNummer) und buildingId.
   /// Die lfdNummer wird in den Params als "lfdNummer" gespeichert.
   Future<models.Anlage?> getAnlageByLfdNummer(String lfdNummer, String buildingId) async {
@@ -588,7 +643,15 @@ class DatabaseService {
     return null;
   }
 
+  /// Löscht eine Anlage und rekursiv alle ihre Kinder (Bauteile).
   Future<void> deleteAnlage(String id) async {
+    // Zuerst alle Kinder (Bauteile) rekursiv löschen
+    final children = await getAnlagenByParentId(id);
+    for (final child in children) {
+      await deleteAnlage(child.id); // Rekursiv löschen
+    }
+    
+    // Dann die Anlage selbst löschen
     await _db.deleteAnlage(id);
   }
 

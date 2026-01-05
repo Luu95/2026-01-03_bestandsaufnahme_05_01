@@ -1644,66 +1644,31 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final activeLabels = _activeSelections.keys.toList();
     if (activeLabels.isEmpty) return;
 
-    Future<void> openForLabel(String label) async {
+    // Da der Button nur angezeigt wird, wenn genau ein Gewerk ausgewählt ist,
+    // können wir direkt öffnen ohne Zwischenauswahl
+    if (activeLabels.length == 1) {
       try {
-        final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
+        final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == activeLabels.first);
         _systemsPageKeys[discipline]?.currentState?.openAddBauteilDialogForSelection();
       } catch (e) {
-        debugPrint('Disziplin $label nicht gefunden beim Bauteil-Hinzufügen');
+        debugPrint('Disziplin ${activeLabels.first} nicht gefunden beim Bauteil-Hinzufügen');
       }
     }
+  }
 
+  Future<void> _openMoveDialogForSystemsSelection() async {
+    final activeLabels = _activeSelections.keys.toList();
+    if (activeLabels.isEmpty) return;
+
+    // Da der Button nur angezeigt wird, wenn genau ein Gewerk ausgewählt ist,
+    // können wir direkt öffnen ohne Zwischenauswahl
     if (activeLabels.length == 1) {
-      await openForLabel(activeLabels.first);
-      return;
-    }
-
-    final chosenLabel = await showModalBottomSheet<String>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text(
-                  'Bauteil hinzufügen für welches Gewerk?',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: activeLabels.map((label) {
-                    final count = _activeSelections[label] ?? 0;
-                    Disziplin? d;
-                    try {
-                      d = _systemsPageKeys.keys.firstWhere((x) => x.label == label);
-                    } catch (_) {
-                      d = null;
-                    }
-                    return ListTile(
-                      leading: d == null ? null : Icon(d.icon, color: d.color),
-                      title: Text(label),
-                      subtitle: Text('$count ausgewählt'),
-                      onTap: () => Navigator.of(ctx).pop(label),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosenLabel != null) {
-      await openForLabel(chosenLabel);
+      try {
+        final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == activeLabels.first);
+        _systemsPageKeys[discipline]?.currentState?.moveSelectedAnlagen();
+      } catch (e) {
+        debugPrint('Disziplin ${activeLabels.first} nicht gefunden beim Verschieben');
+      }
     }
   }
 
@@ -1921,43 +1886,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           ],
         ),
         actions: inSelectionMode
-            ? [
-                if (inDisciplineSelection) ...[
-                  if (_selectedDisciplineLabels.length == 1) ...[
-                    IconButton(
-                      icon: const Icon(Icons.edit, color: Colors.white),
-                      tooltip: 'Gewerk bearbeiten',
-                      onPressed: _editSelectedDiscipline,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.add, color: Colors.white),
-                      tooltip: 'Anlage hinzufügen',
-                      onPressed: () async {
-                        final d = _getSingleSelectedDiscipline();
-                        if (d != null) {
-                          await _openAddAnlageDialogDirect(d);
-                        }
-                      },
-                    ),
-                  ],
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.white),
-                    tooltip: 'Gewerk löschen',
-                    onPressed: _deleteSelectedDiscipline,
-                  ),
-                ] else ...[
-                  if (inSystemsSelection)
-                    IconButton(
-                      icon: const Icon(Icons.add, color: Colors.white),
-                      tooltip: 'Bauteil hinzufügen',
-                      onPressed: _openBulkAddBauteilForSystemsSelection,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.white),
-                    tooltip: inFloorplansSelection
-                        ? 'Ausgewählte Grundrisse löschen'
-                        : 'Ausgewählte Anlagen löschen',
-                    onPressed: () async {
+            ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
+            : [],
               if (inFloorplansSelection) {
                 final confirmed = await showDialog<bool>(
                   context: context,
@@ -2194,6 +2124,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             },
             onBauteilCreated: () {
               _onBauteilCreatedFromSystemsPage();
+            },
+            onAnlagenMoved: () {
+              // Alle SystemsPages neu laden, nachdem Anlagen verschoben wurden
+              _refreshSystemsPages();
             },
             onSchemaUpdated: () async {
               // Disziplinen neu laden, nachdem das Schema bearbeitet wurde

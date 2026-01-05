@@ -23,6 +23,7 @@ class TechnikMainTab extends StatefulWidget {
   final Function(Disziplin)? onDisciplineSelectionToggle;
   final VoidCallback? onAnlageCreated;
   final VoidCallback? onBauteilCreated;
+  final VoidCallback? onAnlagenMoved;
 
   const TechnikMainTab({
     Key? key,
@@ -41,6 +42,7 @@ class TechnikMainTab extends StatefulWidget {
     this.onDisciplineSelectionToggle,
     this.onAnlageCreated,
     this.onBauteilCreated,
+    this.onAnlagenMoved,
   }) : super(key: key);
 
   @override
@@ -349,6 +351,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                       isAnySelectionActive: widget.isAnySelectionActive,
                       onAnlageCreated: widget.onAnlageCreated,
                       onBauteilCreated: widget.onBauteilCreated,
+                      onAnlagenMoved: widget.onAnlagenMoved,
                     ),
                   ),
                 ],

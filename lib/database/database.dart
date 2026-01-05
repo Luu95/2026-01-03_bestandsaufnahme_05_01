@@ -221,6 +221,7 @@ class AppDatabase extends _$AppDatabase {
     return (select(anlagen)..where((a) => a.buildingId.equals(buildingId) & a.markerType.equals(disciplineLabel))).get();
   }
   Future<AnlageDb?> getAnlageById(String id) => (select(anlagen)..where((a) => a.id.equals(id))).getSingleOrNull();
+  Future<List<AnlageDb>> getAnlagenByParentId(String parentId) => (select(anlagen)..where((a) => a.parentId.equals(parentId))).get();
   Future<int> insertAnlage(AnlagenCompanion anlage) => into(anlagen).insert(anlage);
   Future<int> updateAnlage(String id, AnlagenCompanion anlage) => (update(anlagen)..where((a) => a.id.equals(id))).write(anlage);
   
