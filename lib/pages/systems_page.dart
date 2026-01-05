@@ -57,6 +57,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   final Set<String> _expandedAnlagenIds = {}; // Verfolgt geöffnete Anlagen (für Bauteile)
   String? _lastOpenedAnlageId; // ID der zuletzt geöffneten Anlage
   final Map<String, GlobalKey> _anlageKeys = {}; // GlobalKeys für jedes Anlage-Item zum Scrollen
+  bool _hasScrolledToLastOpened = false; // Verfolgt, ob bereits zur zuletzt angesehenen Anlage gescrollt wurde
 
   late final AnimationController _rotationController;  // Controller für die Rotation bei Auswahlmodus
 
@@ -71,6 +72,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     _loadAnlagen(); // Lädt alle Anlagen, wenn die Seite geladen wird
     _loadExpandedGroups();
     _loadLastOpenedAnlage();
+    _loadHasScrolledFlag();
   }
 
   Future<void> _loadExpandedGroups() async {
@@ -98,38 +100,100 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     }
   }
 
-  /// Lädt die ID der zuletzt geöffneten Anlage aus SharedPreferences
+  /// Lädt die ID der zuletzt geöffneten Anlage aus SharedPreferences (gewerkübergreifend)
   Future<void> _loadLastOpenedAnlage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final key = 'last_opened_anlage_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
+      // Gewerkübergreifender Key (ohne discipline.label)
+      final key = 'last_opened_anlage_${widget.building.id}_${widget.floor.id}';
       final lastOpenedId = prefs.getString(key);
       if (lastOpenedId != null && mounted) {
-        setState(() {
-          _lastOpenedAnlageId = lastOpenedId;
-        });
+        // Prüfe, ob die Anlage in der aktuellen Liste existiert
+        final anlageExists = _alleAnlagen.any((a) => a.id == lastOpenedId);
+        if (anlageExists) {
+          setState(() {
+            _lastOpenedAnlageId = lastOpenedId;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Fehler beim Laden der zuletzt geöffneten Anlage: $e');
     }
   }
 
-  /// Speichert die ID der zuletzt geöffneten Anlage in SharedPreferences
+  /// Speichert die ID der zuletzt geöffneten Anlage in SharedPreferences (gewerkübergreifend)
   Future<void> _saveLastOpenedAnlage(String anlageId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final key = 'last_opened_anlage_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
+      // Gewerkübergreifender Key (ohne discipline.label)
+      final key = 'last_opened_anlage_${widget.building.id}_${widget.floor.id}';
       await prefs.setString(key, anlageId);
+      
+      // Setze den Scroll-Flag für alle Gewerke zurück, wenn eine neue Anlage geöffnet wird
+      await _resetHasScrolledFlagForAllDisciplines();
+      
       setState(() {
         _lastOpenedAnlageId = anlageId;
+        _hasScrolledToLastOpened = false;
       });
     } catch (e) {
       debugPrint('Fehler beim Speichern der zuletzt geöffneten Anlage: $e');
     }
   }
 
-  /// Scrollt zur zuletzt geöffneten Anlage nach dem Build
+  /// Lädt den Flag, ob bereits zur zuletzt angesehenen Anlage gescrollt wurde
+  Future<void> _loadHasScrolledFlag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'has_scrolled_to_last_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
+      final hasScrolled = prefs.getBool(key) ?? false;
+      setState(() {
+        _hasScrolledToLastOpened = hasScrolled;
+      });
+    } catch (e) {
+      debugPrint('Fehler beim Laden des Scroll-Flags: $e');
+    }
+  }
+
+  /// Speichert den Flag, ob bereits zur zuletzt angesehenen Anlage gescrollt wurde
+  Future<void> _saveHasScrolledFlag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'has_scrolled_to_last_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
+      await prefs.setBool(key, true);
+      setState(() {
+        _hasScrolledToLastOpened = true;
+      });
+    } catch (e) {
+      debugPrint('Fehler beim Speichern des Scroll-Flags: $e');
+    }
+  }
+
+  /// Setzt den Scroll-Flag für alle Gewerke zurück (wird aufgerufen, wenn eine neue Anlage geöffnet wird)
+  Future<void> _resetHasScrolledFlagForAllDisciplines() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Lade alle Keys, die mit 'has_scrolled_to_last_' beginnen und zum gleichen Building/Floor gehören
+      final keys = prefs.getKeys().where((k) => 
+        k.startsWith('has_scrolled_to_last_${widget.building.id}_') && 
+        k.endsWith('_${widget.floor.id}')
+      ).toList();
+      
+      for (final key in keys) {
+        await prefs.setBool(key, false);
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Zurücksetzen der Scroll-Flags: $e');
+    }
+  }
+
+  /// Scrollt zur zuletzt geöffneten Anlage nach dem Build (nur beim ersten Öffnen)
   void _scrollToLastOpenedAnlage() {
+    // Nur scrollen, wenn noch nicht gescrollt wurde
+    if (_hasScrolledToLastOpened) {
+      return;
+    }
+    
     if (_lastOpenedAnlageId != null) {
       // Prüfe, ob die Anlage noch in der Liste existiert
       final anlageExists = _alleAnlagen.any((a) => a.id == _lastOpenedAnlageId);
@@ -171,6 +235,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                 curve: Curves.easeInOut,
                 alignment: 0.2, // Zeigt die Anlage im oberen Drittel des Bildschirms
               );
+              // Markiere, dass gescrollt wurde
+              _saveHasScrolledFlag();
             }
           });
         });
@@ -195,6 +261,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       _loadAnlagen();
       _loadExpandedGroups();
       _loadLastOpenedAnlage(); // Lade die zuletzt geöffnete Anlage für den neuen Kontext
+      _loadHasScrolledFlag(); // Lade den Scroll-Flag für das neue Gewerk
     }
   }
 
@@ -209,7 +276,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   void didPopNext() {
     // Beim Zurückkommen von Navigator.push, wird die Liste neu geladen
     _loadAnlagen().then((_) {
-      // Nach dem Laden zur zuletzt geöffneten Anlage scrollen
+      // Nach dem Laden zur zuletzt geöffneten Anlage scrollen (nur beim ersten Öffnen)
       _scrollToLastOpenedAnlage();
     });
   }
@@ -858,7 +925,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }) {
     final isSelected = _selectedAnlagenIds.contains(a.id);
     final isValidated = AnlageValidationService.getValidatedStatus(a);
-    final missingCount = AnlageValidationService.getMissingFieldsCount(a);
     final isLastOpened = _lastOpenedAnlageId == a.id;
 
     // Stelle sicher, dass ein GlobalKey für diese Anlage existiert
@@ -867,7 +933,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     }
     final itemKey = _anlageKeys[a.id]!;
 
-    final lfdNummer = a.params['lfdNummer']?.toString() ?? '';
     final anlageBautel = a.params['Anlage/Bautel']?.toString() ?? '';
 
     final baseTrailing = _isSelectionMode
@@ -961,7 +1026,18 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     if (isSelected) {
       cardBackgroundColor = Theme.of(context).primaryColor.withOpacity(0.05);
     } else if (isValidated) {
-      cardBackgroundColor = Colors.green.withOpacity(0.03);
+      // Vollständige Anlage: keine grüne Färbung, nur Haken
+      cardBackgroundColor = isChild
+          ? Color.lerp(
+              Colors.white,
+              Color.lerp(disc.color, Colors.orange.shade50, 0.3) ?? Colors.white,
+              0.1,
+            )
+          : Color.lerp(
+              Colors.white,
+              Color.lerp(disc.color, Colors.green.shade50, 0.25) ?? Colors.white,
+              0.08,
+            );
     } else if (isLastOpened && !isChild) {
       // Zuletzt geöffnete Anlage: subtiler blauer Ton
       cardBackgroundColor = Colors.blue.withOpacity(0.04);
@@ -1001,7 +1077,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             color: isSelected
                 ? Theme.of(context).primaryColor.withOpacity(0.15)
                 : (isValidated
-                    ? Colors.green.withOpacity(0.1)
+                    ? Colors.black.withOpacity(0.05)
                     : (isLastOpened && !isChild
                         ? Colors.blue.withOpacity(0.12)
                         : Colors.black.withOpacity(0.05))),
@@ -1028,7 +1104,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                 : (isSelected
                     ? Theme.of(context).primaryColor.withOpacity(0.4)
                     : (isValidated
-                        ? Colors.green.withOpacity(0.4)
+                        // Vollständige Anlage: keine grüne Border-Farbe
+                        ? Color.lerp(
+                            Colors.grey.withOpacity(0.15),
+                            Colors.green.withOpacity(0.1),
+                            0.3,
+                          ) ?? Colors.grey.withOpacity(0.15)
                         : (isLastOpened
                             // Zuletzt geöffnete Anlage: blauer Border
                             ? Colors.blue.withOpacity(0.5)
@@ -1094,10 +1175,34 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                                   Theme.of(context).primaryColor.withOpacity(0.1),
                                 ]
                               : (isValidated
-                                  ? [
-                                      Colors.green.withOpacity(0.2),
-                                      Colors.green.withOpacity(0.1),
-                                    ]
+                                  // Vollständige Anlage: keine grüne Färbung im Icon-Container
+                                  ? (isChild
+                                      // Bauteil: subtiler orange/beige Gradient
+                                      ? [
+                                          Color.lerp(
+                                            disc.color.withOpacity(0.15),
+                                            Colors.orange.withOpacity(0.2),
+                                            0.4,
+                                          ) ?? disc.color.withOpacity(0.15),
+                                          Color.lerp(
+                                            disc.color.withOpacity(0.08),
+                                            Colors.orange.withOpacity(0.1),
+                                            0.4,
+                                          ) ?? disc.color.withOpacity(0.08),
+                                        ]
+                                      // Anlage: subtiler grünlicher Gradient
+                                      : [
+                                          Color.lerp(
+                                            disc.color.withOpacity(0.15),
+                                            Colors.green.withOpacity(0.15),
+                                            0.2,
+                                          ) ?? disc.color.withOpacity(0.15),
+                                          Color.lerp(
+                                            disc.color.withOpacity(0.08),
+                                            Colors.green.withOpacity(0.08),
+                                            0.2,
+                                          ) ?? disc.color.withOpacity(0.08),
+                                        ])
                                   : isChild
                                       // Bauteil: subtiler orange/beige Gradient
                                       ? [
@@ -1213,43 +1318,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                               ],
                             ),
                           ),
-                          if (lfdNummer.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[100],
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                '#$lfdNummer',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey[700],
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (isChild) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                'Bauteil',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.blue[700],
-                                ),
-                              ),
-                            ),
-                          ],
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -1274,39 +1342,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          if (!isValidated && missingCount > 0) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.orange[50],
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: Colors.orange.withOpacity(0.3),
-                                  width: 1,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.info_outline,
-                                    size: 14,
-                                    color: Colors.orange[800],
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '$missingCount fehlend',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.orange[800],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
                         ],
                       ),
                     ],
