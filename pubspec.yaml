@@ -1,0 +1,44 @@
+name: bestandsaufnahme_01
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.1.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fluttertoast: ^8.0.9  # Stelle sicher, dass dies die neueste Null-sichere Version ist
+  cupertino_icons: ^1.0.8
+  pdfx: ^2.9.1  # Überprüfe, ob diese Version Null-Sicherheit unterstützt
+  file_picker: ^10.1.2  # Überprüfe auf Null-Sicherheit
+  image_picker: ^0.8.7+4  # Überprüfe auf Null-Sicherheit
+  path_provider: ^2.0.15  # Diese Version sollte Null-Sicherheit unterstützen
+  shared_preferences: ^2.0.18  # Diese Version sollte Null-Sicherheit unterstützen
+  flutter_colorpicker: ^1.1.0
+  drift: ^2.14.1
+  sqlite3_flutter_libs: ^0.5.18
+  path: ^1.8.3
+  uuid: ^4.2.1
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.3
+  csv: ^6.0.0
+  share_plus: ^10.0.0
+  cross_file: ^0.3.4
+  archive: ^3.4.0
+  google_mlkit_text_recognition: ^0.11.0
+  camera: ^0.10.5+5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  drift_dev: ^2.14.1
+  build_runner: ^2.4.7
+  riverpod_generator: ^2.3.9
+
+flutter:
+  uses-material-design: true
