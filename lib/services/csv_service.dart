@@ -288,7 +288,7 @@ class CsvService {
           companions.add(
             db.AnlagenCompanion.insert(
               id: _uuid.v4(),
-              name: nameValue,
+              name: nameValue,//
               params: json.encode(params),
               floorId: const Value.absent(),
               buildingId: bid,
