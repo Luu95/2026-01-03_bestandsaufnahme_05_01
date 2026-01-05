@@ -1888,201 +1888,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         actions: inSelectionMode
             ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
             : [],
-              if (inFloorplansSelection) {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    backgroundColor: Colors.white,
-                    titlePadding: EdgeInsets.zero,
-                    title: Container(
-                      color: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 16, horizontal: 24),
-                      child: const Text(
-                        'Grundrisse löschen?',
-                        style: TextStyle(
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    content: Text(
-                      'Möchtest du ${_selectedFloorIndexes.length} ausgewählte Grundrisse wirklich löschen?',
-                      style: const TextStyle(color: Colors.black87),
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(ctx).pop(false),
-                        child: const Text('Abbrechen'),
-                      ),
-                      ElevatedButton(
-                        onPressed: () => Navigator.of(ctx).pop(true),
-                        child: const Text('Löschen'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed == true) {
-                  await _deleteSelectedFloors();
-                }
-              }
-
-              if (inSystemsSelection) {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  barrierColor: Colors.black.withOpacity(0.5),
-                  builder: (ctx) => Dialog(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Container(
-                      padding: const EdgeInsets.all(24),
-                      constraints: const BoxConstraints(maxWidth: 400),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[50],
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.grey[300]!,
-                                width: 1,
-                              ),
-                            ),
-                            child: Icon(
-                              Icons.delete_outline,
-                              size: 28,
-                              color: Colors.grey[700],
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          Text(
-                            'Anlagen löschen?',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey[900],
-                              letterSpacing: -0.2,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[50],
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: Colors.grey[200]!,
-                                width: 1,
-                              ),
-                            ),
-                            child: Text(
-                              '$_systemsSelectedCount Anlage${_systemsSelectedCount > 1 ? 'n' : ''} ausgewählt',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.grey[900],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Möchtest du diese wirklich löschen?',
-                            style: TextStyle(
-                              fontSize: 15,
-                              color: Colors.grey[700],
-                              height: 1.5,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Diese Aktion kann nicht rückgängig gemacht werden',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey[600],
-                              fontStyle: FontStyle.italic,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 24),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: () => Navigator.of(ctx).pop(false),
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    side: BorderSide(
-                                      color: Colors.grey[300]!,
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    'Abbrechen',
-                                    style: TextStyle(
-                                      color: Colors.grey[700],
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () => Navigator.of(ctx).pop(true),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.grey[800],
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    elevation: 0,
-                                  ),
-                                  child: const Text(
-                                    'Löschen',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-                if (confirmed == true) {
-                  // Lösche alle ausgewählten Anlagen aus allen aktiven Gewerken
-                  final activeDisciplines = _activeSelections.keys.toList();
-                  for (final label in activeDisciplines) {
-                    try {
-                      final discipline = _systemsPageKeys.keys.firstWhere(
-                        (d) => d.label == label,
-                      );
-                      _systemsPageKeys[discipline]?.currentState?.deleteSelectedAnlagen();
-                    } catch (e) {
-                      // Disziplin nicht gefunden, ignorieren
-                      debugPrint('Disziplin $label nicht gefunden beim Löschen');
-                    }
-                  }
-                }
-              }
-                    },
-                  ),
-                ],
-              ]
-            : [],
       ),
       body: TabBarView(
         controller: _tabController,
@@ -2143,13 +1948,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ],
       ),
 
-      floatingActionButton: (_tabController.index == 1 && !_isSelectionMode)
-          ? FloatingActionButton(
-        onPressed: _addNewFloorAndUpload,
-        tooltip: 'Grundriss hochladen',
-        child: const Icon(Icons.download),
-      )
-          : null, // Kein FloatingActionButton für Technik-Tab, da jeder ExpansionTile seinen eigenen "+" Button hat
+      floatingActionButton: _buildFloatingActionButtons(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
 
       bottomNavigationBar: Container(
@@ -2205,6 +2004,325 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       ),
       ),
     );
+  }
+
+  /// Erstellt elegante Floating Action Buttons rechts unten basierend auf dem Selection-Mode
+  Widget? _buildFloatingActionButtons() {
+    final inSelectionMode = _isSelectionMode || _systemsSelectionMode || _disciplineSelectionMode;
+    final inFloorplansSelection = _isSelectionMode && _tabController.index == 1;
+    final inSystemsSelection = _systemsSelectionMode && _tabController.index == 2;
+    final inDisciplineSelection = _disciplineSelectionMode && _tabController.index == 2;
+
+    // Grundriss-Tab: Button zum Hochladen (wenn nicht im Selection Mode)
+    if (_tabController.index == 1 && !inSelectionMode) {
+      return FloatingActionButton(
+        onPressed: _addNewFloorAndUpload,
+        tooltip: 'Grundriss hochladen',
+        backgroundColor: Theme.of(context).primaryColor,
+        child: const Icon(Icons.download, color: Colors.white),
+      );
+    }
+
+    // Selection Mode: Zeige mehrere Buttons vertikal angeordnet
+    if (inSelectionMode) {
+      final List<Widget> buttons = [];
+
+      if (inDisciplineSelection) {
+        // Gewerk-Auswahl: Bearbeiten, Hinzufügen, Löschen
+        if (_selectedDisciplineLabels.length == 1) {
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.edit,
+              tooltip: 'Gewerk bearbeiten',
+              onPressed: _editSelectedDiscipline,
+              backgroundColor: Colors.blue,
+            ),
+          );
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.add,
+              tooltip: 'Anlage hinzufügen',
+              onPressed: () async {
+                final d = _getSingleSelectedDiscipline();
+                if (d != null) {
+                  await _openAddAnlageDialogDirect(d);
+                }
+              },
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+        buttons.add(
+          _buildFloatingActionButton(
+            icon: Icons.delete_outline,
+            tooltip: 'Gewerk löschen',
+            onPressed: _deleteSelectedDiscipline,
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else if (inSystemsSelection) {
+        // Anlagen-Auswahl: Bauteil hinzufügen, Verschieben, Löschen
+        if (_activeSelections.keys.length == 1) {
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.add,
+              tooltip: 'Bauteil hinzufügen',
+              onPressed: _openBulkAddBauteilForSystemsSelection,
+              backgroundColor: Colors.green,
+            ),
+          );
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.drive_file_move,
+              tooltip: 'Verschieben',
+              onPressed: _openMoveDialogForSystemsSelection,
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        buttons.add(
+          _buildFloatingActionButton(
+            icon: Icons.delete_outline,
+            tooltip: 'Ausgewählte Anlagen löschen',
+            onPressed: _handleDeleteSelectedAnlagen,
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else if (inFloorplansSelection) {
+        // Grundriss-Auswahl: Löschen
+        buttons.add(
+          _buildFloatingActionButton(
+            icon: Icons.delete_outline,
+            tooltip: 'Ausgewählte Grundrisse löschen',
+            onPressed: _handleDeleteSelectedFloors,
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+
+      if (buttons.isEmpty) return null;
+
+      // Zeige Buttons vertikal angeordnet
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: buttons.reversed.toList(),
+      );
+    }
+
+    return null;
+  }
+
+  /// Erstellt einen einzelnen eleganten Floating Action Button
+  Widget _buildFloatingActionButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    required Color backgroundColor,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: FloatingActionButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        backgroundColor: backgroundColor,
+        elevation: 4,
+        child: Icon(icon, color: Colors.white),
+      ),
+    );
+  }
+
+  /// Handler für das Löschen ausgewählter Anlagen
+  Future<void> _handleDeleteSelectedAnlagen() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.grey[300]!,
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  Icons.delete_outline,
+                  size: 28,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Anlagen löschen?',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[900],
+                  letterSpacing: -0.2,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.grey[200]!,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  '$_systemsSelectedCount Anlage${_systemsSelectedCount > 1 ? 'n' : ''} ausgewählt',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[900],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Möchtest du diese wirklich löschen?',
+                style: TextStyle(
+                  fontSize: 15,
+                  color: Colors.grey[700],
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Diese Aktion kann nicht rückgängig gemacht werden',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                  fontStyle: FontStyle.italic,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: BorderSide(
+                          color: Colors.grey[300]!,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(
+                        'Abbrechen',
+                        style: TextStyle(
+                          color: Colors.grey[700],
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey[800],
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'Löschen',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (confirmed == true) {
+      // Lösche alle ausgewählten Anlagen aus allen aktiven Gewerken
+      final activeDisciplines = _activeSelections.keys.toList();
+      for (final label in activeDisciplines) {
+        try {
+          final discipline = _systemsPageKeys.keys.firstWhere(
+            (d) => d.label == label,
+          );
+          _systemsPageKeys[discipline]?.currentState?.deleteSelectedAnlagen();
+        } catch (e) {
+          // Disziplin nicht gefunden, ignorieren
+          debugPrint('Disziplin $label nicht gefunden beim Löschen');
+        }
+      }
+    }
+  }
+
+  /// Handler für das Löschen ausgewählter Grundrisse
+  Future<void> _handleDeleteSelectedFloors() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        titlePadding: EdgeInsets.zero,
+        title: Container(
+          color: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          child: const Text(
+            'Grundrisse löschen?',
+            style: TextStyle(
+              color: Colors.black87,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        content: Text(
+          'Möchtest du ${_selectedFloorIndexes.length} ausgewählte Grundrisse wirklich löschen?',
+          style: const TextStyle(color: Colors.black87),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Abbrechen'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Löschen'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _deleteSelectedFloors();
+    }
   }
 
   Widget _buildTabWithIconBackground({
