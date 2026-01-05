@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/anlage.dart';
 import '../models/building.dart';
@@ -34,6 +35,12 @@ class SystemsPage extends ConsumerStatefulWidget {
   /// Callback, um zu prüfen, ob bereits eine Selection in einem anderen Gewerk aktiv ist.
   final bool Function()? isAnySelectionActive;
 
+  /// Wird aufgerufen, wenn eine neue Anlage (Parent) gespeichert wurde.
+  final VoidCallback? onAnlageCreated;
+
+  /// Wird aufgerufen, wenn ein neues Bauteil (Child) gespeichert wurde (auch bei Bulk-Add).
+  final VoidCallback? onBauteilCreated;
+
   const SystemsPage({
     Key? key,
     required this.building,
@@ -41,6 +48,8 @@ class SystemsPage extends ConsumerStatefulWidget {
     required this.discipline,
     this.onSelectionChanged,
     this.isAnySelectionActive,
+    this.onAnlageCreated,
+    this.onBauteilCreated,
   }) : super(key: key);
 
   @override
@@ -454,6 +463,100 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
 
 
+  /// Öffnet den Dialog zum Hinzufügen eines neuen Bauteils für alle selektierten Haupt-Anlagen.
+  /// Der Dialog wird einmal ausgefüllt; anschließend wird das Bauteil unter jede selektierte Anlage dupliziert.
+  Future<void> openAddBauteilDialogForSelection() async {
+    // Selektierte IDs -> nur Haupt-Anlagen (parentId == null)
+    final selectedParents = _alleAnlagen
+        .where((a) => _selectedAnlagenIds.contains(a.id) && a.parentId == null)
+        .toList();
+
+    if (selectedParents.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bitte wähle mindestens eine Anlage (keine Bauteile) aus.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final firstParent = selectedParents.first;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => GenericAnlageDialog(
+        discipline: widget.discipline,
+        buildingId: widget.building.id,
+        floorId: widget.floor.id,
+        parentId: firstParent.id,
+        existingAnlage: null,
+        index: null,
+        onSave: (createdBauteil, _) async {
+          final copies = <Anlage>[];
+
+          // 1) Das vom Dialog erstellte Objekt nutzen wir für den ersten Parent.
+          copies.add(createdBauteil);
+
+          // 2) Für alle weiteren Parents neue Objekte erzeugen.
+          if (selectedParents.length > 1) {
+            // Flache Kopie der Params. Falls photoPaths eine Liste ist, ebenfalls kopieren.
+            final clonedParams = Map<String, dynamic>.from(createdBauteil.params);
+            final pp = createdBauteil.params['photoPaths'];
+            if (pp is List) {
+              clonedParams['photoPaths'] = List<dynamic>.from(pp);
+            }
+
+            for (var i = 1; i < selectedParents.length; i++) {
+              final p = selectedParents[i];
+              copies.add(
+                Anlage(
+                  id: const Uuid().v4(),
+                  parentId: p.id,
+                  name: createdBauteil.name,
+                  params: Map<String, dynamic>.from(clonedParams),
+                  floorId: createdBauteil.floorId,
+                  buildingId: createdBauteil.buildingId,
+                  isMarker: false,
+                  markerInfo: null,
+                  markerType: widget.discipline.label,
+                  discipline: widget.discipline,
+                ),
+              );
+            }
+          }
+
+          if (!mounted) return;
+          setState(() {
+            _alleAnlagen.addAll(copies);
+            for (final p in selectedParents) {
+              _expandedAnlagenIds.add(p.id);
+            }
+          });
+          await _saveAnlagen();
+          await _loadAnlagen();
+
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Bauteil zu ${selectedParents.length} Anlage${selectedParents.length > 1 ? 'n' : ''} hinzugefügt',
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+          widget.onBauteilCreated?.call();
+          _exitSelectionMode(); // AppBar schließen (Auswahlmodus beenden)
+        },
+      ),
+    );
+  }
+
   /// Öffnet den Dialog zum Hinzufügen einer neuen Anlage (ohne Marker).
   void _showAddDialog() {
     showModalBottomSheet<void>(
@@ -472,33 +575,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           setState(() => _alleAnlagen.add(newAnlage));
           await _saveAnlagen();
           await _loadAnlagen();
-        },
-      ),
-    );
-  }
-
-  /// Öffnet den Dialog zum Hinzufügen eines neuen Bauteils unter einer Anlage.
-  void _showAddBauteilDialog(Anlage parent) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => GenericAnlageDialog(
-        discipline: widget.discipline,
-        buildingId: widget.building.id,
-        floorId: widget.floor.id,
-        parentId: parent.id,
-        existingAnlage: null,
-        index: null,
-        onSave: (newBauteil, _) async {
-          setState(() {
-            _alleAnlagen.add(newBauteil);
-            _expandedAnlagenIds.add(parent.id); // Parent nach dem Erstellen automatisch aufklappen
-          });
-          await _saveAnlagen();
-          await _loadAnlagen();
+          widget.onAnlageCreated?.call();
         },
       ),
     );
@@ -635,7 +712,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
               ),
               const SizedBox(height: 8),
               Text(
-                'Tippen Sie auf das + Symbol, um eine neue Anlage hinzuzufügen',
+                'Tippen Sie oben auf das + Symbol, um eine neue Anlage hinzuzufügen',
                 style: TextStyle(
                   color: Colors.grey[500],
                   fontSize: 13,
@@ -965,30 +1042,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     } else {
       final actions = <Widget>[];
 
-      // Plus nur für Anlagen (nicht für Bauteile) anzeigen
-      if (!isChild) {
-        actions.add(
-          Container(
-            margin: const EdgeInsets.only(right: 4),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: () => _showAddBauteilDialog(a),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(
-                    Icons.add,
-                    color: Theme.of(context).primaryColor,
-                    size: 22,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-
       // Expand-Arrow nur wenn Kinder vorhanden
       if (!isChild && hasChildren) {
         actions.add(
@@ -1025,6 +1078,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     Color? cardBackgroundColor;
     if (isSelected) {
       cardBackgroundColor = Theme.of(context).primaryColor.withOpacity(0.05);
+    } else if (isLastOpened && !isChild) {
+      // Zuletzt geöffnete Anlage: subtiler blauer Ton (hat Vorrang vor Validierung)
+      cardBackgroundColor = Colors.blue.withOpacity(0.04);
     } else if (isValidated) {
       // Vollständige Anlage: keine grüne Färbung, nur Haken
       cardBackgroundColor = isChild
@@ -1038,9 +1094,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
               Color.lerp(disc.color, Colors.green.shade50, 0.25) ?? Colors.white,
               0.08,
             );
-    } else if (isLastOpened && !isChild) {
-      // Zuletzt geöffnete Anlage: subtiler blauer Ton
-      cardBackgroundColor = Colors.blue.withOpacity(0.04);
     } else {
       // Feine Nuancen für visuelle Unterscheidung:
       // Anlagen: sehr subtiler grünlicher Ton
@@ -1076,10 +1129,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           BoxShadow(
             color: isSelected
                 ? Theme.of(context).primaryColor.withOpacity(0.15)
-                : (isValidated
-                    ? Colors.black.withOpacity(0.05)
-                    : (isLastOpened && !isChild
-                        ? Colors.blue.withOpacity(0.12)
+                : (isLastOpened && !isChild
+                    ? Colors.blue.withOpacity(0.12)
+                    : (isValidated
+                        ? Colors.black.withOpacity(0.05)
                         : Colors.black.withOpacity(0.05))),
             blurRadius: isValidated || (isLastOpened && !isChild) ? 8 : 4,
             offset: const Offset(0, 2),
@@ -1103,23 +1156,23 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                   ) ?? Colors.blue.withOpacity(0.2)
                 : (isSelected
                     ? Theme.of(context).primaryColor.withOpacity(0.4)
-                    : (isValidated
-                        // Vollständige Anlage: keine grüne Border-Farbe
-                        ? Color.lerp(
-                            Colors.grey.withOpacity(0.15),
-                            Colors.green.withOpacity(0.1),
-                            0.3,
-                          ) ?? Colors.grey.withOpacity(0.15)
-                        : (isLastOpened
-                            // Zuletzt geöffnete Anlage: blauer Border
-                            ? Colors.blue.withOpacity(0.5)
+                    : (isLastOpened && !isChild
+                        // Zuletzt geöffnete Anlage: blauer Border (hat Vorrang vor Validierung)
+                        ? Colors.blue.withOpacity(0.5)
+                        : (isValidated
+                            // Vollständige Anlage: keine grüne Border-Farbe
+                            ? Color.lerp(
+                                Colors.grey.withOpacity(0.15),
+                                Colors.green.withOpacity(0.1),
+                                0.3,
+                              ) ?? Colors.grey.withOpacity(0.15)
                             // Anlage: subtiler grünlicher Border
                             : Color.lerp(
                                 Colors.grey.withOpacity(0.15),
                                 Colors.green.withOpacity(0.1),
                                 0.3,
                               ) ?? Colors.grey.withOpacity(0.15)))),
-            width: isSelected || isValidated || isLastOpened ? 1.5 : 1,
+            width: isSelected || isValidated || (isLastOpened && !isChild) ? 1.5 : 1,
           ),
         ),
         child: InkWell(

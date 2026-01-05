@@ -20,9 +20,11 @@ import '../models/anlage.dart';
 import '../services/floor_plan_service.dart';
 import '../services/csv_service.dart';
 import '../services/anlage_validation_service.dart';
+import '../utils/delete_utils.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import 'widgets/validation_progress_widget.dart';
+import 'widgets/generic_anlage_dialog.dart';
 
 // Import der Fullscreen-Version
 import 'floor_plan_page.dart';
@@ -76,6 +78,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   int _previousTabIndex = 0;
 
   List<Disziplin> _disciplines = [];
+  bool _disciplineSelectionMode = false;
+  final Set<String> _selectedDisciplineLabels = {};
   
   // Fortschritts-Tracking für alle Anlagen
   ValidationProgress? _validationProgress;
@@ -1316,6 +1320,393 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     }
   }
 
+  Future<void> _openAddAnlageDialogDirect(Disziplin discipline) async {
+    // Direkter Dialog, funktioniert auch wenn das Gewerk zugeklappt ist (SystemsPageState ist dann null).
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => GenericAnlageDialog(
+        discipline: discipline,
+        buildingId: _building.id,
+        floorId: 'global',
+        existingAnlage: null,
+        index: null,
+        onSave: (newAnlage, _) async {
+          final dbService = ref.read(databaseServiceProvider);
+          final existing = await dbService.getAnlageById(newAnlage.id);
+          if (existing != null) {
+            await dbService.updateAnlage(newAnlage);
+          } else {
+            await dbService.insertAnlage(newAnlage);
+          }
+
+          if (!mounted) return;
+          await _loadAllAnlagenForProgress();
+          _refreshSystemsPages();
+          _exitDisciplineSelectionMode(); // AppBar schließen nach Erstellung
+        },
+      ),
+    );
+  }
+
+  void _enterDisciplineSelectionMode(Disziplin discipline) {
+    // Beende ggf. Systems-Selection (Anlagen-Auswahl) in allen Gewerken
+    if (_systemsSelectionMode) {
+      final activeDisciplines = _activeSelections.keys.toList();
+      for (final label in activeDisciplines) {
+        try {
+          final disc = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
+          _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
+        } catch (_) {}
+      }
+    }
+
+    setState(() {
+      _systemsSelectionMode = false;
+      _systemsSelectedCount = 0;
+      _activeSelections.clear();
+      _disciplineSelectionMode = true;
+      _selectedDisciplineLabels
+        ..clear()
+        ..add(discipline.label);
+    });
+    _drawerIconController.forward();
+  }
+
+  void _exitDisciplineSelectionMode() {
+    setState(() {
+      _disciplineSelectionMode = false;
+      _selectedDisciplineLabels.clear();
+    });
+    _drawerIconController.reverse();
+  }
+
+  void _toggleDisciplineSelection(Disziplin discipline) {
+    setState(() {
+      if (!_disciplineSelectionMode) {
+        _disciplineSelectionMode = true;
+        _selectedDisciplineLabels
+          ..clear()
+          ..add(discipline.label);
+        _drawerIconController.forward();
+        return;
+      }
+
+      if (_selectedDisciplineLabels.contains(discipline.label)) {
+        _selectedDisciplineLabels.remove(discipline.label);
+        if (_selectedDisciplineLabels.isEmpty) {
+          _disciplineSelectionMode = false;
+          _drawerIconController.reverse();
+        }
+      } else {
+        _selectedDisciplineLabels.add(discipline.label);
+      }
+    });
+  }
+
+  Disziplin? _getSingleSelectedDiscipline() {
+    if (_selectedDisciplineLabels.length != 1) return null;
+    final label = _selectedDisciplineLabels.first;
+    try {
+      return _systemsPageKeys.keys.firstWhere((d) => d.label == label);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _onAnlageCreatedFromSystemsPage() async {
+    // Wenn wir gerade im Gewerk-Auswahlmodus waren: danach wieder schließen
+    if (_disciplineSelectionMode) {
+      _exitDisciplineSelectionMode();
+    }
+    await _loadAllAnlagenForProgress();
+  }
+
+  Future<void> _onBauteilCreatedFromSystemsPage() async {
+    // SystemsPage beendet den SelectionMode bereits selbst; hier nur Progress aktualisieren.
+    await _loadAllAnlagenForProgress();
+  }
+
+  Future<void> _editSelectedDiscipline() async {
+    final d = _getSingleSelectedDiscipline();
+    if (d == null) return;
+
+    final edited = await showDialog<Disziplin>(
+      context: context,
+      builder: (_) => DisziplinEditDialog(disziplin: d),
+    );
+    if (edited == null) return;
+
+    final success = await updateDiscipline(
+      context,
+      d,
+      edited,
+      _building.id,
+    );
+    if (success) {
+      await _loadDisciplines();
+      _exitDisciplineSelectionMode();
+    }
+  }
+
+  Future<void> _deleteSelectedDiscipline() async {
+    if (_selectedDisciplineLabels.isEmpty) return;
+
+    final dbService = ref.read(databaseServiceProvider);
+    // Sammle Anlagen für alle selektierten Disziplinen
+    final labels = _selectedDisciplineLabels.toList();
+    final anlagenPerLabel = <String, List<Anlage>>{};
+    int totalAnlagen = 0;
+    for (final label in labels) {
+      final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(_building.id, label);
+      anlagenPerLabel[label] = anlagen;
+      totalAnlagen += anlagen.length;
+    }
+
+    if (totalAnlagen > 0) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierColor: Colors.black.withOpacity(0.5),
+        builder: (ctx) => Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.grey[300]!,
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.delete_outline,
+                    size: 28,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Gewerk${labels.length > 1 ? 'e' : ''} hat noch Anlagen',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[900],
+                    letterSpacing: -0.2,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.grey[200]!,
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '$totalAnlagen Anlage${totalAnlagen > 1 ? 'n' : ''}',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[900],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        labels.length == 1 ? 'in "${labels.first}"' : 'in ${labels.length} Gewerken',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Wenn du die Disziplin löschst, werden auch alle zugehörigen Anlagen unwiderruflich gelöscht.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[700],
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Diese Aktion kann nicht rückgängig gemacht werden',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[600],
+                    fontStyle: FontStyle.italic,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          side: BorderSide(
+                            color: Colors.grey[300]!,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Text(
+                          'Abbrechen',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey[800],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: const Text(
+                          'Alles löschen',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (confirmed != true) return;
+
+      // Anlagen aus der Datenbank löschen
+      for (final entry in anlagenPerLabel.entries) {
+        for (final a in entry.value) {
+          await dbService.deleteAnlage(a.id);
+        }
+      }
+    } else {
+      final name = labels.length == 1 ? labels.first : '${labels.length} Gewerke';
+      final confirmed = await showDeleteConfirmationDialog(context, 'Disziplin', name);
+      if (!confirmed) return;
+    }
+
+    for (final label in labels) {
+      await dbService.deleteDiscipline(_building.id, label);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${labels.length == 1 ? labels.first : '${labels.length} Gewerke'} gelöscht')),
+    );
+
+    await _loadDisciplines();
+    _exitDisciplineSelectionMode();
+  }
+
+  Future<void> _openBulkAddBauteilForSystemsSelection() async {
+    final activeLabels = _activeSelections.keys.toList();
+    if (activeLabels.isEmpty) return;
+
+    Future<void> openForLabel(String label) async {
+      try {
+        final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
+        _systemsPageKeys[discipline]?.currentState?.openAddBauteilDialogForSelection();
+      } catch (e) {
+        debugPrint('Disziplin $label nicht gefunden beim Bauteil-Hinzufügen');
+      }
+    }
+
+    if (activeLabels.length == 1) {
+      await openForLabel(activeLabels.first);
+      return;
+    }
+
+    final chosenLabel = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  'Bauteil hinzufügen für welches Gewerk?',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: activeLabels.map((label) {
+                    final count = _activeSelections[label] ?? 0;
+                    Disziplin? d;
+                    try {
+                      d = _systemsPageKeys.keys.firstWhere((x) => x.label == label);
+                    } catch (_) {
+                      d = null;
+                    }
+                    return ListTile(
+                      leading: d == null ? null : Icon(d.icon, color: d.color),
+                      title: Text(label),
+                      subtitle: Text('$count ausgewählt'),
+                      onTap: () => Navigator.of(ctx).pop(label),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosenLabel != null) {
+      await openForLabel(chosenLabel);
+    }
+  }
+
 
 
 
@@ -1404,14 +1795,17 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
     final isTechnikTab = _tabController.index == 2;
     final inSystemsSelection = isTechnikTab && _systemsSelectionMode;
+    final inDisciplineSelection = isTechnikTab && _disciplineSelectionMode;
 
-    final inSelectionMode = inFloorplansSelection || inSystemsSelection;
+    final inSelectionMode = inFloorplansSelection || inSystemsSelection || inDisciplineSelection;
 
     String appBarTitle;
     if (inFloorplansSelection) {
       appBarTitle = '${_selectedFloorIndexes.length} ausgewählt';
     } else if (inSystemsSelection) {
       appBarTitle = '$_systemsSelectedCount ausgewählt';
+    } else if (inDisciplineSelection) {
+      appBarTitle = '${_selectedDisciplineLabels.length} ausgewählt';
     } else {
       appBarTitle = _building.name;
     }
@@ -1461,6 +1855,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                       _activeSelections.clear();
                     });
                     _drawerIconController.reverse();
+                  } else if (inDisciplineSelection) {
+                    _exitDisciplineSelectionMode();
                   }
                 } else {
                   Scaffold.of(innerContext).openDrawer();
@@ -1526,12 +1922,42 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ),
         actions: inSelectionMode
             ? [
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.white),
-            tooltip: inFloorplansSelection
-                ? 'Ausgewählte Grundrisse löschen'
-                : 'Ausgewählte Anlagen löschen',
-            onPressed: () async {
+                if (inDisciplineSelection) ...[
+                  if (_selectedDisciplineLabels.length == 1) ...[
+                    IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.white),
+                      tooltip: 'Gewerk bearbeiten',
+                      onPressed: _editSelectedDiscipline,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add, color: Colors.white),
+                      tooltip: 'Anlage hinzufügen',
+                      onPressed: () async {
+                        final d = _getSingleSelectedDiscipline();
+                        if (d != null) {
+                          await _openAddAnlageDialogDirect(d);
+                        }
+                      },
+                    ),
+                  ],
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.white),
+                    tooltip: 'Gewerk löschen',
+                    onPressed: _deleteSelectedDiscipline,
+                  ),
+                ] else ...[
+                  if (inSystemsSelection)
+                    IconButton(
+                      icon: const Icon(Icons.add, color: Colors.white),
+                      tooltip: 'Bauteil hinzufügen',
+                      onPressed: _openBulkAddBauteilForSystemsSelection,
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.white),
+                    tooltip: inFloorplansSelection
+                        ? 'Ausgewählte Grundrisse löschen'
+                        : 'Ausgewählte Anlagen löschen',
+                    onPressed: () async {
               if (inFloorplansSelection) {
                 final confirmed = await showDialog<bool>(
                   context: context,
@@ -1722,9 +2148,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   }
                 }
               }
-            },
-          ),
-        ]
+                    },
+                  ),
+                ],
+              ]
             : [],
       ),
       body: TabBarView(
@@ -1758,6 +2185,16 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             systemsPageKeys: _systemsPageKeys,
             onSelectionChanged: _onSystemsSelectionChanged,
             onDisciplineExpanded: _onDisciplineExpanded,
+            onDisciplineLongPress: _enterDisciplineSelectionMode,
+            disciplineSelectionMode: _tabController.index == 2 && _disciplineSelectionMode,
+            selectedDisciplineLabels: _selectedDisciplineLabels,
+            onDisciplineSelectionToggle: _toggleDisciplineSelection,
+            onAnlageCreated: () {
+              _onAnlageCreatedFromSystemsPage();
+            },
+            onBauteilCreated: () {
+              _onBauteilCreatedFromSystemsPage();
+            },
             onSchemaUpdated: () async {
               // Disziplinen neu laden, nachdem das Schema bearbeitet wurde
               await _loadDisciplines();

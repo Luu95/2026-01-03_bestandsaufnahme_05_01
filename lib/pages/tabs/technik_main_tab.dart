@@ -5,7 +5,6 @@ import '../../models/floor_plan.dart';
 import '../systems_page.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../models/disziplin_manager.dart';
-import '../../utils/delete_utils.dart';
 import '../../database/database_service.dart';
 
 class TechnikMainTab extends StatefulWidget {
@@ -15,9 +14,15 @@ class TechnikMainTab extends StatefulWidget {
   final Map<Disziplin, GlobalKey<SystemsPageState>> systemsPageKeys;
   final Function(bool, int, Disziplin)? onSelectionChanged;
   final Function(Disziplin?)? onDisciplineExpanded; // Callback für geöffnete Disziplin
+  final Function(Disziplin)? onDisciplineLongPress; // Long-Press auf Gewerk -> AppBar-Aktionsmodus
   final VoidCallback? onSchemaUpdated; // Callback für Schema-Update
   final Future<void> Function()? onImportCsv; // Callback für CSV-Import
   final bool Function()? isAnySelectionActive; // Callback um zu prüfen, ob bereits eine Selection aktiv ist
+  final bool disciplineSelectionMode;
+  final Set<String> selectedDisciplineLabels;
+  final Function(Disziplin)? onDisciplineSelectionToggle;
+  final VoidCallback? onAnlageCreated;
+  final VoidCallback? onBauteilCreated;
 
   const TechnikMainTab({
     Key? key,
@@ -27,9 +32,15 @@ class TechnikMainTab extends StatefulWidget {
     required this.systemsPageKeys,
     this.onSelectionChanged,
     this.onDisciplineExpanded,
+    this.onDisciplineLongPress,
     this.onSchemaUpdated,
     this.onImportCsv,
     this.isAnySelectionActive,
+    this.disciplineSelectionMode = false,
+    this.selectedDisciplineLabels = const {},
+    this.onDisciplineSelectionToggle,
+    this.onAnlageCreated,
+    this.onBauteilCreated,
   }) : super(key: key);
 
   @override
@@ -160,7 +171,20 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
         final discipline = disziplinen[index];
         final isExpanded = _expandedDisciplines.contains(discipline.label);
 
-        return Container(
+        final isSelected = widget.selectedDisciplineLabels.contains(discipline.label);
+
+        return InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: widget.disciplineSelectionMode
+              ? () => widget.onDisciplineSelectionToggle?.call(discipline)
+              : null,
+          onLongPress: () {
+            // Long-Press soll den AppBar-Aktionsmodus öffnen (Edit/Add/Delete)
+            if (widget.onDisciplineLongPress != null) {
+              widget.onDisciplineLongPress!(discipline);
+            }
+          },
+          child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             // Feine Nuance für Gewerk: sehr subtiler bläulicher Ton
@@ -171,9 +195,13 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
             ),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: isExpanded
-                  ? discipline.color.withOpacity(0.3)
-                  : Colors.grey.withOpacity(0.15),
+              color: widget.disciplineSelectionMode
+                  ? (isSelected
+                      ? discipline.color.withOpacity(0.6)
+                      : Colors.grey.withOpacity(0.25))
+                  : (isExpanded
+                      ? discipline.color.withOpacity(0.3)
+                      : Colors.grey.withOpacity(0.15)),
               width: isExpanded ? 1.5 : 1,
             ),
             boxShadow: isExpanded
@@ -194,34 +222,13 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                     ),
                   ],
           ),
-          child: GestureDetector(
-            onLongPress: () async {
-              // Öffne den Disziplin bearbeiten Dialog
-              final editedDisziplin = await showDialog<Disziplin>(
-                context: context,
-                builder: (_) => DisziplinEditDialog(disziplin: discipline),
-              );
-
-              if (editedDisziplin != null) {
-                // Speichere die aktualisierte Disziplin in SharedPreferences
-                final success = await updateDiscipline(
-                  context,
-                  discipline, // Altes Objekt für den Vergleich
-                  editedDisziplin, // Neues Objekt mit den Änderungen
-                  widget.building.id,
-                );
-                
-                if (success) {
-                  widget.onSchemaUpdated?.call();
-                }
-              }
-            },
-            child: Theme(
+          child: Theme(
               data: Theme.of(context).copyWith(
                 dividerColor: Colors.transparent,
               ),
               child: ExpansionTile(
                 key: ValueKey('${discipline.label}_$isExpanded'),
+                enabled: !widget.disciplineSelectionMode,
                 tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 childrenPadding: EdgeInsets.zero,
                 leading: Container(
@@ -263,54 +270,42 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                         style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
-                          color: isExpanded
-                              ? discipline.color
-                              : Colors.grey[900],
+                          color: isExpanded ? discipline.color : Colors.grey[900],
                           letterSpacing: -0.3,
                         ),
                       ),
                     ),
-                    if (isExpanded)
-                      Container(
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
-                          color: discipline.color.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(10),
-                            onTap: () {
-                              widget.systemsPageKeys[discipline]?.currentState?.openAddDialog();
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Icon(
-                                Icons.add,
-                                color: discipline.color,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                   ],
                 ),
-                trailing: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: isExpanded
-                        ? discipline.color.withOpacity(0.1)
-                        : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    color: isExpanded ? discipline.color : Colors.grey[600],
-                    size: 24,
-                  ),
-                ),
+                trailing: widget.disciplineSelectionMode
+                    ? Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? discipline.color.withOpacity(0.12)
+                              : Colors.grey.withOpacity(0.08),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                          color: isSelected ? discipline.color : Colors.grey[500],
+                          size: 22,
+                        ),
+                      )
+                    : Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: isExpanded
+                              ? discipline.color.withOpacity(0.1)
+                              : Colors.grey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                          color: isExpanded ? discipline.color : Colors.grey[600],
+                          size: 24,
+                        ),
+                      ),
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) {
                   setState(() {
@@ -352,6 +347,8 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                         }
                       },
                       isAnySelectionActive: widget.isAnySelectionActive,
+                      onAnlageCreated: widget.onAnlageCreated,
+                      onBauteilCreated: widget.onBauteilCreated,
                     ),
                   ),
                 ],
