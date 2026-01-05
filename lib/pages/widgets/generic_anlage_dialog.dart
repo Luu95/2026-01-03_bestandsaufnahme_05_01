@@ -1252,7 +1252,9 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                               fontWeight: FontWeight.w500,
                             ),
                             decoration: InputDecoration(
-                              labelText: 'Anlagenname',
+                              labelText: (widget.parentId != null || widget.existingAnlage?.parentId != null) 
+                                  ? 'Bauteilname' 
+                                  : 'Anlagenname',
                               labelStyle: TextStyle(
                                 color: Colors.grey[600],
                                 fontWeight: FontWeight.w500,

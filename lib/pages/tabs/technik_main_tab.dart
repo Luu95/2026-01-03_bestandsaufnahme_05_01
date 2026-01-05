@@ -15,6 +15,7 @@ class TechnikMainTab extends StatefulWidget {
   final Function(bool, int, Disziplin)? onSelectionChanged;
   final Function(Disziplin?)? onDisciplineExpanded; // Callback für geöffnete Disziplin
   final Function(Disziplin)? onDisciplineLongPress; // Long-Press auf Gewerk -> AppBar-Aktionsmodus
+  final VoidCallback? onExitDisciplineSelectionMode; // Callback um Gewerk-Auswahl zu beenden
   final VoidCallback? onSchemaUpdated; // Callback für Schema-Update
   final Future<void> Function()? onImportCsv; // Callback für CSV-Import
   final bool Function()? isAnySelectionActive; // Callback um zu prüfen, ob bereits eine Selection aktiv ist
@@ -34,6 +35,7 @@ class TechnikMainTab extends StatefulWidget {
     this.onSelectionChanged,
     this.onDisciplineExpanded,
     this.onDisciplineLongPress,
+    this.onExitDisciplineSelectionMode,
     this.onSchemaUpdated,
     this.onImportCsv,
     this.isAnySelectionActive,
@@ -349,6 +351,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                         }
                       },
                       isAnySelectionActive: widget.isAnySelectionActive,
+                      onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
                       onAnlageCreated: widget.onAnlageCreated,
                       onBauteilCreated: widget.onBauteilCreated,
                       onAnlagenMoved: widget.onAnlagenMoved,

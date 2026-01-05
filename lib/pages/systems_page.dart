@@ -36,6 +36,9 @@ class SystemsPage extends ConsumerStatefulWidget {
   /// Callback, um zu prüfen, ob bereits eine Selection in einem anderen Gewerk aktiv ist.
   final bool Function()? isAnySelectionActive;
 
+  /// Callback, um die Gewerk-Auswahl zu beenden (wird aufgerufen, wenn eine Anlage gedrückt gehalten wird)
+  final VoidCallback? onExitDisciplineSelectionMode;
+
   /// Wird aufgerufen, wenn eine neue Anlage (Parent) gespeichert wurde.
   final VoidCallback? onAnlageCreated;
 
@@ -52,6 +55,7 @@ class SystemsPage extends ConsumerStatefulWidget {
     required this.discipline,
     this.onSelectionChanged,
     this.isAnySelectionActive,
+    this.onExitDisciplineSelectionMode,
     this.onAnlageCreated,
     this.onBauteilCreated,
     this.onAnlagenMoved,
@@ -437,6 +441,15 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     _exitSelectionMode();
   }
 
+  /// Prüft, ob nur Bauteile (keine Haupt-Anlagen) ausgewählt sind
+  bool hasOnlyBauteileSelected() {
+    if (_selectedAnlagenIds.isEmpty) return false;
+    // Prüfe, ob alle selektierten Anlagen Bauteile sind (parentId != null)
+    return _alleAnlagen
+        .where((a) => _selectedAnlagenIds.contains(a.id))
+        .every((a) => a.parentId != null);
+  }
+
 
   void _enterSelectionMode(String id) {
     setState(() {
@@ -534,14 +547,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         .where((a) => _selectedAnlagenIds.contains(a.id) && a.parentId == null)
         .toList();
 
+    // Wenn nur Bauteile ausgewählt sind, wird diese Methode nicht aufgerufen
+    // (Button wird nicht angezeigt), daher ist die Meldung obsolet
     if (selectedParents.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bitte wähle mindestens eine Anlage (keine Bauteile) aus.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
       return;
     }
 
@@ -1257,6 +1266,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                     _selectedAnlagenIds.remove(a.id);
                     if (_selectedAnlagenIds.isEmpty) {
                       _exitSelectionMode();
+                    } else {
+                      // Aktualisiere die Anzahl auch beim Abwählen
+                      widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
                     }
                   } else {
                     _selectedAnlagenIds.add(a.id);
@@ -1271,6 +1283,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           },
           onLongPress: () {
             if (!_isSelectionMode) {
+              // Wenn eine Gewerk-Auswahl aktiv ist, beende diese zuerst
+              if (widget.onExitDisciplineSelectionMode != null) {
+                widget.onExitDisciplineSelectionMode!();
+              }
               _enterSelectionMode(a.id);
             }
           },

@@ -1921,6 +1921,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             onSelectionChanged: _onSystemsSelectionChanged,
             onDisciplineExpanded: _onDisciplineExpanded,
             onDisciplineLongPress: _enterDisciplineSelectionMode,
+            onExitDisciplineSelectionMode: _exitDisciplineSelectionMode,
             disciplineSelectionMode: _tabController.index == 2 && _disciplineSelectionMode,
             selectedDisciplineLabels: _selectedDisciplineLabels,
             onDisciplineSelectionToggle: _toggleDisciplineSelection,
@@ -2063,14 +2064,31 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       } else if (inSystemsSelection) {
         // Anlagen-Auswahl: Bauteil hinzufügen, Verschieben, Löschen
         if (_activeSelections.keys.length == 1) {
-          buttons.add(
-            _buildFloatingActionButton(
-              icon: Icons.add,
-              tooltip: 'Bauteil hinzufügen',
-              onPressed: _openBulkAddBauteilForSystemsSelection,
-              backgroundColor: Colors.green,
-            ),
-          );
+          // Prüfe, ob nur Bauteile ausgewählt sind
+          final activeLabel = _activeSelections.keys.first;
+          bool hasOnlyBauteile = false;
+          
+          try {
+            final discipline = _systemsPageKeys.keys.firstWhere(
+              (d) => d.label == activeLabel,
+            );
+            hasOnlyBauteile = _systemsPageKeys[discipline]?.currentState?.hasOnlyBauteileSelected() ?? false;
+          } catch (e) {
+            // Disziplin nicht gefunden, ignoriere
+            debugPrint('Disziplin $activeLabel nicht gefunden beim Prüfen auf Bauteile');
+          }
+          
+          // Zeige "Bauteil hinzufügen" Button nur, wenn mindestens eine Anlage (kein Bauteil) ausgewählt ist
+          if (!hasOnlyBauteile) {
+            buttons.add(
+              _buildFloatingActionButton(
+                icon: Icons.add,
+                tooltip: 'Bauteil hinzufügen',
+                onPressed: _openBulkAddBauteilForSystemsSelection,
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
           buttons.add(
             _buildFloatingActionButton(
               icon: Icons.drive_file_move,
