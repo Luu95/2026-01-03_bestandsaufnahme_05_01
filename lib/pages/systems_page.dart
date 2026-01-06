@@ -960,7 +960,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                         bottomRight: Radius.circular(14),
                       ),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                     child: Column(
                       children: groupAnlagen.expand((parent) {
                         final children = _getChildren(parent);
