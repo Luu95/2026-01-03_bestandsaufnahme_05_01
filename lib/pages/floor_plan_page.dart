@@ -52,8 +52,15 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   void initState() {
     super.initState();
     _transformationController.addListener(_onMatrixChanged);
-    _loadDisziplinen();
-    _loadFloorPlanData();
+    // Wichtig: Disziplinen müssen vor dem Laden der Anlagen verfügbar sein,
+    // sonst lädt _loadAllAnlagen() ggf. 0 Marker (Race-Condition) und beim
+    // erneuten Öffnen "verschwinden" die Marker trotz DB-Persistenz.
+    Future.microtask(_init);
+  }
+
+  Future<void> _init() async {
+    await _loadDisziplinen();
+    await _loadFloorPlanData();
   }
 
   Future<void> _loadDisziplinen() async {
@@ -110,7 +117,8 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.building.id != widget.building.id ||
         oldWidget.floor.id != widget.floor.id) {
-      _loadFloorPlanData();
+      // Building/Floor-Wechsel: Disziplinen + PDF + Marker neu laden
+      Future.microtask(_init);
     }
   }
 
@@ -127,6 +135,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   }
 
   Future<void> _loadFloorPlanData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
     final pdfPath = widget.floor.pdfPath;
@@ -172,6 +181,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
       }
     }
 
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
     });
@@ -210,8 +220,10 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     if (dbService == null) return;
 
     final buildingId = widget.building.id;
+    // Nicht über Objekt-Identität filtern, sondern stabil über das Label.
+    // Disziplinen können aus DB/Fallback neu instanziiert werden.
     final filtered = _allAnlagen
-        .where((a) => a.discipline == disziplin && a.buildingId == buildingId)
+        .where((a) => a.discipline.label == disziplin.label && a.buildingId == buildingId)
         .toList();
 
     // Speichere jede Anlage einzeln

@@ -263,30 +263,15 @@ class DatabaseService {
       await insertEnvelope(building.envelope, building.id);
     }
 
-    // Systems aktualisieren
-    final existingAnlagen = await _db.getAnlagenByBuildingId(building.id);
-    final existingIds = existingAnlagen.map((a) => a.id).toSet();
-    final newIds = building.systems.systemsMap.values
-        .expand((list) => list.map((a) => a.id))
-        .toSet();
-
-    // Lösche entfernte Anlagen
-    for (final existing in existingAnlagen) {
-      if (!newIds.contains(existing.id)) {
-        await _db.deleteAnlage(existing.id);
-      }
-    }
-
-    // Füge neue/aktualisierte Anlagen ein
-    for (final entry in building.systems.systemsMap.entries) {
-      for (final anlage in entry.value) {
-        if (existingIds.contains(anlage.id)) {
-          await updateAnlage(anlage);
-        } else {
-          await insertAnlage(anlage);
-        }
-      }
-    }
+    // Systems (Anlagen/Marker) werden NICHT mehr über updateBuilding synchronisiert.
+    //
+    // Hintergrund: Anlagen werden in der App an vielen Stellen direkt über
+    // insertAnlage/updateAnlage/deleteAnlage gepflegt (z.B. Marker im PDF).
+    // Das Building-Objekt im UI ist dabei häufig "stale" und enthält nicht alle
+    // aktuellen Anlagen. Ein Sync hier würde dann Marker/Anlagen fälschlich löschen.
+    //
+    // Systems werden daher ausschließlich über die dedizierten Anlagen-Methoden
+    // gepflegt, nicht über updateBuilding().
 
     // FloorPlans aktualisieren
     final existingFloors = await _db.getFloorPlansByBuildingId(building.id);
