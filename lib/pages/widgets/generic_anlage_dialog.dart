@@ -593,6 +593,224 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
     );
   }
 
+  Widget _buildPhotoSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.grey.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.photo_library,
+                        color: Colors.blue[700],
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Fotos',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey[900],
+                          ),
+                        ),
+                        Text(
+                          '${_photoManager.images.length}/${PhotoManager.maxPhotos}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: _photoManager.canAddPhoto
+                        ? Theme.of(context).primaryColor.withOpacity(0.1)
+                        : Colors.grey[200],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: _photoManager.canAddPhoto ? _takePhoto : null,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.add_a_photo,
+                              color: _photoManager.canAddPhoto
+                                  ? Theme.of(context).primaryColor
+                                  : Colors.grey[400],
+                              size: 20,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Hinzufügen',
+                              style: TextStyle(
+                                color: _photoManager.canAddPhoto
+                                    ? Theme.of(context).primaryColor
+                                    : Colors.grey[400],
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_photoManager.images.isEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.grey.withOpacity(0.2),
+                    style: BorderStyle.solid,
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.photo_outlined,
+                        size: 48,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Noch keine Fotos',
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_photoManager.images.isNotEmpty)
+              SizedBox(
+                height: 110,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photoManager.images.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (ctx, i) {
+                    final f = _photoManager.images[i];
+                    return RepaintBoundary(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Stack(
+                          children: [
+                            GestureDetector(
+                              onTap: () => _viewImage(f),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(
+                                  f,
+                                  width: 110,
+                                  height: 110,
+                                  fit: BoxFit.cover,
+                                  cacheWidth: 220,
+                                  cacheHeight: 220,
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              top: 6,
+                              right: 6,
+                              child: GestureDetector(
+                                onTap: () => _removeImage(i),
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    Icons.close,
+                                    size: 16,
+                                    color: Colors.red[600],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _toggleFieldValidation(String key) {
     final tempAnlage = Anlage(
@@ -688,6 +906,12 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       final isFieldValidated = AnlageValidationService.isFieldValidated(tempAnlage, key);
       final isFieldMissing = AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key);
       
+      // Bestimme Hintergrundfarbe
+      Color? backgroundColor;
+      if (isFieldMissing) {
+        backgroundColor = Colors.grey[200];
+      }
+      
       // Bestimme Icon-Button für grobmotorische Bedienung
       Widget actionButton;
       if (isEmpty) {
@@ -754,92 +978,148 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       }
       
       fields.add(
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: type == 'int'
-                    ? TextField(
-                        controller: controller,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: label,
-                          border: const OutlineInputBorder(),
-                        ),
-                        onChanged: (val) {
-                          final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
-                          _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val;
-                          
-                          // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
-                          if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
-                            final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
-                            _params.addAll(updatedAnlage.params);
-                          }
-                          
-                          // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
-                          if (wasEmpty && val.trim().isNotEmpty) {
-                            final updatedTempAnlage = Anlage(
-                              id: widget.existingAnlage?.id ?? '',
-                              parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                              name: _nameController.text.trim(),
-                              params: Map<String, dynamic>.from(_params),
-                              floorId: widget.floorId,
-                              buildingId: widget.buildingId,
-                              isMarker: widget.existingAnlage?.isMarker ?? false,
-                              markerInfo: widget.existingAnlage?.markerInfo,
-                              markerType: widget.discipline.label,
-                              discipline: widget.discipline,
-                            );
-                            final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
-                            _params.addAll(updatedAnlage.params);
-                          }
-                          
-                          _updateValidationStatus();
-                        },
-                      )
-                    : TextField(
-                        controller: controller,
-                        decoration: InputDecoration(
-                          labelText: label,
-                          border: const OutlineInputBorder(),
-                        ),
-                        onChanged: (val) {
-                          final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
-                          _params[key] = val;
-                          
-                          // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
-                          if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
-                            final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
-                            _params.addAll(updatedAnlage.params);
-                          }
-                          
-                          // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
-                          if (wasEmpty && val.trim().isNotEmpty) {
-                            final updatedTempAnlage = Anlage(
-                              id: widget.existingAnlage?.id ?? '',
-                              parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                              name: _nameController.text.trim(),
-                              params: Map<String, dynamic>.from(_params),
-                              floorId: widget.floorId,
-                              buildingId: widget.buildingId,
-                              isMarker: widget.existingAnlage?.isMarker ?? false,
-                              markerInfo: widget.existingAnlage?.markerInfo,
-                              markerType: widget.discipline.label,
-                              discipline: widget.discipline,
-                            );
-                            final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
-                            _params.addAll(updatedAnlage.params);
-                          }
-                          
-                          _updateValidationStatus();
-                        },
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: backgroundColor ?? Colors.grey[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isFieldValidated
+                  ? Colors.green.withOpacity(0.3)
+                  : (isFieldMissing
+                      ? Colors.grey.withOpacity(0.3)
+                      : Colors.grey.withOpacity(0.2)),
+              width: isFieldValidated ? 1.5 : 1,
+            ),
+            boxShadow: isFieldValidated
+                ? [
+                    BoxShadow(
+                      color: Colors.green.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: type == 'int'
+                      ? TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.number,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey[900],
+                      fontWeight: FontWeight.w400,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: label,
+                      labelStyle: TextStyle(
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
                       ),
-              ),
-              const SizedBox(width: 8),
-              actionButton,
-            ],
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 16,
+                        horizontal: 4,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                    ),
+                    onChanged: (val) {
+                      final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+                      _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val;
+                      
+                      // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
+                      if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
+                        final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
+                        _params.addAll(updatedAnlage.params);
+                      }
+                      
+                      // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
+                      if (wasEmpty && val.trim().isNotEmpty) {
+                        final updatedTempAnlage = Anlage(
+                          id: widget.existingAnlage?.id ?? '',
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
+                          name: _nameController.text.trim(),
+                          params: Map<String, dynamic>.from(_params),
+                          floorId: widget.floorId,
+                          buildingId: widget.buildingId,
+                          isMarker: widget.existingAnlage?.isMarker ?? false,
+                          markerInfo: widget.existingAnlage?.markerInfo,
+                          markerType: widget.discipline.label,
+                          discipline: widget.discipline,
+                        );
+                        final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
+                        _params.addAll(updatedAnlage.params);
+                      }
+                      
+                      _updateValidationStatus();
+                    },
+                  )
+                      : TextField(
+                    controller: controller,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey[900],
+                      fontWeight: FontWeight.w400,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: label,
+                      labelStyle: TextStyle(
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 16,
+                        horizontal: 4,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                    ),
+                    onChanged: (val) {
+                      final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+                      _params[key] = val;
+                      
+                      // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
+                      if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
+                        final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
+                        _params.addAll(updatedAnlage.params);
+                      }
+                      
+                      // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
+                      if (wasEmpty && val.trim().isNotEmpty) {
+                        final updatedTempAnlage = Anlage(
+                          id: widget.existingAnlage?.id ?? '',
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
+                          name: _nameController.text.trim(),
+                          params: Map<String, dynamic>.from(_params),
+                          floorId: widget.floorId,
+                          buildingId: widget.buildingId,
+                          isMarker: widget.existingAnlage?.isMarker ?? false,
+                          markerInfo: widget.existingAnlage?.markerInfo,
+                          markerType: widget.discipline.label,
+                          discipline: widget.discipline,
+                        );
+                        final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
+                        _params.addAll(updatedAnlage.params);
+                      }
+                      
+                      _updateValidationStatus();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 4),
+                actionButton,
+              ],
+            ),
           ),
         ),
       );
@@ -856,187 +1136,294 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      child: Material(
-        color: Colors.white,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maxHeight),
-          child: Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Header
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      isEdit
-                          ? 'Anlage bearbeiten'
-                          : (isBauteilCreate ? 'Neues Bauteil hinzufügen' : 'Neue Anlage hinzufügen'),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Container(
+          color: Colors.white,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Titel mit OCR-Button
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      widget.discipline.color.withOpacity(0.1),
+                      widget.discipline.color.withOpacity(0.05),
+                    ],
+                  ),
+                  border: Border(
+                    bottom: BorderSide(
+                      color: Colors.grey.withOpacity(0.2),
+                      width: 1,
                     ),
                   ),
-
-                  // OCR-Button
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.document_scanner),
-                      label: const Text('Typenschild scannen (OCR)'),
-                      onPressed: _takePhotoForOcr,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
-                        foregroundColor: Theme.of(context).primaryColor,
-                        elevation: 0,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Name
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TextField(
-                      controller: _nameController,
-                      decoration: InputDecoration(
-                        labelText: (widget.parentId != null || widget.existingAnlage?.parentId != null) 
-                            ? 'Bauteilname' 
-                            : 'Anlagenname',
-                        errorText: _nameController.text.trim().isEmpty ? 'Name darf nicht leer sein' : null,
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Dynamische Felder
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(children: _buildSchemaFields()),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Fotos
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'Fotos (${_photoManager.images.length}/${PhotoManager.maxPhotos})',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _photoManager.images.isNotEmpty
-                        ? Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: List.generate(_photoManager.images.length, (i) {
-                              final f = _photoManager.images[i];
-                              return RepaintBoundary(
-                                child: Stack(
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () => _viewImage(f),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(4),
-                                        child: Image.file(
-                                          f,
-                                          width: 80,
-                                          height: 80,
-                                          fit: BoxFit.cover,
-                                          cacheWidth: 160,
-                                          cacheHeight: 160,
-                                        ),
-                                      ),
-                                    ),
-                                    Positioned(
-                                      top: -6,
-                                      right: -6,
-                                      child: IconButton(
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(),
-                                        icon: const Icon(Icons.cancel, color: Colors.red, size: 20),
-                                        onPressed: () => _removeImage(i),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
-                          )
-                        : Container(
-                            height: 100,
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(8),
+                              color: widget.discipline.color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Center(
-                              child: Icon(Icons.photo_camera, size: 40, color: Colors.grey),
+                            child: Icon(
+                              widget.discipline.icon,
+                              color: widget.discipline.color,
+                              size: 24,
                             ),
                           ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.camera_alt),
-                      label: const Text('Foto aufnehmen'),
-                      onPressed: _photoManager.canAddPhoto ? _takePhoto : null,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  isEdit
+                                      ? 'Anlage bearbeiten'
+                                      : (isBauteilCreate ? 'Neues Bauteil erfassen' : 'Neue Anlage erfassen'),
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey[900],
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  widget.discipline.label,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Action-Buttons
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Abbrechen'),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: _takePhotoForOcr,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.document_scanner,
+                                  color: Theme.of(context).primaryColor,
+                                  size: 22,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'OCR',
+                                  style: TextStyle(
+                                    color: Theme.of(context).primaryColor,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                        ElevatedButton(
-                          onPressed: () {
-                            final name = _nameController.text.trim();
-                            if (name.isEmpty) {
-                              setState(() {}); // um ErrorText zu aktualisieren
-                              return;
-                            }
-                            _params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
-
-                            // Erstelle Anlage
-                            var anlage = Anlage(
-                              id: widget.existingAnlage?.id ?? const Uuid().v4(),
-                              parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                              name: name,
-                              params: _params,
-                              floorId: widget.floorId,
-                              buildingId: widget.buildingId,
-                              isMarker: widget.existingAnlage?.isMarker ?? false,
-                              markerInfo: widget.existingAnlage?.markerInfo,
-                              markerType: widget.discipline.label,
-                              discipline: widget.discipline,
-                            );
-
-                            // Prüfe Validierung und setze Status automatisch
-                            final isValidated = AnlageValidationService.isAnlageValidated(anlage);
-                            anlage = AnlageValidationService.setValidatedStatus(anlage, isValidated);
-
-                            widget.onSave(anlage, widget.index);
-                            Navigator.of(context).pop();
-                          },
-                          child: const Text('Speichern'),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Name
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.grey.withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: TextField(
+                            controller: _nameController,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: (widget.parentId != null || widget.existingAnlage?.parentId != null) 
+                                  ? 'Bauteilname' 
+                                  : 'Anlagenname',
+                              labelStyle: TextStyle(
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 16,
+                              ),
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Schema-Felder
+                      const SizedBox(height: 8),
+                      ..._buildSchemaFields(),
+
+                      // Fotos (neuer Abschnitt)
+                      const SizedBox(height: 8),
+                      _buildPhotoSection(),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Aktion-Buttons
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.grey.withOpacity(0.2),
+                      width: 1,
+                    ),
+                  ),
+                ),
+                padding: EdgeInsets.only(
+                  left: 20,
+                  right: 20,
+                  top: 16,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 
+                          MediaQuery.of(context).padding.bottom + 20,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: BorderSide(
+                          color: Colors.grey[300]!,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.close,
+                            size: 20,
+                            color: Colors.grey[700],
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Abbrechen',
+                            style: TextStyle(
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: () {
+                        final name = _nameController.text.trim();
+                        if (name.isEmpty) return;
+                        _params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
+
+                        // Erstelle Anlage
+                        var anlage = Anlage(
+                          id: widget.existingAnlage?.id ?? const Uuid().v4(),
+                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
+                          name: name,
+                          params: _params,
+                          floorId: widget.floorId,
+                          buildingId: widget.buildingId,
+                          isMarker: widget.existingAnlage?.isMarker ?? false,
+                          markerInfo: widget.existingAnlage?.markerInfo,
+                          markerType: widget.discipline.label,
+                          discipline: widget.discipline,
+                        );
+
+                        // Prüfe Validierung und setze Status automatisch
+                        final isValidated = AnlageValidationService.isAnlageValidated(anlage);
+                        anlage = AnlageValidationService.setValidatedStatus(anlage, isValidated);
+
+                        widget.onSave(anlage, widget.index);
+                        Navigator.of(context).pop();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 2,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.check,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Speichern',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
