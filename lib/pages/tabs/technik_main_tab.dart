@@ -189,7 +189,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
             }
           },
           child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           decoration: BoxDecoration(
             // Feine Nuance für Gewerk: sehr subtiler bläulicher Ton
             color: Color.lerp(
@@ -233,10 +233,10 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
               child: ExpansionTile(
                 key: ValueKey('${discipline.label}_$isExpanded'),
                 enabled: !widget.disciplineSelectionMode,
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 childrenPadding: EdgeInsets.zero,
                 leading: Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
@@ -263,7 +263,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                   child: Icon(
                     discipline.icon,
                     color: discipline.color,
-                    size: 24,
+                    size: 20,
                   ),
                 ),
                 title: Row(

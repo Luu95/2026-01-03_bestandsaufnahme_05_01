@@ -841,7 +841,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
         items.add(
           Container(
-            margin: const EdgeInsets.only(bottom: 8),
+            margin: const EdgeInsets.only(bottom: 6),
             decoration: BoxDecoration(
               // Feine Nuance für Gruppierung: sehr subtiler lila/grauer Ton
               color: Color.lerp(
@@ -880,7 +880,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
               ),
               child: ExpansionTile(
                 key: ValueKey('group_$groupKey'),
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 childrenPadding: EdgeInsets.zero,
                 leading: Container(
                   padding: const EdgeInsets.all(8),
@@ -1308,7 +1308,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             }
           },
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Row(
               children: [
                 // Leading Icon mit verbessertem Design
