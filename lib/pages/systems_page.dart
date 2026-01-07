@@ -689,10 +689,27 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
   /// Wandelt ein Marker-Objekt in eine [Anlage] um und fügt sie hinzu.
   Future<void> addMarkerAnlage(Marker marker) async {
+    final params = marker.params != null
+        ? Map<String, dynamic>.from(marker.params!)
+        : <String, dynamic>{};
+
+    // Etage automatisch in Params setzen (damit sie im Anlagen-Dialog/CSV sichtbar ist)
+    final floorLabel = widget.floor.name.trim().isNotEmpty
+        ? widget.floor.name.trim()
+        : (widget.floor.pdfName?.trim().isNotEmpty == true
+            ? widget.floor.pdfName!.trim()
+            : '');
+    if (floorLabel.isNotEmpty) {
+      final existing = params['Etage']?.toString().trim() ?? '';
+      if (existing.isEmpty) {
+        params['Etage'] = floorLabel;
+      }
+    }
+
     final newAnlage = Anlage(
       id: marker.id,
       name: marker.title,
-      params: marker.params ?? {},
+      params: params,
       floorId: widget.floor.id,
       buildingId: widget.building.id,
       isMarker: true,

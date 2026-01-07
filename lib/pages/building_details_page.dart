@@ -346,9 +346,32 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final dbService = ref.read(databaseServiceProvider);
       int savedCount = 0;
       int skippedCount = 0;
+      bool floorsAdded = false;
       final Map<String, String> lfdToId = {}; // lfdNummer -> finale DB-ID (für parentId)
       for (final anlage in anlagen) {
           try {
+            // Etage auflösen/erstellen falls in CSV angegeben
+            String resolvedFloorId = anlage.floorId;
+            final etageName = (anlage.params['Etage'] ?? anlage.params['__etageName'])?.toString();
+            if (etageName != null && etageName.isNotEmpty) {
+              // Suche nach Etage mit diesem Namen
+              var floor = _building.floors.firstWhere(
+                (f) => f.name.toLowerCase() == etageName.toLowerCase() || 
+                       (f.pdfName != null && f.pdfName!.toLowerCase() == etageName.toLowerCase()),
+                orElse: () => FloorPlan(id: '', name: ''),
+              );
+              
+              if (floor.id.isEmpty) {
+                // Neue Etage erstellen (ohne PDF)
+                final newId = 'floor_${DateTime.now().millisecondsSinceEpoch}_${etageName.replaceAll(' ', '_')}';
+                floor = FloorPlan(id: newId, name: etageName);
+                _building.floors.add(floor);
+                floorsAdded = true;
+                debugPrint('Neue Etage erstellt: $etageName (ID: $newId)');
+              }
+              resolvedFloorId = floor.id;
+            }
+
             // Prüfe, ob eine lfdNummer in den Params vorhanden ist
             final lfdNummer = anlage.params['lfdNummer']?.toString();
             if (lfdNummer != null && lfdNummer.isNotEmpty) {
@@ -371,13 +394,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
                 final cleanedParams = Map<String, dynamic>.from(anlage.params);
                 cleanedParams.remove('__parentLfdNummer');
+                cleanedParams.remove('__etageName');
 
                 final toInsert = Anlage(
                   id: anlage.id,
                   parentId: resolvedParentId,
                   name: anlage.name,
                   params: cleanedParams,
-                  floorId: anlage.floorId,
+                  floorId: resolvedFloorId,
                   buildingId: anlage.buildingId,
                   isMarker: anlage.isMarker,
                   markerInfo: anlage.markerInfo,
@@ -388,19 +412,40 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                 // Neue Anlage einfügen
                 await dbService.insertAnlage(toInsert);
                 savedCount++;
-                debugPrint('Anlage gespeichert: ${anlage.name} (lfd Nummer: $lfdNummer, ID: ${anlage.id})');
+                debugPrint('Anlage gespeichert: ${anlage.name} (lfd Nummer: $lfdNummer, ID: ${anlage.id}, Floor: $resolvedFloorId)');
 
                 lfdToId[lfdNummer] = anlage.id;
               }
             } else {
               // Keine lfdNummer vorhanden - normale Einfügung
-              await dbService.insertAnlage(anlage);
+              final cleanedParams = Map<String, dynamic>.from(anlage.params);
+              cleanedParams.remove('__etageName');
+              
+              final toInsert = Anlage(
+                id: anlage.id,
+                parentId: anlage.parentId,
+                name: anlage.name,
+                params: cleanedParams,
+                floorId: resolvedFloorId,
+                buildingId: anlage.buildingId,
+                isMarker: anlage.isMarker,
+                markerInfo: anlage.markerInfo,
+                markerType: anlage.markerType,
+                discipline: anlage.discipline,
+              );
+              
+              await dbService.insertAnlage(toInsert);
               savedCount++;
-              debugPrint('Anlage gespeichert: ${anlage.name} (${anlage.id})');
+              debugPrint('Anlage gespeichert: ${anlage.name} (${anlage.id}, Floor: $resolvedFloorId)');
             }
           } catch (e) {
             debugPrint('Fehler beim Speichern der Anlage ${anlage.name} (${anlage.id}): $e');
           }
+        }
+
+        // Falls neue Etagen hinzugefügt wurden, Gebäude persistieren
+        if (floorsAdded) {
+          await ref.read(projectsProvider.notifier).updateBuilding(_building);
         }
 
         debugPrint('CSV-Import: $savedCount neue Anlagen hinzugefügt, $skippedCount Anlagen übersprungen (existierten bereits)');

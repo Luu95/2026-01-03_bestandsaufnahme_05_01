@@ -314,14 +314,29 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                   (d) => d.label == newMarker.discipline.label,
               orElse: () => newMarker.discipline,
             );
+
+            final params = newMarker.params != null
+                ? Map<String, dynamic>.from(newMarker.params!)
+                : <String, dynamic>{};
+            // Etage automatisch setzen (Etage = Name/PDF-Name des aktuellen Grundrisses)
+            final floorLabel = widget.floor.name.trim().isNotEmpty
+                ? widget.floor.name.trim()
+                : (_currentPdfName?.trim().isNotEmpty == true
+                    ? _currentPdfName!.trim()
+                    : '');
+            if (floorLabel.isNotEmpty) {
+              final existing = params['Etage']?.toString().trim() ?? '';
+              if (existing.isEmpty) {
+                params['Etage'] = floorLabel;
+              }
+            }
+
             final newAnlage = Anlage(
               id: newId,
               name: newMarker.title.isNotEmpty
                   ? newMarker.title
                   : 'Anlage \$newId',
-              params: newMarker.params != null
-                  ? Map<String, dynamic>.from(newMarker.params!)
-                  : {},
+              params: params,
               floorId: widget.floor.id,
               buildingId: widget.building.id,
               isMarker: true,
@@ -368,9 +383,22 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
           onSave: (Marker updatedMarker) async {
             setState(() {
               a.name = updatedMarker.title;
-              a.params = updatedMarker.params != null
+              final params = updatedMarker.params != null
                   ? Map<String, dynamic>.from(updatedMarker.params!)
-                  : {};
+                  : <String, dynamic>{};
+              // Etage beim Bearbeiten ebenfalls sicherstellen
+              final floorLabel = widget.floor.name.trim().isNotEmpty
+                  ? widget.floor.name.trim()
+                  : (_currentPdfName?.trim().isNotEmpty == true
+                      ? _currentPdfName!.trim()
+                      : '');
+              if (floorLabel.isNotEmpty) {
+                final existing = params['Etage']?.toString().trim() ?? '';
+                if (existing.isEmpty) {
+                  params['Etage'] = floorLabel;
+                }
+              }
+              a.params = params;
               a.markerInfo = {
                 'x': updatedMarker.x,
                 'y': updatedMarker.y,

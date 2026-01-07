@@ -405,6 +405,7 @@ class CsvService {
           'lfdNummerSpalte': settings['lfdNummerSpalte'] as int? ?? 0,
           'nameSpalte': settings['nameSpalte'] as int? ?? 1,
           'gewerkSpalte': settings['gewerkSpalte'] as int? ?? 2,
+          'etageSpalte': settings['etageSpalte'] as int?,
           'anlageBauteilSpalte': settings['anlageBauteilSpalte'] as int?,
         };
       } catch (e) {
@@ -417,6 +418,7 @@ class CsvService {
       'lfdNummerSpalte': 0,
       'nameSpalte': 1,
       'gewerkSpalte': 2,
+      'etageSpalte': null,
       'anlageBauteilSpalte': null,
     };
   }
@@ -522,9 +524,10 @@ class CsvService {
       final lfdNummerIdx = csvSettings['lfdNummerSpalte']!;
       final nameIdx = csvSettings['nameSpalte']!;
       final disciplineIdx = csvSettings['gewerkSpalte']!;
+      final etageIdx = csvSettings['etageSpalte'] as int?;
       final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
       
-      debugPrint('CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, anlageBauteil=$anlageBauteilIdx');
+      debugPrint('CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, etage=$etageIdx, anlageBauteil=$anlageBauteilIdx');
 
       final dataRows = csvData.sublist(1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
       if (dataRows.isEmpty) {
@@ -533,16 +536,15 @@ class CsvService {
 
       debugPrint('Anzahl Datenzeilen: ${dataRows.length}');
 
-      // Bestimme die höchste Spaltennummer für die festen Felder
-      final fixedColumns = [lfdNummerIdx, nameIdx, disciplineIdx];
-      if (anlageBauteilIdx != null) {
-        fixedColumns.add(anlageBauteilIdx);
-      }
-      final maxFixedColumn = fixedColumns.reduce((a, b) => a > b ? a : b);
-      
-      // Schema aus CSV-Spalten erstellen (ab der Spalte nach der höchsten festen Spalte)
+      // Schema aus CSV-Spalten erstellen (alle Spalten, die keine festen Felder sind)
       final schemaColumns = <int, String>{};
-      for (var i = maxFixedColumn + 1; i < headerRow.length; i++) {
+      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
+      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
+      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
+
+      for (var i = 0; i < headerRow.length; i++) {
+        if (fixedColumnIndices.contains(i)) continue; // Überspringe feste Felder
+
         final headerName = headerRow[i].trim();
         if (headerName.isNotEmpty) {
           // Verwende den Header-Namen als Key (normalisiert)
@@ -649,6 +651,12 @@ class CsvService {
         }
         final disciplineLabelValue = disciplineLabel.trim();
         
+        // Etage aus konfigurierter Spalte lesen (falls vorhanden)
+        String? etageValue;
+        if (etageIdx != null) {
+          etageValue = _safeCell(row, etageIdx).trim();
+        }
+        
         // Anlage/Bauteil aus konfigurierter Spalte lesen (falls vorhanden)
         String? anlageBauteilValue;
         if (anlageBauteilIdx != null) {
@@ -659,11 +667,15 @@ class CsvService {
         final params = _parseParamsFromRow(row, schemaColumns);
         // Laufende Nummer zu den Parametern hinzufügen
         params['lfdNummer'] = lfdNummerValue;
+        // Etage als normalen Parameter hinzufügen (sichtbar im Anlagen-Dialog / Export)
+        if (etageValue != null && etageValue.isNotEmpty) {
+          params['Etage'] = etageValue;
+        }
         // Anlage/Bauteil zu den Parametern hinzufügen (falls vorhanden)
         if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
           params['Anlage/Bautel'] = anlageBauteilValue;
         }
-        debugPrint('Anlage $nameValue (lfd Nummer: $lfdNummerValue): Disziplin=$disciplineLabelValue, Anlage/Bauteil=$anlageBauteilValue, Parameter=$params');
+        debugPrint('Anlage $nameValue (lfd Nummer: $lfdNummerValue): Disziplin=$disciplineLabelValue, Etage=$etageValue, Anlage/Bauteil=$anlageBauteilValue, Parameter=$params');
 
         final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
         if (discipline == null) {
@@ -820,6 +832,7 @@ class CsvService {
       final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
       final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
       final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
+      final etageIdx = csvSettings['etageSpalte'] as int?;
       final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
 
       // Bestimme alle eindeutigen Schemas aus den Disziplinen
@@ -846,13 +859,18 @@ class CsvService {
       final csvData = <List<String>>[];
 
       // Header-Zeile erstellen basierend auf den CSV-Einstellungen (Spaltenzuordnung)
-      final fixedColumns = <int>[lfdNummerIdx, nameIdx, disciplineIdx];
-      if (anlageBauteilIdx != null) fixedColumns.add(anlageBauteilIdx);
-      final maxFixedColumn = fixedColumns.reduce((a, b) => a > b ? a : b);
+      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
+      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
+      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
+      
+      final maxFixedColumn = fixedColumnIndices.reduce((a, b) => a > b ? a : b);
       final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
       headerRow[lfdNummerIdx] = 'lfd Nummer';
       headerRow[nameIdx] = 'Name';
       headerRow[disciplineIdx] = 'Gewerk';
+      if (etageIdx != null) {
+        headerRow[etageIdx] = 'Etage';
+      }
       if (anlageBauteilIdx != null) {
         headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
       }
@@ -886,6 +904,11 @@ class CsvService {
 
         // Gewerk
         dataRow[disciplineIdx] = anlage.discipline.label;
+
+        // Etage
+        if (etageIdx != null) {
+          dataRow[etageIdx] = anlage.params['Etage']?.toString() ?? '';
+        }
 
         // Anlage/Bauteil (a/b)
         if (anlageBauteilIdx != null) {
@@ -972,6 +995,7 @@ class CsvService {
       final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
       final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
       final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
+      final etageIdx = csvSettings['etageSpalte'] as int?;
       final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
 
       // Temporäres Verzeichnis für Export erstellen
@@ -1002,13 +1026,18 @@ class CsvService {
       final csvData = <List<String>>[];
 
       // Header-Zeile
-      final fixedColumns = <int>[lfdNummerIdx, nameIdx, disciplineIdx];
-      if (anlageBauteilIdx != null) fixedColumns.add(anlageBauteilIdx);
-      final maxFixedColumn = fixedColumns.reduce((a, b) => a > b ? a : b);
+      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
+      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
+      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
+
+      final maxFixedColumn = fixedColumnIndices.reduce((a, b) => a > b ? a : b);
       final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
       headerRow[lfdNummerIdx] = 'lfd Nummer';
       headerRow[nameIdx] = 'Name';
       headerRow[disciplineIdx] = 'Gewerk';
+      if (etageIdx != null) {
+        headerRow[etageIdx] = 'Etage';
+      }
       if (anlageBauteilIdx != null) {
         headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
       }
@@ -1056,6 +1085,11 @@ class CsvService {
 
         // Gewerk
         dataRow[disciplineIdx] = anlage.discipline.label;
+
+        // Etage
+        if (etageIdx != null) {
+          dataRow[etageIdx] = anlage.params['Etage']?.toString() ?? '';
+        }
 
         // Anlage/Bauteil (a/b)
         if (anlageBauteilIdx != null) {

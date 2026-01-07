@@ -853,7 +853,30 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   }
 
   List<Widget> _buildSchemaFields() {
-    final schema = widget.discipline.schema;
+    // Schema-Felder aus der Disziplin + zusätzliche Keys aus den Params,
+    // damit automatisch gesetzte/aus CSV kommende Felder immer angezeigt werden.
+    final schema = List<Map<String, dynamic>>.from(widget.discipline.schema);
+    final schemaKeys = schema
+        .map((e) => (e['key'] ?? '').toString())
+        .where((k) => k.trim().isNotEmpty)
+        .toSet();
+
+    final extraKeys = _params.keys
+        .where((k) =>
+            !schemaKeys.contains(k) &&
+            !k.startsWith('_') &&
+            !k.startsWith('__') &&
+            k != 'photoPaths')
+        .toList()
+      ..sort();
+
+    for (final k in extraKeys) {
+      schema.add({
+        'key': k,
+        'label': k,
+        'type': 'text',
+      });
+    }
     final fields = <Widget>[];
     
     // Erstelle temporäre Anlage für Status-Prüfung

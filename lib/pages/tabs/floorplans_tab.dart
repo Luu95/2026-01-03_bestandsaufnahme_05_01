@@ -42,6 +42,7 @@ class FloorPlansTab extends ConsumerStatefulWidget {
 
 class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
   late Building _building;
+  final Set<String> _expandedFloorIds = {};
 
   @override
   void initState() {
@@ -56,6 +57,10 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
         oldWidget.building.floors.length != widget.building.floors.length) {
       _building = widget.building;
     }
+
+    // Aufgeräumt halten, falls Etagen gelöscht wurden
+    final currentIds = widget.building.floors.map((f) => f.id).toSet();
+    _expandedFloorIds.removeWhere((id) => !currentIds.contains(id));
   }
 
   Future<void> _handleTap(int idx, FloorPlan floor) async {
@@ -125,72 +130,199 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
 
   @override
   Widget build(BuildContext context) {
-    final validFloors = _building.floors
-        .where((f) => f.pdfPath != null && File(f.pdfPath!).existsSync())
-        .toList();
+    final floors = _building.floors;
 
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: validFloors.isEmpty
+      child: floors.isEmpty
           ? const Center(
         child: Text(
-          'Es sind keine Grundriss-PDFs vorhanden.\n'
-              'Füge über den Button unten rechts eine PDF hinzu.',
+          'Es sind keine Etagen oder Grundriss-PDFs vorhanden.\n'
+              'Füge über den Button unten rechts eine PDF hinzu oder importiere Daten per CSV.',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 16, color: Colors.black54),
         ),
       )
-          : ListView.separated(
-        itemCount: validFloors.length,
-        separatorBuilder: (_, __) =>
-            Divider(height: 1, color: Colors.grey.shade300),
-        itemBuilder: (ctx, idx) {
-          final floor = validFloors[idx];
-          final isSelected = widget.selectedFloorIndexes.contains(idx);
+          : ListView(
+        padding: const EdgeInsets.only(top: 4, bottom: 8),
+        children: [
+          for (var idx = 0; idx < floors.length; idx++)
+            _buildFloorTile(idx, floors[idx]),
+        ],
+      ),
+    );
+  }
 
-          return ListTile(
-            contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            leading: CircleAvatar(
-              radius: 20,
-              backgroundColor: isSelected
-                  ? Theme.of(context)
-                  .primaryColor
-                  .withOpacity(0.3)
-                  : Colors.grey.shade200,
-              child: const Icon(
-                Icons.picture_as_pdf,
-                color: Colors.redAccent,
-                size: 28,
+  Widget _buildFloorTile(int idx, FloorPlan floor) {
+    final isSelected = widget.selectedFloorIndexes.contains(idx);
+    final isExpanded = _expandedFloorIds.contains(floor.id);
+    final hasPdf = floor.pdfPath != null && File(floor.pdfPath!).existsSync();
+    final title = floor.name.trim().isNotEmpty
+        ? floor.name.trim()
+        : (floor.pdfName?.trim().isNotEmpty == true ? floor.pdfName!.trim() : 'Unbenannte Etage');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Color.lerp(Colors.white, Colors.indigo.shade50, 0.18),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: widget.isSelectionMode && isSelected
+              ? Theme.of(context).primaryColor.withOpacity(0.35)
+              : (isExpanded ? Colors.indigo.withOpacity(0.28) : Colors.grey.withOpacity(0.15)),
+          width: isExpanded ? 1.5 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Column(
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  if (widget.isSelectionMode) {
+                    widget.onFloorTap?.call(idx);
+                    return;
+                  }
+                  setState(() {
+                    if (isExpanded) {
+                      _expandedFloorIds.remove(floor.id);
+                    } else {
+                      _expandedFloorIds.add(floor.id);
+                    }
+                  });
+                },
+                onLongPress: widget.onFloorLongPress != null
+                    ? () => widget.onFloorLongPress!(idx)
+                    : null,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: widget.isSelectionMode && isSelected
+                                ? [
+                                    Theme.of(context).primaryColor.withOpacity(0.22),
+                                    Theme.of(context).primaryColor.withOpacity(0.10),
+                                  ]
+                                : [
+                                    Colors.indigo.withOpacity(0.18),
+                                    Colors.indigo.withOpacity(0.08),
+                                  ],
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          Icons.layers,
+                          color: widget.isSelectionMode && isSelected
+                              ? Theme.of(context).primaryColor
+                              : Colors.indigo,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: widget.isSelectionMode && isSelected
+                                ? Theme.of(context).primaryColor
+                                : Colors.grey[900],
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: (hasPdf ? Colors.redAccent : Colors.grey).withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          hasPdf ? 'PDF' : '—',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: hasPdf ? Colors.redAccent : Colors.grey[700],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      if (widget.isSelectionMode)
+                        (isSelected
+                            ? const Icon(Icons.check_circle, color: Colors.blueAccent)
+                            : const Icon(Icons.radio_button_unchecked, color: Colors.grey))
+                      else
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: isExpanded
+                                ? Colors.indigo.withOpacity(0.10)
+                                : Colors.grey.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                            color: isExpanded ? Colors.indigo : Colors.grey[600],
+                            size: 22,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
-            title: Text(
-              floor.pdfName?.isNotEmpty == true
-                  ? floor.pdfName!
-                  : (floor.name.isNotEmpty
-                      ? floor.name
-                      : 'Unbenannter Grundriss'),
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: isSelected
-                    ? Theme.of(context).primaryColor
-                    : Colors.black87,
-              ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              child: isExpanded
+                  ? Container(
+                      color: Colors.grey[50],
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                      child: Column(
+                        children: [
+                          ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            leading: Icon(
+                              hasPdf ? Icons.picture_as_pdf : Icons.upload_file,
+                              color: hasPdf ? Colors.redAccent : Colors.indigo,
+                            ),
+                            title: Text(
+                              hasPdf
+                                  ? (floor.pdfName?.isNotEmpty == true ? floor.pdfName! : 'Grundriss öffnen')
+                                  : 'Grundriss (PDF) hinzufügen',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: hasPdf
+                                ? const Text('Tippen zum Öffnen', style: TextStyle(fontSize: 12))
+                                : const Text('Tippen zum Auswählen', style: TextStyle(fontSize: 12)),
+                            onTap: () => _handleTap(idx, floor),
+                            trailing: widget.isSelectionMode
+                                ? null
+                                : const Icon(Icons.chevron_right, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
-            onTap: () => _handleTap(idx, floor),
-            onLongPress: widget.onFloorLongPress != null
-                ? () => widget.onFloorLongPress!(idx)
-                : null,
-            trailing: widget.isSelectionMode
-                ? (isSelected
-                ? const Icon(Icons.check_circle,
-                color: Colors.blueAccent)
-                : const Icon(Icons.radio_button_unchecked,
-                color: Colors.grey))
-                : null,
-          );
-        },
+          ],
+        ),
       ),
     );
   }
