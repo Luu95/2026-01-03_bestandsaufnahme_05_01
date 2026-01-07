@@ -168,6 +168,225 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
     );
   }
 
+  Widget _buildPhotoSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.grey.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.photo_library,
+                        color: Colors.blue[700],
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Fotos',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey[900],
+                          ),
+                        ),
+                        Text(
+                          '${_photoManager.images.length}/${PhotoManager.maxPhotos}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: _photoManager.canAddPhoto
+                        ? Theme.of(context).primaryColor.withOpacity(0.1)
+                        : Colors.grey[200],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: _photoManager.canAddPhoto ? _takePhoto : null,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.add_a_photo,
+                              color: _photoManager.canAddPhoto
+                                  ? Theme.of(context).primaryColor
+                                  : Colors.grey[400],
+                              size: 20,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Hinzufügen',
+                              style: TextStyle(
+                                color: _photoManager.canAddPhoto
+                                    ? Theme.of(context).primaryColor
+                                    : Colors.grey[400],
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_photoManager.images.isEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.grey.withOpacity(0.2),
+                    style: BorderStyle.solid,
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.photo_outlined,
+                        size: 48,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Noch keine Fotos',
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_photoManager.images.isNotEmpty)
+              SizedBox(
+                height: 110,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photoManager.images.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (ctx, i) {
+                    final f = _photoManager.images[i];
+                    return RepaintBoundary(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Stack(
+                          children: [
+                            GestureDetector(
+                              onTap: () => _viewImage(f),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(
+                                  f,
+                                  width: 110,
+                                  height: 110,
+                                  fit: BoxFit.cover,
+                                  cacheWidth: 220,
+                                  cacheHeight: 220,
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              top: 6,
+                              right: 6,
+                              child: GestureDetector(
+                                onTap: () => _removeImage(i),
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    Icons.close,
+                                    size: 16,
+                                    color: Colors.red[600],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   List<Widget> _buildSchemaFields() {
     final schema = _discipline.schema;
     final fields = <Widget>[];
@@ -183,30 +402,72 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
       }
       final controller = _controllers[key]!;
 
-      if (type == 'int') {
-        fields.add(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(labelText: label),
-              onChanged: (val) => _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val,
+      fields.add(
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.grey[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.grey.withOpacity(0.2),
+              width: 1,
             ),
           ),
-        );
-      } else {
-        fields.add(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: TextField(
-              controller: controller,
-              decoration: InputDecoration(labelText: label),
-              onChanged: (val) => _params[key] = val,
-            ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
+            child: type == 'int'
+                ? TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.number,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey[900],
+                      fontWeight: FontWeight.w400,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: label,
+                      labelStyle: TextStyle(
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 4,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                    ),
+                    onChanged: (val) => _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val,
+                  )
+                : TextField(
+                    controller: controller,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey[900],
+                      fontWeight: FontWeight.w400,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: label,
+                      labelStyle: TextStyle(
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 4,
+                      ),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                    ),
+                    onChanged: (val) => _params[key] = val,
+                  ),
           ),
-        );
-      }
+        ),
+      );
     }
 
     return fields;
@@ -235,196 +496,332 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       child: Material(
-        color: Colors.white, // Material-Ancestor für alle TextFields, Dropdowns etc.
+        color: Colors.white,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxHeight),
-          child: Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Header
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      isEdit ? 'Marker bearbeiten' : 'Neuen Marker hinzufügen',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Titel mit Icon
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      _discipline.color.withOpacity(0.1),
+                      _discipline.color.withOpacity(0.05),
+                    ],
+                  ),
+                  border: Border(
+                    bottom: BorderSide(
+                      color: Colors.grey.withOpacity(0.2),
+                      width: 1,
                     ),
                   ),
-
-                  // Titel
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TextField(
-                      controller: _titleController,
-                      decoration: InputDecoration(
-                        labelText: 'Titel des Markers',
-                        errorText: _titleController.text.trim().isEmpty ? 'Titel darf nicht leer sein' : null,
-                        border: const OutlineInputBorder(),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _discipline.color.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        _discipline.icon,
+                        color: _discipline.color,
+                        size: 24,
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Disziplin-Auswahl
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text('Gewerk auswählen', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: DropdownButtonFormField<Disziplin>(
-                      value: _discipline,
-                      decoration: const InputDecoration(border: OutlineInputBorder()),
-                      isExpanded: true,
-                      items: _availableDisciplines
-                          .map((d) => DropdownMenuItem(value: d, child: Text(d.label)))
-                          .toList(),
-                      onChanged: (d) {
-                        if (d == null) return;
-                        setState(() {
-                          _discipline = d;
-                          _params.clear(); // Parameter zurücksetzen
-                          _controllers.clear();
-                        });
-                      },
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            isEdit ? 'Marker bearbeiten' : 'Neuen Marker hinzufügen',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[900],
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _discipline.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
+                  ],
+                ),
+              ),
 
-                  // Dynamische Felder
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(children: _buildSchemaFields()),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Fotos
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'Fotos (${_photoManager.images.length}/${PhotoManager.maxPhotos})',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _photoManager.images.isNotEmpty
-                        ? Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: List.generate(_photoManager.images.length, (i) {
-                        final f = _photoManager.images[i];
-                        return RepaintBoundary(
-                          child: Stack(
-                            children: [
-                              GestureDetector(
-                                onTap: () => _viewImage(f),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: Image.file(
-                                    f,
-                                    width: 80,
-                                    height: 80,
-                                    fit: BoxFit.cover,
-                                    cacheWidth: 160, // Thumbnail-Auflösung für bessere Performance
-                                    cacheHeight: 160,
-                                  ),
-                                ),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Titel
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.grey.withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: TextField(
+                            controller: _titleController,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'Titel des Markers',
+                              labelStyle: TextStyle(
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
                               ),
-                            Positioned(
-                              top: -6,
-                              right: -6,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                icon: const Icon(Icons.cancel, color: Colors.red, size: 20),
-                                onPressed: () => _removeImage(i),
+                              errorText: _titleController.text.trim().isEmpty ? 'Titel darf nicht leer sein' : null,
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Disziplin-Auswahl
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.grey.withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            child: DropdownButtonFormField<Disziplin>(
+                              value: _discipline,
+                              decoration: InputDecoration(
+                                labelText: 'Gewerk auswählen',
+                                labelStyle: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 14,
+                                ),
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                              isExpanded: true,
+                              items: _availableDisciplines
+                                  .map((d) => DropdownMenuItem(value: d, child: Text(d.label)))
+                                  .toList(),
+                              onChanged: (d) {
+                                if (d == null) return;
+                                setState(() {
+                                  _discipline = d;
+                                  _params.clear(); // Parameter zurücksetzen
+                                  _controllers.clear();
+                                });
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Schema-Felder
+                      const SizedBox(height: 8),
+                      ..._buildSchemaFields(),
+
+                      // Fotos
+                      const SizedBox(height: 8),
+                      _buildPhotoSection(),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Aktion-Buttons
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.grey.withOpacity(0.2),
+                      width: 1,
+                    ),
+                  ),
+                ),
+                padding: EdgeInsets.only(
+                  left: 20,
+                  right: 20,
+                  top: 16,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 
+                          MediaQuery.of(context).padding.bottom + 20,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (isEdit && widget.onDelete != null)
+                      OutlinedButton(
+                        onPressed: () async {
+                          await widget.onDelete!(widget.existing!);
+                          Navigator.of(context).pop();
+                        },
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 14,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          side: BorderSide(
+                            color: Colors.red[300]!,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: Colors.red[600],
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Löschen',
+                              style: TextStyle(
+                                color: Colors.red[600],
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
                               ),
                             ),
-                            ],
+                          ],
+                        ),
+                      ),
+                    if (isEdit && widget.onDelete != null) const SizedBox(width: 12),
+                    OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: BorderSide(
+                          color: Colors.grey[300]!,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.close,
+                            size: 20,
+                            color: Colors.grey[700],
                           ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Abbrechen',
+                            style: TextStyle(
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: () {
+                        final name = _titleController.text.trim();
+                        if (name.isEmpty) {
+                          setState(() {}); // um ErrorText zu aktualisieren
+                          return;
+                        }
+                        // Pfade und Schema-Parameter zusammenführen
+                        final params = widget.existing?.params != null
+                            ? Map<String, dynamic>.from(widget.existing!.params!)
+                            : <String, dynamic>{};
+                        params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
+                        params.addAll(_params);
+
+                        final marker = Marker(
+                          id: widget.existing?.id ?? const Uuid().v4(),
+                          discipline: _discipline,
+                          title: name,
+                          x: widget.x,
+                          y: widget.y,
+                          pageNumber: widget.pageNumber,
+                          params: params,
                         );
-                      }),
-                    )
-                        : Container(
-                      height: 100,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.photo_camera, size: 40, color: Colors.grey),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.camera_alt),
-                      label: const Text('Foto aufnehmen'),
-                      onPressed: _photoManager.canAddPhoto ? _takePhoto : null,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Action-Buttons
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Abbrechen'),
+                        widget.onSave(marker);
+                        Navigator.of(context).pop();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
                         ),
-                        if (isEdit && widget.onDelete != null)
-                          TextButton(
-                            onPressed: () async {
-                              await widget.onDelete!(widget.existing!);
-                              Navigator.of(context).pop();
-                            },
-                            child: const Text('Löschen', style: TextStyle(color: Colors.red)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 2,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.check,
+                            size: 20,
                           ),
-                        ElevatedButton(
-                          onPressed: () {
-                            final name = _titleController.text.trim();
-                            if (name.isEmpty) {
-                              setState(() {}); // um ErrorText zu aktualisieren
-                              return;
-                            }
-                            // Pfade und Schema-Parameter zusammenführen
-                            final params = widget.existing?.params != null
-                                ? Map<String, dynamic>.from(widget.existing!.params!)
-                                : <String, dynamic>{};
-                            params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
-                            params.addAll(_params);
-
-                            final marker = Marker(
-                              id: widget.existing?.id ?? const Uuid().v4(),
-                              discipline: _discipline,
-                              title: name,
-                              x: widget.x,
-                              y: widget.y,
-                              pageNumber: widget.pageNumber,
-                              params: params,
-                            );
-                            widget.onSave(marker);
-                            Navigator.of(context).pop();
-                          },
-                          child: const Text('Speichern'),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Speichern',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
