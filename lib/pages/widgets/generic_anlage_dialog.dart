@@ -1002,7 +1002,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                 : null,
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -1024,7 +1024,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         fontSize: 14,
                       ),
                       contentPadding: const EdgeInsets.symmetric(
-                        vertical: 16,
+                        vertical: 10,
                         horizontal: 4,
                       ),
                       border: InputBorder.none,
@@ -1077,7 +1077,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         fontSize: 14,
                       ),
                       contentPadding: const EdgeInsets.symmetric(
-                        vertical: 16,
+                        vertical: 10,
                         horizontal: 4,
                       ),
                       border: InputBorder.none,
@@ -1285,7 +1285,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16,
-                                vertical: 16,
+                                vertical: 10,
                               ),
                               enabledBorder: InputBorder.none,
                               focusedBorder: InputBorder.none,

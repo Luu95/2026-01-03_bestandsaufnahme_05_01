@@ -125,14 +125,17 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       // Gewerkübergreifender Key (ohne discipline.label)
       final key = 'last_opened_anlage_${widget.building.id}_${widget.floor.id}';
       final lastOpenedId = prefs.getString(key);
-      if (lastOpenedId != null && mounted) {
-        // Prüfe, ob die Anlage in der aktuellen Liste existiert
-        final anlageExists = _alleAnlagen.any((a) => a.id == lastOpenedId);
-        if (anlageExists) {
-          setState(() {
+      if (mounted) {
+        setState(() {
+          // Prüfe, ob die Anlage in der aktuellen Liste existiert
+          if (lastOpenedId != null && _alleAnlagen.any((a) => a.id == lastOpenedId)) {
             _lastOpenedAnlageId = lastOpenedId;
-          });
-        }
+          } else {
+            // Wenn die Anlage nicht in der aktuellen Liste existiert, entferne die Markierung
+            // (z.B. weil sie zu einem anderen Gewerk gehört oder gelöscht wurde)
+            _lastOpenedAnlageId = null;
+          }
+        });
       }
     } catch (e) {
       debugPrint('Fehler beim Laden der zuletzt geöffneten Anlage: $e');
@@ -294,9 +297,24 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   void didPopNext() {
     // Beim Zurückkommen von Navigator.push, wird die Liste neu geladen
     _loadAnlagen().then((_) {
-      // Nach dem Laden zur zuletzt geöffneten Anlage scrollen (nur beim ersten Öffnen)
-      _scrollToLastOpenedAnlage();
+      // Markierung gewerkeübergreifend neu laden (falls sich in einem anderen Gewerk geändert)
+      _loadLastOpenedAnlage().then((_) {
+        // Nach dem Laden zur zuletzt geöffneten Anlage scrollen (nur beim ersten Öffnen)
+        _scrollToLastOpenedAnlage();
+      });
     });
+  }
+
+  @override
+  void didPushNext() {
+    // Wenn eine neue Route gepusht wird, aktualisiere die Markierung nicht
+    // (die Markierung wird aktualisiert, wenn wir zurückkommen)
+  }
+
+  @override
+  void didPush() {
+    // Wenn diese Route gepusht wird, lade die Markierung neu (gewerkübergreifend)
+    _loadLastOpenedAnlage();
   }
 
   /// Lädt alle Anlagen aus Drift-Datenbank, filtert nach Building und Disziplin.
@@ -731,6 +749,16 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
   @override
   Widget build(BuildContext context) {
+    // Aktualisiere die Markierung gewerkeübergreifend, wenn die Anlagen bereits geladen sind
+    // (nur wenn nicht gerade geladen wird, um unnötige Updates zu vermeiden)
+    // Verwende WidgetsBinding.instance.addPostFrameCallback, um Updates nach dem Build durchzuführen
+    if (!_isLoading && _alleAnlagen.isNotEmpty && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Lade die Markierung asynchron, ohne setState während des Builds zu blockieren
+        _loadLastOpenedAnlage();
+      });
+    }
+    
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: 16, top: 12),
       child: _buildList(widget.discipline),  // Baut die Liste der Anlagen
@@ -1211,8 +1239,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     return Container(
       key: itemKey, // GlobalKey für Auto-Scrolling
       margin: EdgeInsets.only(
-        bottom: 6,
-        top: 2,
+        bottom: 4,
+        top: 1,
         left: isChild ? 12 : 0,
         right: isChild ? 12 : 0,
       ),
@@ -1308,7 +1336,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             }
           },
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               children: [
                 // Leading Icon mit verbessertem Design
@@ -1316,8 +1344,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                   clipBehavior: Clip.none,
                   children: [
                     Container(
-                      width: 48,
-                      height: 48,
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         gradient: LinearGradient(
