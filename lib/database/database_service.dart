@@ -752,5 +752,49 @@ class DatabaseService {
       ),
     );
   }
+
+  // ========== PROJECT ID ==========
+
+  /// Ermittelt die projectId für ein gegebenes buildingId
+  Future<String?> getProjectIdByBuildingId(String buildingId) async {
+    final building = await _db.getBuildingById(buildingId);
+    return building?.projectId;
+  }
+
+  // ========== TEMPLATES ==========
+
+  /// Lädt alle Templates für ein Projekt
+  Future<List<TemplateDb>> getTemplatesByProjectId(String projectId) async {
+    return await _db.getTemplatesByProjectId(projectId);
+  }
+
+  /// Lädt Templates für ein Projekt und ein bestimmtes Gewerk
+  Future<List<TemplateDb>> getTemplatesByProjectIdAndGewerk(String projectId, String gewerk) async {
+    return await _db.getTemplatesByProjectIdAndGewerk(projectId, gewerk);
+  }
+
+  /// Fügt ein Template in die Datenbank ein
+  Future<void> insertTemplate(
+    String projectId,
+    String gewerk,
+    String anlageBauteil,
+    String anlagentyp,
+    String bezeichnung,
+    String? parameter,
+  ) async {
+    await _db.insertTemplate(TemplatesCompanion.insert(
+      projectId: projectId,
+      gewerk: gewerk,
+      anlageBauteil: anlageBauteil,
+      anlagentyp: anlagentyp,
+      bezeichnung: bezeichnung,
+      parameter: parameter != null ? Value(parameter) : const Value.absent(),
+    ));
+  }
+
+  /// Löscht alle Templates für ein Projekt
+  Future<void> deleteTemplatesByProjectId(String projectId) async {
+    await _db.deleteTemplatesByProjectId(projectId);
+  }
 }
 
