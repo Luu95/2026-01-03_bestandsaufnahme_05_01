@@ -18,6 +18,7 @@ import '../services/anlage_validation_service.dart';
 // Widgets für Anlage-Dialoge (relativ zu lib/pages/)
 import 'widgets/generic_anlage_dialog.dart';
 import 'widgets/move_anlagen_dialog.dart';
+import 'widgets/template_anlage_dialog.dart';
 
 
 
@@ -648,25 +649,62 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   /// Öffnet den Dialog zum Hinzufügen einer neuen Anlage (ohne Marker).
-  void _showAddDialog() {
+  Future<void> _showAddDialog() async {
+    final dbService = ref.read(databaseServiceProvider);
+    final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
+    if (!mounted) return;
+
+    void openManual() {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => GenericAnlageDialog(
+          discipline: widget.discipline,
+          buildingId: widget.building.id,
+          floorId: widget.floor.id,
+          existingAnlage: null,
+          index: null,
+          onSave: (newAnlage, _) async {
+            setState(() => _alleAnlagen.add(newAnlage));
+            await _saveAnlagen();
+            await _loadAnlagen();
+            widget.onAnlageCreated?.call();
+          },
+        ),
+      );
+    }
+
+    if (projectId == null || projectId.isEmpty) {
+      openManual();
+      return;
+    }
+
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => GenericAnlageDialog(
+      builder: (_) => TemplateAnlageDialog(
+        projectId: projectId,
         discipline: widget.discipline,
         buildingId: widget.building.id,
         floorId: widget.floor.id,
-        existingAnlage: null,
-        index: null,
-        onSave: (newAnlage, _) async {
-          setState(() => _alleAnlagen.add(newAnlage));
+        onCreate: (created) async {
+          setState(() {
+            _alleAnlagen.addAll(created);
+            for (final parent in created.where((a) => a.parentId == null)) {
+              _expandedAnlagenIds.add(parent.id);
+            }
+          });
           await _saveAnlagen();
           await _loadAnlagen();
           widget.onAnlageCreated?.call();
         },
+        onCreateManual: openManual,
       ),
     );
   }

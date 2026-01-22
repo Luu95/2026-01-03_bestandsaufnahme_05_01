@@ -101,6 +101,162 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     await dbService.replaceDisciplines(widget.buildingId, disziplinen);
   }
 
+  Future<void> _editSchemaForDisziplin() async {
+    if (disziplinen.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Keine Disziplinen vorhanden'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Wenn nur eine Disziplin vorhanden ist, direkt bearbeiten
+    if (disziplinen.length == 1) {
+      await _editSchemaForDisziplinAtIndex(0);
+      return;
+    }
+
+    // Dialog zum Auswählen der Disziplin
+    final selectedIndex = await showDialog<int>(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.schema,
+                      color: Colors.blue[700],
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Schema bearbeiten',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[900],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Wähle eine Disziplin aus, deren Schema bearbeitet werden soll:',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[700],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: disziplinen.length,
+                  itemBuilder: (ctx, idx) {
+                    final d = disziplinen[idx];
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: d.color.withOpacity(0.2),
+                        child: Icon(d.icon, color: d.color),
+                      ),
+                      title: Text(
+                        d.label,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: d.schema.isNotEmpty
+                          ? Text('${d.schema.length} Feld(er) definiert')
+                          : const Text('Keine Felder definiert'),
+                      onTap: () => Navigator.of(ctx).pop(idx),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Abbrechen'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (selectedIndex != null) {
+      await _editSchemaForDisziplinAtIndex(selectedIndex);
+    }
+  }
+
+  Future<void> _editSchemaForDisziplinAtIndex(int index) async {
+    if (index < 0 || index >= disziplinen.length) return;
+
+    final d = disziplinen[index];
+    final currentSchema = List<Map<String, dynamic>>.from(d.schema);
+    final currentGroupingKey = d.groupingKey;
+
+    final newSchema = await showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (_) => SchemaEditorDialog(existingSchema: currentSchema),
+    );
+
+    if (newSchema != null) {
+      // Gruppierung prüfen und ggf. zurücksetzen
+      String? newGroupingKey = currentGroupingKey;
+      if (newGroupingKey != null &&
+          !newSchema.any((e) => e['key'] == newGroupingKey)) {
+        newGroupingKey = null;
+      }
+
+      setState(() {
+        disziplinen[index] = Disziplin(
+          label: d.label,
+          icon: d.icon,
+          color: d.color,
+          schema: newSchema.cast<Map<String, String>>(),
+          groupingKey: newGroupingKey,
+        );
+      });
+      await _saveDisziplinen();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Schema für "${d.label}" aktualisiert'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _addDisziplin() async {
     final newDisziplin = await showDialog<Disziplin>(
       context: context,
@@ -833,6 +989,11 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
                   onPressed: _generateDefaultDisziplinen,
                 ),
                 IconButton(
+                  icon: Icon(Icons.schema),
+                  tooltip: 'Schema bearbeiten',
+                  onPressed: _editSchemaForDisziplin,
+                ),
+                IconButton(
                   icon: Icon(Icons.add_circle_outline),
                   tooltip: 'Neue Disziplin hinzufügen',
                   onPressed: _addDisziplin,
@@ -1242,166 +1403,6 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    // Schema Selection
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.grey.withOpacity(0.2),
-                          width: 1,
-                        ),
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: () async {
-                            final newSchema = await showDialog<List<Map<String, dynamic>>>(
-                              context: context,
-                              builder: (_) => SchemaEditorDialog(existingSchema: editedSchema),
-                            );
-                            if (newSchema != null) {
-                              setState(() {
-                                editedSchema = newSchema;
-                                if (selectedGroupingKey != null &&
-                                    !editedSchema.any((e) => e['key'] == selectedGroupingKey)) {
-                                  selectedGroupingKey = null;
-                                }
-                              });
-                            }
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Icon(
-                                    Icons.schema,
-                                    color: Colors.blue[700],
-                                    size: 24,
-                                  ),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        'Schema-Einträge',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.grey[900],
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${editedSchema.length} Feld(er) definiert',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Icon(
-                                  Icons.chevron_right,
-                                  color: Colors.grey[400],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    if (editedSchema.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.grey.withOpacity(0.2),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Gruppierung',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.grey[900],
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            DropdownButtonFormField<String?>(
-                              value: selectedGroupingKey,
-                              decoration: InputDecoration(
-                                labelText: 'Gruppierung nach Feld',
-                                labelStyle: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color: Colors.grey.withOpacity(0.3),
-                                  ),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color: Colors.grey.withOpacity(0.3),
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color: Theme.of(context).primaryColor,
-                                    width: 2,
-                                  ),
-                                ),
-                                filled: true,
-                                fillColor: Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                                helperText: 'Wähle ein Feld, nach dem die Anlagen gruppiert werden sollen',
-                                helperStyle: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                              isExpanded: true,
-                              items: [
-                                const DropdownMenuItem<String?>(
-                                  value: null,
-                                  child: Text('Keine Gruppierung'),
-                                ),
-                                ...editedSchema.map((e) => DropdownMenuItem<String?>(
-                                      value: e['key'],
-                                      child: Text(e['label']),
-                                    )),
-                              ],
-                              onChanged: (val) => setState(() => selectedGroupingKey = val),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1786,38 +1787,111 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
             // Header
             Container(
               decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.blue.withOpacity(0.12),
+                    Colors.blue.withOpacity(0.06),
+                  ],
+                ),
                 border: Border(
                   bottom: BorderSide(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withOpacity(0.15),
                     width: 1,
                   ),
                 ),
               ),
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(24),
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.blue[400]!,
+                          Colors.blue[600]!,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blue.withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
-                    child: Icon(
+                    child: const Icon(
                       Icons.schema,
-                      color: Colors.blue[700],
-                      size: 24,
+                      color: Colors.white,
+                      size: 26,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 16),
                   Expanded(
-                    child: Text(
-                      'Schema bearbeiten',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey[900],
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Schema bearbeiten',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey[900],
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              '${schemaList.length} Feld${schemaList.length != 1 ? 'er' : ''} definiert',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            if (schemaList.length > 1)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.drag_handle,
+                                      size: 12,
+                                      color: Colors.blue[700],
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Flexible(
+                                      child: Text(
+                                        'Verschieben',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.blue[700],
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1832,18 +1906,25 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              Icons.inbox,
-                              size: 64,
-                              color: Colors.grey[400],
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.schema_outlined,
+                                size: 64,
+                                color: Colors.blue[400],
+                              ),
                             ),
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 24),
                             Text(
                               'Noch keine Felder',
                               style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[600],
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey[800],
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -1851,141 +1932,222 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                               'Fügen Sie Felder hinzu, um das Schema zu definieren',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey[500],
+                                fontSize: 14,
+                                color: Colors.grey[600],
                               ),
                             ),
                           ],
                         ),
                       ),
                     )
-                    : SingleChildScrollView(
+                    : ReorderableListView(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ...schemaList.asMap().entries.map((e) {
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Colors.grey.withOpacity(0.15),
-                                  width: 1,
-                                ),
+                      onReorder: (oldIndex, newIndex) {
+                        setState(() {
+                          if (newIndex > oldIndex) {
+                            newIndex -= 1;
+                          }
+                          final item = schemaList.removeAt(oldIndex);
+                          schemaList.insert(newIndex, item);
+                        });
+                      },
+                      children: [
+                        ...schemaList.asMap().entries.map((e) {
+                          final index = e.key;
+                          final field = e.value;
+                          return Container(
+                            key: ValueKey('${field['key']}_$index'),
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.grey.withOpacity(0.2),
+                                width: 1.5,
                               ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(10),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.03),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: () => _onEditField(index),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                  child: Row(
+                                    children: [
+                                      // Drag Handle
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[100],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          Icons.drag_handle,
+                                          color: Colors.grey[600],
+                                          size: 20,
+                                        ),
                                       ),
-                                      child: Icon(
-                                        Icons.label_outline,
-                                        color: Colors.blue[700],
-                                        size: 22,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            e.value['label'],
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 15,
-                                              letterSpacing: -0.1,
-                                            ),
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
+                                      const SizedBox(width: 12),
+                                      // Icon
+                                      Container(
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              Colors.blue.withOpacity(0.15),
+                                              Colors.blue.withOpacity(0.08),
+                                            ],
                                           ),
-                                          const SizedBox(height: 6),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 3,
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Icon(
+                                          Icons.label_outline,
+                                          color: Colors.blue[700],
+                                          size: 24,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 14),
+                                      // Content
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    field['label'],
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.w600,
+                                                      fontSize: 16,
+                                                      letterSpacing: -0.2,
+                                                      color: Colors.black87,
+                                                    ),
+                                                    maxLines: 2,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Container(
+                                                  constraints: const BoxConstraints(
+                                                    minWidth: 40,
+                                                  ),
+                                                  padding: const EdgeInsets.symmetric(
+                                                    horizontal: 6,
+                                                    vertical: 4,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: field['type'] == 'int'
+                                                        ? Colors.orange.withOpacity(0.15)
+                                                        : Colors.green.withOpacity(0.15),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                    border: Border.all(
+                                                      color: field['type'] == 'int'
+                                                          ? Colors.orange.withOpacity(0.3)
+                                                          : Colors.green.withOpacity(0.3),
+                                                      width: 1,
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    field['type'] == 'int' ? 'Zahl' : 'Text',
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: field['type'] == 'int'
+                                                          ? Colors.orange[800]
+                                                          : Colors.green[800],
+                                                      fontWeight: FontWeight.w600,
+                                                      letterSpacing: 0.2,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                            decoration: BoxDecoration(
-                                              color: Colors.grey[100],
-                                              borderRadius: BorderRadius.circular(5),
-                                            ),
-                                            child: Text(
-                                              e.value['type'],
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              'Key: ${field['key']}',
                                               style: TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.grey[700],
-                                                fontWeight: FontWeight.w500,
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                                fontFamily: 'monospace',
                                               ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      // Edit Button
+                                      Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(10),
+                                          onTap: () => _onEditField(index),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.blue.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            child: Icon(
+                                              Icons.edit_outlined,
+                                              size: 20,
+                                              color: Colors.blue[700],
                                             ),
                                           ),
-                                        ],
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(8),
-                                        onTap: () => _onEditField(e.key),
-                                        child: Container(
-                                          padding: const EdgeInsets.all(8),
-                                          decoration: BoxDecoration(
-                                            color: Colors.blue.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                          child: Icon(
-                                            Icons.edit_outlined,
-                                            size: 18,
-                                            color: Colors.blue[700],
+                                      const SizedBox(width: 8),
+                                      // Delete Button
+                                      Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(10),
+                                          onTap: () => setState(() => schemaList.removeAt(index)),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            child: Icon(
+                                              Icons.delete_outline,
+                                              size: 20,
+                                              color: Colors.red[700],
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(8),
-                                        onTap: () => setState(() => schemaList.removeAt(e.key)),
-                                        child: Container(
-                                          padding: const EdgeInsets.all(8),
-                                          decoration: BoxDecoration(
-                                            color: Colors.red.withOpacity(0.1),
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                          child: Icon(
-                                            Icons.delete_outline,
-                                            size: 18,
-                                            color: Colors.red[700],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            );
-                          }),
-                        ],
-                      ),
+                            ),
+                          );
+                        }),
+                      ],
                     ),
             ),
             // Add Button
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               decoration: BoxDecoration(
                 color: Colors.grey[50],
                 border: Border(
                   top: BorderSide(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withOpacity(0.15),
                     width: 1,
                   ),
                 ),
@@ -1993,15 +2155,23 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  icon: const Icon(Icons.add_circle_outline),
-                  label: const Text('Neues Feld hinzufügen'),
+                  icon: const Icon(Icons.add_circle_outline, size: 22),
+                  label: const Text(
+                    'Neues Feld hinzufügen',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue[600],
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(14),
                     ),
+                    elevation: 2,
+                    shadowColor: Colors.blue.withOpacity(0.3),
                   ),
                   onPressed: _onAddField,
                 ),
@@ -2009,12 +2179,12 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
             ),
             // Actions
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
               decoration: BoxDecoration(
                 color: Colors.white,
                 border: Border(
                   top: BorderSide(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withOpacity(0.15),
                     width: 1,
                   ),
                 ),
@@ -2025,44 +2195,46 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                     child: OutlinedButton(
                       onPressed: () => Navigator.of(context).pop(),
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                         ),
                         side: BorderSide(
                           color: Colors.grey[300]!,
                           width: 1.5,
                         ),
                       ),
-                      child: Text(
+                      child: const Text(
                         'Abbrechen',
                         style: TextStyle(
-                          color: Colors.grey[700],
+                          color: Colors.grey,
                           fontWeight: FontWeight.w600,
-                          fontSize: 15,
+                          fontSize: 16,
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: ElevatedButton(
+                    child: ElevatedButton.icon(
                       onPressed: () => Navigator.of(context).pop(schemaList),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue[600],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
+                      icon: const Icon(Icons.check, size: 20),
+                      label: const Text(
                         'Speichern',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
-                          fontSize: 15,
+                          fontSize: 16,
                         ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue[600],
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 2,
+                        shadowColor: Colors.blue.withOpacity(0.3),
                       ),
                     ),
                   ),

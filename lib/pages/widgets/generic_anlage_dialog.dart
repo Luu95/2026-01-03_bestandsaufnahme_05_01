@@ -140,6 +140,11 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
         _photoManager.updateImageFiles(files);
       }
     }
+    
+    // Stelle sicher, dass Leistungsparameter immer vorhanden ist (auch wenn leer)
+    if (!_params.containsKey('Leistungsparameter')) {
+      _params['Leistungsparameter'] = <String, String>{};
+    }
     _nameController = TextEditingController(text: widget.existingAnlage?.name ?? '');
     _nameController.addListener(_updateValidationStatus);
   }
@@ -853,20 +858,22 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   }
 
   List<Widget> _buildSchemaFields() {
-    // Schema-Felder aus der Disziplin + zusätzliche Keys aus den Params,
-    // damit automatisch gesetzte/aus CSV kommende Felder immer angezeigt werden.
     final schema = List<Map<String, dynamic>>.from(widget.discipline.schema);
     final schemaKeys = schema
         .map((e) => (e['key'] ?? '').toString())
         .where((k) => k.trim().isNotEmpty)
         .toSet();
 
+    final parameterKeyFromCsv = _params['__parameterKey']?.toString();
+
     final extraKeys = _params.keys
         .where((k) =>
             !schemaKeys.contains(k) &&
             !k.startsWith('_') &&
             !k.startsWith('__') &&
-            k != 'photoPaths')
+            k != 'photoPaths' &&
+            k != 'Leistungsparameter' &&
+            (parameterKeyFromCsv == null || k != parameterKeyFromCsv)) // "Parameter" ausschließen
         .toList()
       ..sort();
 
@@ -877,9 +884,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
         'type': 'text',
       });
     }
-    final fields = <Widget>[];
     
-    // Erstelle temporäre Anlage für Status-Prüfung
+    final fields = <Widget>[];
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
       parentId: widget.parentId ?? widget.existingAnlage?.parentId,
@@ -895,8 +901,13 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
     
     for (var fieldDef in schema) {
       final key = fieldDef['key'] as String;
+      
+      // EXPLIZIT: Falls der Key "Parameter" oder "Leistungsparameter" ist, oben nicht anzeigen!
+      if (key == 'Leistungsparameter' || (parameterKeyFromCsv != null && key == parameterKeyFromCsv)) continue;
+
       final label = fieldDef['label'] as String;
-      final type = fieldDef['type'] as String;
+      final type = fieldDef['type'] ?? 'text';
+      
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
         _controllers[key]!.addListener(_updateValidationStatus);
@@ -905,17 +916,9 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       final isEmpty = controller.text.trim().isEmpty;
       final isFieldValidated = AnlageValidationService.isFieldValidated(tempAnlage, key);
       final isFieldMissing = AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key);
-      
-      // Bestimme Hintergrundfarbe
-      Color? backgroundColor;
-      if (isFieldMissing) {
-        backgroundColor = Colors.grey[200];
-      }
-      
-      // Bestimme Icon-Button für grobmotorische Bedienung
+
       Widget actionButton;
       if (isEmpty) {
-        // Leeres Feld: Rotes Kreuz
         actionButton = Material(
           color: Colors.transparent,
           child: InkWell(
@@ -924,30 +927,15 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: isFieldMissing
-                    ? Colors.grey[200]
-                    : Colors.red[50],
+                color: isFieldMissing ? Colors.grey[200] : Colors.red[50],
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isFieldMissing
-                      ? Colors.grey[400]!
-                      : Colors.red[300]!,
-                  width: 1.5,
-                ),
+                border: Border.all(color: isFieldMissing ? Colors.grey[400]! : Colors.red[300]!, width: 1.5),
               ),
-              child: Icon(
-                Icons.close,
-                color: isFieldMissing ? Colors.grey[700] : Colors.red[600],
-                size: 20,
-              ),
+              child: Icon(Icons.close, color: isFieldMissing ? Colors.grey[700] : Colors.red[600], size: 20),
             ),
           ),
         );
       } else {
-        // Befülltes Feld: 
-        // - Wenn bereits beim Laden befüllt war (aus CSV): Zunächst grau, wird grün wenn manuell validiert
-        // - Wenn neu eingegeben wurde: Grün (automatisch validiert)
-        // Der Button wird grün, sobald das Feld validiert ist (egal ob vorausgefüllt oder neu)
         actionButton = Material(
           color: Colors.transparent,
           child: InkWell(
@@ -956,167 +944,51 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: isFieldValidated
-                    ? Colors.green[50]
-                    : Colors.grey[100],
+                color: isFieldValidated ? Colors.green[50] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isFieldValidated
-                      ? Colors.green[400]!
-                      : Colors.grey[400]!,
-                  width: 1.5,
-                ),
+                border: Border.all(color: isFieldValidated ? Colors.green[400]! : Colors.grey[400]!, width: 1.5),
               ),
-              child: Icon(
-                Icons.check_circle,
-                color: isFieldValidated ? Colors.green[600] : Colors.grey[500],
-                size: 20,
-              ),
+              child: Icon(Icons.check_circle, color: isFieldValidated ? Colors.green[600] : Colors.grey[500], size: 20),
             ),
           ),
         );
       }
-      
+
       fields.add(
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: backgroundColor ?? Colors.grey[50],
+            color: isFieldMissing ? Colors.grey[200] : Colors.grey[50],
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isFieldValidated
-                  ? Colors.green.withOpacity(0.3)
-                  : (isFieldMissing
-                      ? Colors.grey.withOpacity(0.3)
-                      : Colors.grey.withOpacity(0.2)),
+              color: isFieldValidated ? Colors.green.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
               width: isFieldValidated ? 1.5 : 1,
             ),
-            boxShadow: isFieldValidated
-                ? [
-                    BoxShadow(
-                      color: Colors.green.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
-                  child: type == 'int'
-                      ? TextField(
+                  child: TextField(
                     controller: controller,
-                    keyboardType: TextInputType.number,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.grey[900],
-                      fontWeight: FontWeight.w400,
-                    ),
+                    keyboardType: type == 'number' || type == 'int' ? TextInputType.number : TextInputType.text,
+                    style: TextStyle(fontSize: 15, color: Colors.grey[900]),
                     decoration: InputDecoration(
                       labelText: label,
-                      labelStyle: TextStyle(
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
+                      labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
                       border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
                     ),
                     onChanged: (val) {
                       final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
-                      _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val;
-                      
-                      // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
-                      if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
-                        final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
-                        _params.addAll(updatedAnlage.params);
-                      }
-                      
-                      // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
+                      _params[key] = (type == 'number' || type == 'int') ? (num.tryParse(val) ?? val) : val;
                       if (wasEmpty && val.trim().isNotEmpty) {
-                        final updatedTempAnlage = Anlage(
-                          id: widget.existingAnlage?.id ?? '',
-                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                          name: _nameController.text.trim(),
-                          params: Map<String, dynamic>.from(_params),
-                          floorId: widget.floorId,
-                          buildingId: widget.buildingId,
-                          isMarker: widget.existingAnlage?.isMarker ?? false,
-                          markerInfo: widget.existingAnlage?.markerInfo,
-                          markerType: widget.discipline.label,
-                          discipline: widget.discipline,
-                        );
-                        final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
-                        _params.addAll(updatedAnlage.params);
+                        _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
                       }
-                      
-                      _updateValidationStatus();
-                    },
-                  )
-                      : TextField(
-                    controller: controller,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.grey[900],
-                      fontWeight: FontWeight.w400,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: label,
-                      labelStyle: TextStyle(
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                    ),
-                    onChanged: (val) {
-                      final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
-                      _params[key] = val;
-                      
-                      // Wenn Feld geändert wird und als fehlend markiert war, Status entfernen
-                      if (AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key)) {
-                        final updatedAnlage = AnlageValidationService.setFieldAsMissing(tempAnlage, key, false);
-                        _params.addAll(updatedAnlage.params);
-                      }
-                      
-                      // Wenn ein leeres Feld neu befüllt wird, automatisch validieren
-                      if (wasEmpty && val.trim().isNotEmpty) {
-                        final updatedTempAnlage = Anlage(
-                          id: widget.existingAnlage?.id ?? '',
-                          parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                          name: _nameController.text.trim(),
-                          params: Map<String, dynamic>.from(_params),
-                          floorId: widget.floorId,
-                          buildingId: widget.buildingId,
-                          isMarker: widget.existingAnlage?.isMarker ?? false,
-                          markerInfo: widget.existingAnlage?.markerInfo,
-                          markerType: widget.discipline.label,
-                          discipline: widget.discipline,
-                        );
-                        final updatedAnlage = AnlageValidationService.setFieldValidated(updatedTempAnlage, key, true);
-                        _params.addAll(updatedAnlage.params);
-                      }
-                      
                       _updateValidationStatus();
                     },
                   ),
                 ),
-                const SizedBox(width: 4),
                 actionButton,
               ],
             ),
@@ -1126,7 +998,138 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
     }
     return fields;
   }
-  
+
+  Widget _buildLeistungsparameterSection() {
+    // 1. Hole die Map der Leistungsparameter
+    var leistungsparameter = _params['Leistungsparameter'];
+    final parameterKeyFromCsv = _params['__parameterKey']?.toString();
+    
+    // 2. Falls ein konfiguriertes Parameter-Feld (Text aus CSV) existiert, aber noch nicht in die Map gewandelt wurde
+    if (parameterKeyFromCsv != null && _params.containsKey(parameterKeyFromCsv) && (leistungsparameter == null || (leistungsparameter is Map && leistungsparameter.isEmpty))) {
+      final String raw = _params[parameterKeyFromCsv].toString();
+      if (raw.isNotEmpty) {
+        final Map<String, String> lpMap = {};
+        for (var label in raw.split(RegExp(r'[,;]'))) {
+          final trimmed = label.trim();
+          if (trimmed.isNotEmpty) lpMap[trimmed] = '';
+        }
+        _params['Leistungsparameter'] = lpMap;
+        leistungsparameter = lpMap;
+      }
+    }
+
+    Map<String, String> lpMap = {};
+    if (leistungsparameter is Map) {
+      lpMap = Map<String, String>.from(leistungsparameter);
+    }
+    
+    final keys = lpMap.keys.toList();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.withOpacity(0.2), width: 1),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                      child: Icon(Icons.settings_input_component, color: Colors.orange[700], size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Text('Leistungsparameter', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey[900])),
+                  ],
+                ),
+                IconButton(
+                  icon: Icon(Icons.add, color: Theme.of(context).primaryColor),
+                  onPressed: () async {
+                    String? newLabel = await showDialog<String>(
+                      context: context,
+                      builder: (context) {
+                        String label = '';
+                        return AlertDialog(
+                          title: const Text('Neuer Parameter'),
+                          content: TextField(
+                            decoration: const InputDecoration(hintText: 'Bezeichnung'),
+                            onChanged: (val) => label = val,
+                          ),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Abbrechen')),
+                            TextButton(onPressed: () => Navigator.pop(context, label), child: const Text('Hinzufügen')),
+                          ],
+                        );
+                      },
+                    );
+                    if (newLabel != null && newLabel.trim().isNotEmpty) {
+                      setState(() {
+                        lpMap[newLabel.trim()] = '';
+                        _params['Leistungsparameter'] = lpMap;
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...keys.map((label) {
+              final value = lpMap[label] ?? '';
+              if (!_controllers.containsKey('lp_$label')) {
+                _controllers['lp_$label'] = TextEditingController(text: value);
+                _controllers['lp_$label']!.addListener(_updateValidationStatus);
+              }
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.withOpacity(0.2))),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controllers['lp_$label'],
+                        style: TextStyle(fontSize: 14, color: Colors.grey[900]),
+                        decoration: InputDecoration(
+                          labelText: label,
+                          labelStyle: TextStyle(color: Colors.grey[600], fontSize: 12),
+                          border: InputBorder.none,
+                        ),
+                        onChanged: (val) {
+                          lpMap[label] = val;
+                          _params['Leistungsparameter'] = lpMap;
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18, color: Colors.red),
+                      onPressed: () {
+                        setState(() {
+                          lpMap.remove(label);
+                          _controllers['lp_$label']?.dispose();
+                          _controllers.remove('lp_$label');
+                          _params['Leistungsparameter'] = lpMap;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1294,11 +1297,15 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         ),
                       ),
 
-                      // Schema-Felder
+                      // Normale Schema-Felder (aus CSV-Spalten)
                       const SizedBox(height: 8),
                       ..._buildSchemaFields(),
 
-                      // Fotos (neuer Abschnitt)
+                      // Spezielle Leistungsparameter (aus der Parameter-Zelle)
+                      const SizedBox(height: 8),
+                      _buildLeistungsparameterSection(),
+
+                      // Fotos
                       const SizedBox(height: 8),
                       _buildPhotoSection(),
                     ],

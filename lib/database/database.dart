@@ -142,6 +142,18 @@ class Disziplinen extends Table {
   Set<Column> get primaryKey => {buildingId, label};
 }
 
+@DataClassName('TemplateDb')
+class Templates extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get projectId =>
+      text().references(Projects, #id, onDelete: KeyAction.cascade)();
+  TextColumn get gewerk => text()();
+  TextColumn get anlageBauteil => text()(); // 'a' oder 'b'
+  TextColumn get anlagentyp => text()();
+  TextColumn get bezeichnung => text()();
+  TextColumn get parameter => text().nullable()();
+}
+
 @DriftDatabase(tables: [
   Projects,
   Buildings,
@@ -153,12 +165,13 @@ class Disziplinen extends Table {
   Consumptions,
   AttachmentsTable,
   Disziplinen,
+  Templates,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 3; // v2: parentId, v3: disziplinen in Drift
+  int get schemaVersion => 4; // v2: parentId, v3: disziplinen, v4: templates
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -170,6 +183,10 @@ class AppDatabase extends _$AppDatabase {
       if (from < 3) {
         // Migration von Version 2 zu 3: Disziplinen-Tabelle hinzufügen
         await migrator.createTable(disziplinen);
+      }
+      if (from < 4) {
+        // Migration von Version 3 zu 4: Templates-Tabelle hinzufügen
+        await migrator.createTable(templates);
       }
     },
   );
@@ -264,6 +281,20 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> deleteDisziplinenByBuildingId(String buildingId) =>
       (delete(disziplinen)..where((d) => d.buildingId.equals(buildingId))).go();
+
+  // CRUD-Methoden für Templates
+  Future<List<TemplateDb>> getTemplatesByProjectId(String projectId) =>
+      (select(templates)..where((t) => t.projectId.equals(projectId))).get();
+
+  Future<List<TemplateDb>> getTemplatesByProjectIdAndGewerk(String projectId, String gewerk) =>
+      (select(templates)
+            ..where((t) => t.projectId.equals(projectId) & t.gewerk.equals(gewerk)))
+          .get();
+
+  Future<int> insertTemplate(TemplatesCompanion template) => into(templates).insert(template);
+
+  Future<int> deleteTemplatesByProjectId(String projectId) =>
+      (delete(templates)..where((t) => t.projectId.equals(projectId))).go();
 }
 
 LazyDatabase _openConnection() {

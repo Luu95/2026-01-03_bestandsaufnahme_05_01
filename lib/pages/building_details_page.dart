@@ -25,6 +25,7 @@ import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import 'widgets/validation_progress_widget.dart';
 import 'widgets/generic_anlage_dialog.dart';
+import 'widgets/template_anlage_dialog.dart';
 
 // Import der Fullscreen-Version
 import 'floor_plan_page.dart';
@@ -39,6 +40,7 @@ import 'tabs/technik_main_tab.dart';
 // SystemsPage importieren
 import 'systems_page.dart';
 import 'csv_settings_page.dart';
+import 'template_csv_settings_page.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -1366,6 +1368,42 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   Future<void> _openAddAnlageDialogDirect(Disziplin discipline) async {
+    void openManual() {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => GenericAnlageDialog(
+          discipline: discipline,
+          buildingId: _building.id,
+          floorId: 'global',
+          existingAnlage: null,
+          index: null,
+          onSave: (newAnlage, _) async {
+            final dbService = ref.read(databaseServiceProvider);
+            final existing = await dbService.getAnlageById(newAnlage.id);
+            if (existing != null) {
+              await dbService.updateAnlage(newAnlage);
+            } else {
+              await dbService.insertAnlage(newAnlage);
+            }
+
+            if (!mounted) return;
+            await _loadAllAnlagenForProgress();
+            _refreshSystemsPages();
+            _exitDisciplineSelectionMode(); // AppBar schließen nach Erstellung
+          },
+        ),
+      );
+    }
+
+    if (_currentProject.id.isEmpty) {
+      openManual();
+      return;
+    }
+
     // Direkter Dialog, funktioniert auch wenn das Gewerk zugeklappt ist (SystemsPageState ist dann null).
     showModalBottomSheet<void>(
       context: context,
@@ -1373,19 +1411,20 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => GenericAnlageDialog(
+      builder: (_) => TemplateAnlageDialog(
+        projectId: _currentProject.id,
         discipline: discipline,
         buildingId: _building.id,
         floorId: 'global',
-        existingAnlage: null,
-        index: null,
-        onSave: (newAnlage, _) async {
+        onCreate: (created) async {
           final dbService = ref.read(databaseServiceProvider);
-          final existing = await dbService.getAnlageById(newAnlage.id);
-          if (existing != null) {
-            await dbService.updateAnlage(newAnlage);
-          } else {
-            await dbService.insertAnlage(newAnlage);
+          for (final anlage in created) {
+            final existing = await dbService.getAnlageById(anlage.id);
+            if (existing != null) {
+              await dbService.updateAnlage(anlage);
+            } else {
+              await dbService.insertAnlage(anlage);
+            }
           }
 
           if (!mounted) return;
@@ -1393,6 +1432,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _refreshSystemsPages();
           _exitDisciplineSelectionMode(); // AppBar schließen nach Erstellung
         },
+        onCreateManual: openManual,
       ),
     );
   }
@@ -3221,6 +3261,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                         MaterialPageRoute(
                           builder: (_) => CsvSettingsPage(
                             projectId: _currentProject.id,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildActionButton(
+                    icon: Icons.table_view_rounded,
+                    label: 'Gewerkevorlagen',
+                    color: Colors.teal,
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => TemplateCsvSettingsPage(
+                            projectId: _currentProject.id,
+                            buildingId: _building.id,
                           ),
                         ),
                       );

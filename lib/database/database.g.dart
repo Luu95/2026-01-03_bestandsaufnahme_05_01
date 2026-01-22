@@ -3927,6 +3927,400 @@ class DisziplinenCompanion extends UpdateCompanion<DisziplinDb> {
   }
 }
 
+class $TemplatesTable extends Templates
+    with TableInfo<$TemplatesTable, TemplateDb> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TemplatesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _projectIdMeta =
+      const VerificationMeta('projectId');
+  @override
+  late final GeneratedColumn<String> projectId = GeneratedColumn<String>(
+      'project_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES projects (id) ON DELETE CASCADE'));
+  static const VerificationMeta _gewerkMeta = const VerificationMeta('gewerk');
+  @override
+  late final GeneratedColumn<String> gewerk = GeneratedColumn<String>(
+      'gewerk', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _anlageBauteilMeta =
+      const VerificationMeta('anlageBauteil');
+  @override
+  late final GeneratedColumn<String> anlageBauteil = GeneratedColumn<String>(
+      'anlage_bauteil', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _anlagentypMeta =
+      const VerificationMeta('anlagentyp');
+  @override
+  late final GeneratedColumn<String> anlagentyp = GeneratedColumn<String>(
+      'anlagentyp', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _bezeichnungMeta =
+      const VerificationMeta('bezeichnung');
+  @override
+  late final GeneratedColumn<String> bezeichnung = GeneratedColumn<String>(
+      'bezeichnung', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _parameterMeta =
+      const VerificationMeta('parameter');
+  @override
+  late final GeneratedColumn<String> parameter = GeneratedColumn<String>(
+      'parameter', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        projectId,
+        gewerk,
+        anlageBauteil,
+        anlagentyp,
+        bezeichnung,
+        parameter
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'templates';
+  @override
+  VerificationContext validateIntegrity(Insertable<TemplateDb> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('project_id')) {
+      context.handle(_projectIdMeta,
+          projectId.isAcceptableOrUnknown(data['project_id']!, _projectIdMeta));
+    } else if (isInserting) {
+      context.missing(_projectIdMeta);
+    }
+    if (data.containsKey('gewerk')) {
+      context.handle(_gewerkMeta,
+          gewerk.isAcceptableOrUnknown(data['gewerk']!, _gewerkMeta));
+    } else if (isInserting) {
+      context.missing(_gewerkMeta);
+    }
+    if (data.containsKey('anlage_bauteil')) {
+      context.handle(
+          _anlageBauteilMeta,
+          anlageBauteil.isAcceptableOrUnknown(
+              data['anlage_bauteil']!, _anlageBauteilMeta));
+    } else if (isInserting) {
+      context.missing(_anlageBauteilMeta);
+    }
+    if (data.containsKey('anlagentyp')) {
+      context.handle(
+          _anlagentypMeta,
+          anlagentyp.isAcceptableOrUnknown(
+              data['anlagentyp']!, _anlagentypMeta));
+    } else if (isInserting) {
+      context.missing(_anlagentypMeta);
+    }
+    if (data.containsKey('bezeichnung')) {
+      context.handle(
+          _bezeichnungMeta,
+          bezeichnung.isAcceptableOrUnknown(
+              data['bezeichnung']!, _bezeichnungMeta));
+    } else if (isInserting) {
+      context.missing(_bezeichnungMeta);
+    }
+    if (data.containsKey('parameter')) {
+      context.handle(_parameterMeta,
+          parameter.isAcceptableOrUnknown(data['parameter']!, _parameterMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TemplateDb map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TemplateDb(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      projectId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}project_id'])!,
+      gewerk: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}gewerk'])!,
+      anlageBauteil: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}anlage_bauteil'])!,
+      anlagentyp: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}anlagentyp'])!,
+      bezeichnung: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}bezeichnung'])!,
+      parameter: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}parameter']),
+    );
+  }
+
+  @override
+  $TemplatesTable createAlias(String alias) {
+    return $TemplatesTable(attachedDatabase, alias);
+  }
+}
+
+class TemplateDb extends DataClass implements Insertable<TemplateDb> {
+  final int id;
+  final String projectId;
+  final String gewerk;
+  final String anlageBauteil;
+  final String anlagentyp;
+  final String bezeichnung;
+  final String? parameter;
+  const TemplateDb(
+      {required this.id,
+      required this.projectId,
+      required this.gewerk,
+      required this.anlageBauteil,
+      required this.anlagentyp,
+      required this.bezeichnung,
+      this.parameter});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['project_id'] = Variable<String>(projectId);
+    map['gewerk'] = Variable<String>(gewerk);
+    map['anlage_bauteil'] = Variable<String>(anlageBauteil);
+    map['anlagentyp'] = Variable<String>(anlagentyp);
+    map['bezeichnung'] = Variable<String>(bezeichnung);
+    if (!nullToAbsent || parameter != null) {
+      map['parameter'] = Variable<String>(parameter);
+    }
+    return map;
+  }
+
+  TemplatesCompanion toCompanion(bool nullToAbsent) {
+    return TemplatesCompanion(
+      id: Value(id),
+      projectId: Value(projectId),
+      gewerk: Value(gewerk),
+      anlageBauteil: Value(anlageBauteil),
+      anlagentyp: Value(anlagentyp),
+      bezeichnung: Value(bezeichnung),
+      parameter: parameter == null && nullToAbsent
+          ? const Value.absent()
+          : Value(parameter),
+    );
+  }
+
+  factory TemplateDb.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TemplateDb(
+      id: serializer.fromJson<int>(json['id']),
+      projectId: serializer.fromJson<String>(json['projectId']),
+      gewerk: serializer.fromJson<String>(json['gewerk']),
+      anlageBauteil: serializer.fromJson<String>(json['anlageBauteil']),
+      anlagentyp: serializer.fromJson<String>(json['anlagentyp']),
+      bezeichnung: serializer.fromJson<String>(json['bezeichnung']),
+      parameter: serializer.fromJson<String?>(json['parameter']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'projectId': serializer.toJson<String>(projectId),
+      'gewerk': serializer.toJson<String>(gewerk),
+      'anlageBauteil': serializer.toJson<String>(anlageBauteil),
+      'anlagentyp': serializer.toJson<String>(anlagentyp),
+      'bezeichnung': serializer.toJson<String>(bezeichnung),
+      'parameter': serializer.toJson<String?>(parameter),
+    };
+  }
+
+  TemplateDb copyWith(
+          {int? id,
+          String? projectId,
+          String? gewerk,
+          String? anlageBauteil,
+          String? anlagentyp,
+          String? bezeichnung,
+          Value<String?> parameter = const Value.absent()}) =>
+      TemplateDb(
+        id: id ?? this.id,
+        projectId: projectId ?? this.projectId,
+        gewerk: gewerk ?? this.gewerk,
+        anlageBauteil: anlageBauteil ?? this.anlageBauteil,
+        anlagentyp: anlagentyp ?? this.anlagentyp,
+        bezeichnung: bezeichnung ?? this.bezeichnung,
+        parameter: parameter.present ? parameter.value : this.parameter,
+      );
+  TemplateDb copyWithCompanion(TemplatesCompanion data) {
+    return TemplateDb(
+      id: data.id.present ? data.id.value : this.id,
+      projectId: data.projectId.present ? data.projectId.value : this.projectId,
+      gewerk: data.gewerk.present ? data.gewerk.value : this.gewerk,
+      anlageBauteil: data.anlageBauteil.present
+          ? data.anlageBauteil.value
+          : this.anlageBauteil,
+      anlagentyp:
+          data.anlagentyp.present ? data.anlagentyp.value : this.anlagentyp,
+      bezeichnung:
+          data.bezeichnung.present ? data.bezeichnung.value : this.bezeichnung,
+      parameter: data.parameter.present ? data.parameter.value : this.parameter,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TemplateDb(')
+          ..write('id: $id, ')
+          ..write('projectId: $projectId, ')
+          ..write('gewerk: $gewerk, ')
+          ..write('anlageBauteil: $anlageBauteil, ')
+          ..write('anlagentyp: $anlagentyp, ')
+          ..write('bezeichnung: $bezeichnung, ')
+          ..write('parameter: $parameter')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id, projectId, gewerk, anlageBauteil, anlagentyp, bezeichnung, parameter);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TemplateDb &&
+          other.id == this.id &&
+          other.projectId == this.projectId &&
+          other.gewerk == this.gewerk &&
+          other.anlageBauteil == this.anlageBauteil &&
+          other.anlagentyp == this.anlagentyp &&
+          other.bezeichnung == this.bezeichnung &&
+          other.parameter == this.parameter);
+}
+
+class TemplatesCompanion extends UpdateCompanion<TemplateDb> {
+  final Value<int> id;
+  final Value<String> projectId;
+  final Value<String> gewerk;
+  final Value<String> anlageBauteil;
+  final Value<String> anlagentyp;
+  final Value<String> bezeichnung;
+  final Value<String?> parameter;
+  const TemplatesCompanion({
+    this.id = const Value.absent(),
+    this.projectId = const Value.absent(),
+    this.gewerk = const Value.absent(),
+    this.anlageBauteil = const Value.absent(),
+    this.anlagentyp = const Value.absent(),
+    this.bezeichnung = const Value.absent(),
+    this.parameter = const Value.absent(),
+  });
+  TemplatesCompanion.insert({
+    this.id = const Value.absent(),
+    required String projectId,
+    required String gewerk,
+    required String anlageBauteil,
+    required String anlagentyp,
+    required String bezeichnung,
+    this.parameter = const Value.absent(),
+  })  : projectId = Value(projectId),
+        gewerk = Value(gewerk),
+        anlageBauteil = Value(anlageBauteil),
+        anlagentyp = Value(anlagentyp),
+        bezeichnung = Value(bezeichnung);
+  static Insertable<TemplateDb> custom({
+    Expression<int>? id,
+    Expression<String>? projectId,
+    Expression<String>? gewerk,
+    Expression<String>? anlageBauteil,
+    Expression<String>? anlagentyp,
+    Expression<String>? bezeichnung,
+    Expression<String>? parameter,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (projectId != null) 'project_id': projectId,
+      if (gewerk != null) 'gewerk': gewerk,
+      if (anlageBauteil != null) 'anlage_bauteil': anlageBauteil,
+      if (anlagentyp != null) 'anlagentyp': anlagentyp,
+      if (bezeichnung != null) 'bezeichnung': bezeichnung,
+      if (parameter != null) 'parameter': parameter,
+    });
+  }
+
+  TemplatesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? projectId,
+      Value<String>? gewerk,
+      Value<String>? anlageBauteil,
+      Value<String>? anlagentyp,
+      Value<String>? bezeichnung,
+      Value<String?>? parameter}) {
+    return TemplatesCompanion(
+      id: id ?? this.id,
+      projectId: projectId ?? this.projectId,
+      gewerk: gewerk ?? this.gewerk,
+      anlageBauteil: anlageBauteil ?? this.anlageBauteil,
+      anlagentyp: anlagentyp ?? this.anlagentyp,
+      bezeichnung: bezeichnung ?? this.bezeichnung,
+      parameter: parameter ?? this.parameter,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (projectId.present) {
+      map['project_id'] = Variable<String>(projectId.value);
+    }
+    if (gewerk.present) {
+      map['gewerk'] = Variable<String>(gewerk.value);
+    }
+    if (anlageBauteil.present) {
+      map['anlage_bauteil'] = Variable<String>(anlageBauteil.value);
+    }
+    if (anlagentyp.present) {
+      map['anlagentyp'] = Variable<String>(anlagentyp.value);
+    }
+    if (bezeichnung.present) {
+      map['bezeichnung'] = Variable<String>(bezeichnung.value);
+    }
+    if (parameter.present) {
+      map['parameter'] = Variable<String>(parameter.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TemplatesCompanion(')
+          ..write('id: $id, ')
+          ..write('projectId: $projectId, ')
+          ..write('gewerk: $gewerk, ')
+          ..write('anlageBauteil: $anlageBauteil, ')
+          ..write('anlagentyp: $anlagentyp, ')
+          ..write('bezeichnung: $bezeichnung, ')
+          ..write('parameter: $parameter')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -3941,6 +4335,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $AttachmentsTableTable attachmentsTable =
       $AttachmentsTableTable(this);
   late final $DisziplinenTable disziplinen = $DisziplinenTable(this);
+  late final $TemplatesTable templates = $TemplatesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -3955,7 +4350,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         anlagen,
         consumptions,
         attachmentsTable,
-        disziplinen
+        disziplinen,
+        templates
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -4023,6 +4419,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
               TableUpdate('disziplinen', kind: UpdateKind.delete),
             ],
           ),
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('projects',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('templates', kind: UpdateKind.delete),
+            ],
+          ),
         ],
       );
 }
@@ -4057,6 +4460,21 @@ final class $$ProjectsTableReferences
         .filter((f) => f.projectId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_buildingsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
+  static MultiTypedResultKey<$TemplatesTable, List<TemplateDb>>
+      _templatesRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.templates,
+              aliasName:
+                  $_aliasNameGenerator(db.projects.id, db.templates.projectId));
+
+  $$TemplatesTableProcessedTableManager get templatesRefs {
+    final manager = $$TemplatesTableTableManager($_db, $_db.templates)
+        .filter((f) => f.projectId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_templatesRefsTable($_db));
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: cache));
   }
@@ -4096,6 +4514,27 @@ class $$ProjectsTableFilterComposer
             $$BuildingsTableFilterComposer(
               $db: $db,
               $table: $db.buildings,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<bool> templatesRefs(
+      Expression<bool> Function($$TemplatesTableFilterComposer f) f) {
+    final $$TemplatesTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.templates,
+        getReferencedColumn: (t) => t.projectId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$TemplatesTableFilterComposer(
+              $db: $db,
+              $table: $db.templates,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -4168,6 +4607,27 @@ class $$ProjectsTableAnnotationComposer
             ));
     return f(composer);
   }
+
+  Expression<T> templatesRefs<T extends Object>(
+      Expression<T> Function($$TemplatesTableAnnotationComposer a) f) {
+    final $$TemplatesTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.templates,
+        getReferencedColumn: (t) => t.projectId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$TemplatesTableAnnotationComposer(
+              $db: $db,
+              $table: $db.templates,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
 }
 
 class $$ProjectsTableTableManager extends RootTableManager<
@@ -4181,7 +4641,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
     $$ProjectsTableUpdateCompanionBuilder,
     (ProjectDb, $$ProjectsTableReferences),
     ProjectDb,
-    PrefetchHooks Function({bool buildingsRefs})> {
+    PrefetchHooks Function({bool buildingsRefs, bool templatesRefs})> {
   $$ProjectsTableTableManager(_$AppDatabase db, $ProjectsTable table)
       : super(TableManagerState(
           db: db,
@@ -4224,10 +4684,14 @@ class $$ProjectsTableTableManager extends RootTableManager<
               .map((e) =>
                   (e.readTable(table), $$ProjectsTableReferences(db, table, e)))
               .toList(),
-          prefetchHooksCallback: ({buildingsRefs = false}) {
+          prefetchHooksCallback: (
+              {buildingsRefs = false, templatesRefs = false}) {
             return PrefetchHooks(
               db: db,
-              explicitlyWatchedTables: [if (buildingsRefs) db.buildings],
+              explicitlyWatchedTables: [
+                if (buildingsRefs) db.buildings,
+                if (templatesRefs) db.templates
+              ],
               addJoins: null,
               getPrefetchedDataCallback: (items) async {
                 return [
@@ -4240,6 +4704,19 @@ class $$ProjectsTableTableManager extends RootTableManager<
                         managerFromTypedResult: (p0) =>
                             $$ProjectsTableReferences(db, table, p0)
                                 .buildingsRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.projectId == item.id),
+                        typedResults: items),
+                  if (templatesRefs)
+                    await $_getPrefetchedData<ProjectDb, $ProjectsTable,
+                            TemplateDb>(
+                        currentTable: table,
+                        referencedTable:
+                            $$ProjectsTableReferences._templatesRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$ProjectsTableReferences(db, table, p0)
+                                .templatesRefs,
                         referencedItemsForCurrentItem:
                             (item, referencedItems) => referencedItems
                                 .where((e) => e.projectId == item.id),
@@ -4262,7 +4739,7 @@ typedef $$ProjectsTableProcessedTableManager = ProcessedTableManager<
     $$ProjectsTableUpdateCompanionBuilder,
     (ProjectDb, $$ProjectsTableReferences),
     ProjectDb,
-    PrefetchHooks Function({bool buildingsRefs})>;
+    PrefetchHooks Function({bool buildingsRefs, bool templatesRefs})>;
 typedef $$BuildingsTableCreateCompanionBuilder = BuildingsCompanion Function({
   required String id,
   required String projectId,
@@ -7618,6 +8095,304 @@ typedef $$DisziplinenTableProcessedTableManager = ProcessedTableManager<
     (DisziplinDb, $$DisziplinenTableReferences),
     DisziplinDb,
     PrefetchHooks Function({bool buildingId})>;
+typedef $$TemplatesTableCreateCompanionBuilder = TemplatesCompanion Function({
+  Value<int> id,
+  required String projectId,
+  required String gewerk,
+  required String anlageBauteil,
+  required String anlagentyp,
+  required String bezeichnung,
+  Value<String?> parameter,
+});
+typedef $$TemplatesTableUpdateCompanionBuilder = TemplatesCompanion Function({
+  Value<int> id,
+  Value<String> projectId,
+  Value<String> gewerk,
+  Value<String> anlageBauteil,
+  Value<String> anlagentyp,
+  Value<String> bezeichnung,
+  Value<String?> parameter,
+});
+
+final class $$TemplatesTableReferences
+    extends BaseReferences<_$AppDatabase, $TemplatesTable, TemplateDb> {
+  $$TemplatesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $ProjectsTable _projectIdTable(_$AppDatabase db) =>
+      db.projects.createAlias(
+          $_aliasNameGenerator(db.templates.projectId, db.projects.id));
+
+  $$ProjectsTableProcessedTableManager get projectId {
+    final $_column = $_itemColumn<String>('project_id')!;
+
+    final manager = $$ProjectsTableTableManager($_db, $_db.projects)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_projectIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$TemplatesTableFilterComposer
+    extends Composer<_$AppDatabase, $TemplatesTable> {
+  $$TemplatesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get gewerk => $composableBuilder(
+      column: $table.gewerk, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get anlageBauteil => $composableBuilder(
+      column: $table.anlageBauteil, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get anlagentyp => $composableBuilder(
+      column: $table.anlagentyp, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get bezeichnung => $composableBuilder(
+      column: $table.bezeichnung, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get parameter => $composableBuilder(
+      column: $table.parameter, builder: (column) => ColumnFilters(column));
+
+  $$ProjectsTableFilterComposer get projectId {
+    final $$ProjectsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableFilterComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TemplatesTableOrderingComposer
+    extends Composer<_$AppDatabase, $TemplatesTable> {
+  $$TemplatesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get gewerk => $composableBuilder(
+      column: $table.gewerk, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get anlageBauteil => $composableBuilder(
+      column: $table.anlageBauteil,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get anlagentyp => $composableBuilder(
+      column: $table.anlagentyp, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get bezeichnung => $composableBuilder(
+      column: $table.bezeichnung, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get parameter => $composableBuilder(
+      column: $table.parameter, builder: (column) => ColumnOrderings(column));
+
+  $$ProjectsTableOrderingComposer get projectId {
+    final $$ProjectsTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableOrderingComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TemplatesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TemplatesTable> {
+  $$TemplatesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get gewerk =>
+      $composableBuilder(column: $table.gewerk, builder: (column) => column);
+
+  GeneratedColumn<String> get anlageBauteil => $composableBuilder(
+      column: $table.anlageBauteil, builder: (column) => column);
+
+  GeneratedColumn<String> get anlagentyp => $composableBuilder(
+      column: $table.anlagentyp, builder: (column) => column);
+
+  GeneratedColumn<String> get bezeichnung => $composableBuilder(
+      column: $table.bezeichnung, builder: (column) => column);
+
+  GeneratedColumn<String> get parameter =>
+      $composableBuilder(column: $table.parameter, builder: (column) => column);
+
+  $$ProjectsTableAnnotationComposer get projectId {
+    final $$ProjectsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.projectId,
+        referencedTable: $db.projects,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$ProjectsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.projects,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$TemplatesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $TemplatesTable,
+    TemplateDb,
+    $$TemplatesTableFilterComposer,
+    $$TemplatesTableOrderingComposer,
+    $$TemplatesTableAnnotationComposer,
+    $$TemplatesTableCreateCompanionBuilder,
+    $$TemplatesTableUpdateCompanionBuilder,
+    (TemplateDb, $$TemplatesTableReferences),
+    TemplateDb,
+    PrefetchHooks Function({bool projectId})> {
+  $$TemplatesTableTableManager(_$AppDatabase db, $TemplatesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TemplatesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TemplatesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TemplatesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> projectId = const Value.absent(),
+            Value<String> gewerk = const Value.absent(),
+            Value<String> anlageBauteil = const Value.absent(),
+            Value<String> anlagentyp = const Value.absent(),
+            Value<String> bezeichnung = const Value.absent(),
+            Value<String?> parameter = const Value.absent(),
+          }) =>
+              TemplatesCompanion(
+            id: id,
+            projectId: projectId,
+            gewerk: gewerk,
+            anlageBauteil: anlageBauteil,
+            anlagentyp: anlagentyp,
+            bezeichnung: bezeichnung,
+            parameter: parameter,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String projectId,
+            required String gewerk,
+            required String anlageBauteil,
+            required String anlagentyp,
+            required String bezeichnung,
+            Value<String?> parameter = const Value.absent(),
+          }) =>
+              TemplatesCompanion.insert(
+            id: id,
+            projectId: projectId,
+            gewerk: gewerk,
+            anlageBauteil: anlageBauteil,
+            anlagentyp: anlagentyp,
+            bezeichnung: bezeichnung,
+            parameter: parameter,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$TemplatesTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({projectId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (projectId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.projectId,
+                    referencedTable:
+                        $$TemplatesTableReferences._projectIdTable(db),
+                    referencedColumn:
+                        $$TemplatesTableReferences._projectIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$TemplatesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $TemplatesTable,
+    TemplateDb,
+    $$TemplatesTableFilterComposer,
+    $$TemplatesTableOrderingComposer,
+    $$TemplatesTableAnnotationComposer,
+    $$TemplatesTableCreateCompanionBuilder,
+    $$TemplatesTableUpdateCompanionBuilder,
+    (TemplateDb, $$TemplatesTableReferences),
+    TemplateDb,
+    PrefetchHooks Function({bool projectId})>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7642,4 +8417,6 @@ class $AppDatabaseManager {
       $$AttachmentsTableTableTableManager(_db, _db.attachmentsTable);
   $$DisziplinenTableTableManager get disziplinen =>
       $$DisziplinenTableTableManager(_db, _db.disziplinen);
+  $$TemplatesTableTableManager get templates =>
+      $$TemplatesTableTableManager(_db, _db.templates);
 }
