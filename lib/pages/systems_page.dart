@@ -70,7 +70,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     with RouteAware, TickerProviderStateMixin {
   List<Anlage> _alleAnlagen = [];  // Liste aller Anlagen im aktuellen Gebäude und auf dem aktuellen Floor
   bool _isSelectionMode = false;    // Gibt an, ob sich die Seite im Auswahlmodus befindet
-  bool _isLoading = true;           // Gibt an, ob die Anlagen gerade geladen werden
+  bool _isLoading = false;           // Gibt an, ob die Anlagen gerade geladen werden
+  bool _hasLoadedOnce = false;       // Gibt an, ob die Daten bereits einmal geladen wurden
   final Set<String> _selectedAnlagenIds = {};  // Enthält die IDs der selektierten Anlagen
   final Set<String> _expandedGroups = {}; // Verfolgt geöffnete Untergruppen
   final Set<String> _expandedAnlagenIds = {}; // Verfolgt geöffnete Anlagen (für Bauteile)
@@ -280,6 +281,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     if (oldWidget.building.id != widget.building.id ||
         oldWidget.discipline.label != widget.discipline.label ||
         oldWidget.floor.id != widget.floor.id) {
+      _hasLoadedOnce = false; // Reset, damit Platzhalter nicht während des Ladens angezeigt wird
       _loadAnlagen();
       _loadExpandedGroups();
       _loadLastOpenedAnlage(); // Lade die zuletzt geöffnete Anlage für den neuen Kontext
@@ -320,12 +322,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
   /// Lädt alle Anlagen aus Drift-Datenbank, filtert nach Building und Disziplin.
   Future<void> _loadAnlagen() async {
-    setState(() {
-      _isLoading = true;
-    });
-
     final dbService = ref.read(databaseServiceProvider);
-    final startTime = DateTime.now();
 
     try {
       final buildingId = widget.building.id;
@@ -341,15 +338,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           : loaded.where((a) => a.floorId == widget.floor.id).toList();
       debugPrint('SystemsPage._loadAnlagen: Gefiltert auf ${filtered.length} Anlagen');
       
-      // Warte mindestens 0.5 Sekunden, damit der Ladekreis flüssig angezeigt wird
-      final elapsed = DateTime.now().difference(startTime);
-      if (elapsed.inMilliseconds < 500) {
-        await Future.delayed(Duration(milliseconds: 500 - elapsed.inMilliseconds));
-      }
-      
       setState(() {
         _alleAnlagen = filtered;
         _isLoading = false;
+        _hasLoadedOnce = true;
         _selectedAnlagenIds.removeWhere(
             (id) => !_alleAnlagen.any((anlage) => anlage.id == id));
         if (_selectedAnlagenIds.isEmpty && _isSelectionMode) {
@@ -371,15 +363,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     } catch (e) {
       debugPrint('Fehler beim Laden der Anlagen: $e');
       
-      // Warte auch bei Fehler mindestens 0.5 Sekunden
-      final elapsed = DateTime.now().difference(startTime);
-      if (elapsed.inMilliseconds < 500) {
-        await Future.delayed(Duration(milliseconds: 500 - elapsed.inMilliseconds));
-      }
-      
       setState(() {
         _alleAnlagen = [];
         _isLoading = false;
+        _hasLoadedOnce = true;
         _selectedAnlagenIds.clear();
         _isSelectionMode = false;
       });
@@ -836,7 +823,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         .where((a) => a.discipline.label == disc.label)
         .toList();
 
-    if (liste.isEmpty) {
+    // Zeige Platzhalter nur an, wenn Daten bereits geladen wurden und Liste wirklich leer ist
+    if (liste.isEmpty && _hasLoadedOnce) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
         child: Center(
