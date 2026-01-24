@@ -40,7 +40,6 @@ import 'tabs/technik_main_tab.dart';
 // SystemsPage importieren
 import 'systems_page.dart';
 import 'csv_settings_page.dart';
-import 'template_csv_settings_page.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -201,7 +200,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   @override
   void didPopNext() {
-    // Wird aufgerufen, wenn von DisziplinManager zurückgekehrt wird
+    // Wird aufgerufen, wenn von Datenmodell zurückgekehrt wird
     _loadDisciplines();
     // Aktualisiere auch Fortschritt
     _loadAllAnlagenForProgress();
@@ -2037,54 +2036,58 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       floatingActionButton: _buildFloatingActionButtons(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
 
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFFEEEEEE),
-        ),
-        child: Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).padding.bottom * 0.4,
-            top: 4.0,
-            left: 10.0,
-            right: 10.0,
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFEEEEEE),
           ),
-          child: AnimatedBuilder(
-            animation: _tabController,
-            builder: (context, child) {
-              return TabBar(
-                controller: _tabController,
-                indicator: const BoxDecoration(color: Colors.transparent),
-                indicatorSize: TabBarIndicatorSize.tab,
-                dividerColor: Colors.transparent,
-                labelColor: Colors.black,
-                unselectedLabelColor: Colors.black,
-                labelStyle:
-                const TextStyle(fontSize: 9, fontWeight: FontWeight.w400),
-                unselectedLabelStyle: const TextStyle(fontSize: 9),
-                tabs: [
-                  _buildTabWithIconBackground(
-                    icon: Icons.edit,
-                    text: 'Bearbeiten',
-                    index: 0,
-                  ),
-                  _buildTabWithIconBackground(
-                    icon: Icons.map,
-                    text: 'Grundrisse',
-                    index: 1,
-                  ),
-                  _buildTabWithIconBackground(
-                    icon: Icons.settings,
-                    text: 'Technik',
-                    index: 2,
-                  ),
-                  _buildTabWithIconBackground(
-                    icon: Icons.bar_chart,
-                    text: 'Verbrauch',
-                    index: 3,
-                  ),
-                ],
-              );
-            },
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).padding.bottom * 0.4,
+              top: 4.0,
+              left: 4.0,
+              right: 4.0,
+            ),
+            child: AnimatedBuilder(
+              animation: _tabController,
+              builder: (context, child) {
+                return TabBar(
+                  controller: _tabController,
+                  indicator: const BoxDecoration(color: Colors.transparent),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: Colors.transparent,
+                  labelColor: Colors.black,
+                  unselectedLabelColor: Colors.black,
+                  labelStyle:
+                  const TextStyle(fontSize: 9, fontWeight: FontWeight.w400),
+                  unselectedLabelStyle: const TextStyle(fontSize: 9),
+                  isScrollable: false,
+                  tabAlignment: TabAlignment.fill,
+                  tabs: [
+                    _buildTabWithIconBackground(
+                      icon: Icons.edit,
+                      text: 'Bearbeiten',
+                      index: 0,
+                    ),
+                    _buildTabWithIconBackground(
+                      icon: Icons.map,
+                      text: 'Grundrisse',
+                      index: 1,
+                    ),
+                    _buildTabWithIconBackground(
+                      icon: Icons.settings,
+                      text: 'Technik',
+                      index: 2,
+                    ),
+                    _buildTabWithIconBackground(
+                      icon: Icons.bar_chart,
+                      text: 'Verbrauch',
+                      index: 3,
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -3261,41 +3264,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                         MaterialPageRoute(
                           builder: (_) => CsvSettingsPage(
                             projectId: _currentProject.id,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildActionButton(
-                    icon: Icons.table_view_rounded,
-                    label: 'Gewerkevorlagen',
-                    color: Colors.teal,
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => TemplateCsvSettingsPage(
-                            projectId: _currentProject.id,
                             buildingId: _building.id,
                           ),
                         ),
                       );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildActionButton(
-                    icon: Icons.tune_rounded,
-                    label: 'Disziplinen',
-                    color: Colors.blueGrey,
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => DisziplinManagerWidget(
-                            buildingId: _building.id,
-                          ),
-                        ),
-                      );
-                      await _loadDisciplines();
                     },
                   ),
                 ],

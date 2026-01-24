@@ -5,7 +5,7 @@ class Disziplin {
   String label;
   IconData icon;
   Color color;
-  List<Map<String, String>> schema;
+  List<Map<String, dynamic>> schema;
   String? groupingKey; // Optionaler Key für die Gruppierung (z.B. 'etage')
 
   Disziplin({
@@ -26,7 +26,7 @@ class Disziplin {
       ),
       color: Color(json['colorValue'] as int),
       schema: (json['schema'] as List<dynamic>)
-          .map((e) => Map<String, String>.from(e as Map))
+          .map((e) => Map<String, dynamic>.from(e as Map))
           .toList(),
       groupingKey: json['groupingKey'] as String?,
     );

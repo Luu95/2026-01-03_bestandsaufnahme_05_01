@@ -77,15 +77,6 @@ class CsvService {
     return ordered;
   }
 
-  static String _getAnlageBauteilFlag(Anlage anlage) {
-    // Kinder sind immer "B". Für Parents "A", außer wenn explizit gesetzt.
-    if (anlage.parentId != null && anlage.parentId!.trim().isNotEmpty) return 'B';
-    final existing = (anlage.params['Anlage/Bautel'] ?? anlage.params['Anlage/Bauteil'] ?? '')
-        .toString()
-        .trim();
-    return existing.isNotEmpty ? existing : 'A';
-  }
-
   /// Importiert Anlagen aus einer CSV-Datei.
   /// 
   /// CSV-Struktur:
@@ -534,75 +525,38 @@ class CsvService {
 
       debugPrint('Anzahl Datenzeilen: ${dataRows.length}');
 
-      // Schema aus CSV-Spalten erstellen (alle Spalten, die keine festen Felder sind)
+      // Schema aus CSV-Spalten erstellen (alle Spalten in Original-Reihenfolge)
       final schemaColumns = <int, String>{};
-      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
-      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
-      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
-
-      // Bestimme den Index der Parameter-Spalte (entweder konfiguriert oder Suche nach Name)
-      int? leistungsparameterIdx = configuredParameterIdx;
-      if (leistungsparameterIdx == null) {
-        for (var i = 0; i < headerRow.length; i++) {
-          if (fixedColumnIndices.contains(i)) continue;
-          final headerName = headerRow[i].trim().toLowerCase();
-          if (headerName == 'leistungsparameter' || 
-              headerName == 'leistungsparametrr' || 
-              headerName == 'parameter') {
-            leistungsparameterIdx = i;
-            break;
-          }
-        }
-      }
-
-      // Den Namen der Spalte merken
-      String? parameterColumnKey;
-      if (leistungsparameterIdx != null && leistungsparameterIdx < headerRow.length) {
-        parameterColumnKey = headerRow[leistungsparameterIdx].trim();
-      }
-
       for (var i = 0; i < headerRow.length; i++) {
-        if (fixedColumnIndices.contains(i)) continue; // Überspringe feste Felder
-        // Wir nehmen die Parameter-Spalte NICHT ins Schema auf, wenn sie als Box genutzt werden soll
-        // (oder wir markieren sie später)
-        if (leistungsparameterIdx != null && i == leistungsparameterIdx) continue; 
-
         final headerName = headerRow[i].trim();
         if (headerName.isNotEmpty) {
-          // Verwende den Header-Namen als Key (normalisiert)
           schemaColumns[i] = headerName;
         } else {
-          // Wenn Header leer, verwende generischen Namen
           schemaColumns[i] = 'Spalte_${i + 1}';
         }
       }
 
-      debugPrint('Schema-Spalten: $schemaColumns');
-      debugPrint('Leistungsparameter-Spalte gefunden: ${leistungsparameterIdx != null ? "Ja (Index $leistungsparameterIdx)" : "Nein"}');
-
-      // Schema aus CSV-Spalten erstellen (Format: List<Map<String, String>>)
-      final schema = schemaColumns.values.map<Map<String, String>>((headerName) {
-        // Versuche den Typ zu erraten basierend auf dem Namen
+      // Schema-Einträge erstellen
+      final schema = <Map<String, String>>[];
+      for (var i = 0; i < headerRow.length; i++) {
+        final headerName = schemaColumns[i]!;
         final lowerName = headerName.toLowerCase();
+        
         String type = 'text';
         if (lowerName.contains('leistung') || lowerName.contains('kw') || 
-            lowerName.contains('kapazität') || lowerName.contains('kapazitaet') ||
-            lowerName.contains('volumen') || lowerName.contains('fläche') ||
-            lowerName.contains('flaeche') || lowerName.contains('temperatur') ||
-            lowerName.contains('watt') || lowerName.contains('ampere') ||
-            lowerName.contains('liter') || lowerName.contains('kwh') ||
-            lowerName.contains('anzahl') || lowerName.contains('stück') ||
-            lowerName.contains('stueck') || lowerName.contains('baujahr') ||
-            lowerName.contains('jahr')) {
+            lowerName.contains('kapazität') || lowerName.contains('volumen') ||
+            lowerName.contains('anzahl') || lowerName.contains('jahr')) {
           type = 'number';
         }
         
-        return <String, String>{
+        schema.add({
           'key': headerName,
           'label': headerName,
           'type': type,
-        };
-      }).toList();
+        });
+      }
+
+      debugPrint('Vollständiges Schema aus CSV erstellt: $schema');
 
       debugPrint('Erstelltes Schema: $schema');
 
@@ -686,24 +640,29 @@ class CsvService {
           anlageBauteilValue = _safeCell(row, anlageBauteilIdx).trim();
         }
         
-        // Parameter aus Spalten ab Index 3 (D+ = "Hersteller", "Typ", etc.)
+        // Parameter aus allen Spalten lesen (Schema = Header)
         final params = _parseParamsFromRow(row, schemaColumns);
         
-        // Leistungsparameter verarbeiten (falls vorhanden)
+        // CSV-Mapping für die App-Logik anwenden
+        // Die lfdNummer wird zur Identifikation benötigt
+        if (lfdNummerValue.isNotEmpty) {
+          params['lfdNummer'] = lfdNummerValue;
+        }
+        
+        // Anlage/Bauteil explizit setzen (falls aus Mapping-Spalte gelesen)
+        // Unterstütze beide Schreibweisen für Kompatibilität
+        if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
+          params['Anlage/Bauteil'] = anlageBauteilValue;
+          params['Anlage/Bautel'] = anlageBauteilValue; // Alte Schreibweise für Kompatibilität
+        }
+
+        // Leistungsparameter-Logik für Spezial-Feld beibehalten (falls konfiguriert)
+        int? leistungsparameterIdx = configuredParameterIdx;
         if (leistungsparameterIdx != null) {
-          final leistungsparameterRaw = _safeCell(row, leistungsparameterIdx);
-          if (leistungsparameterRaw.isNotEmpty) {
-            // Trenne nach Komma ODER Semikolon
-            final labels = leistungsparameterRaw
-                .split(RegExp(r'[,;]'))
-                .map((e) => e.trim())
-                .where((e) => e.isNotEmpty)
-                .toList();
-            
-            // Erstelle eine Map: Label -> Wert (leer am Anfang)
+          final lpRaw = _safeCell(row, leistungsparameterIdx);
+          if (lpRaw.isNotEmpty) {
             final Map<String, String> lpMap = {};
-            for (var label in labels) {
-              // Falls in der CSV schon "Label: Wert" steht, versuche zu trennen
+            for (var label in lpRaw.split(RegExp(r'[,;]')).map((e) => e.trim()).where((e) => e.isNotEmpty)) {
               if (label.contains(':')) {
                 final parts = label.split(':');
                 lpMap[parts[0].trim()] = parts.sublist(1).join(':').trim();
@@ -712,24 +671,7 @@ class CsvService {
               }
             }
             params['Leistungsparameter'] = lpMap;
-            debugPrint('Leistungsparameter-Map für $nameValue: $lpMap');
           }
-        }
-        
-        // Speichere den Key der Parameter-Spalte für das UI
-        if (parameterColumnKey != null) {
-          params['__parameterKey'] = parameterColumnKey;
-        }
-        
-        // Laufende Nummer zu den Parametern hinzufügen
-        params['lfdNummer'] = lfdNummerValue;
-        // Etage als normalen Parameter hinzufügen (sichtbar im Anlagen-Dialog / Export)
-        if (etageValue != null && etageValue.isNotEmpty) {
-          params['Etage'] = etageValue;
-        }
-        // Anlage/Bauteil zu den Parametern hinzufügen (falls vorhanden)
-        if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
-          params['Anlage/Bautel'] = anlageBauteilValue;
         }
         debugPrint('Anlage $nameValue (lfd Nummer: $lfdNummerValue): Disziplin=$disciplineLabelValue, Etage=$etageValue, Anlage/Bauteil=$anlageBauteilValue, Parameter=$params');
 
@@ -741,7 +683,8 @@ class CsvService {
 
         // Hierarchie NICHT über IDs im Parser lösen (die ändern sich beim Update via lfdNummer).
         // Stattdessen Parent-LfdNummer in Params merken; die finale parentId wird beim Speichern gesetzt.
-        final anlageBautel = (params['Anlage/Bautel'] ?? '')
+        // Unterstütze beide Schreibweisen: "Anlage/Bauteil" und "Anlage/Bautel"
+        final anlageBautel = (params['Anlage/Bauteil'] ?? params['Anlage/Bautel'] ?? '')
             .toString()
             .trim()
             .toLowerCase();
@@ -749,28 +692,36 @@ class CsvService {
 
         if (isBauteil) {
           String? parentLfd;
-          String? fallbackParentLfd;
+          // Suche rückwärts nach der letzten Anlage (A) im gleichen Gewerk
+          // Priorität: 1) Gleiches Gewerk + Typ A, 2) Gleiches Gewerk + kein Typ B, 3) Gleiches Gewerk (egal welcher Typ)
           for (int j = anlagen.length - 1; j >= 0; j--) {
             final existing = anlagen[j];
-            final existingType = (existing.params['Anlage/Bautel'] ?? '')
+            // Nur im gleichen Gewerk suchen
+            if (existing.discipline.label != discipline.label) continue;
+            
+            final existingLfd = existing.params['lfdNummer']?.toString();
+            if (existingLfd == null || existingLfd.isEmpty) continue;
+            
+            // Unterstütze beide Schreibweisen
+            final existingType = (existing.params['Anlage/Bauteil'] ?? existing.params['Anlage/Bautel'] ?? '')
                 .toString()
                 .trim()
                 .toLowerCase();
-            final existingIsAnlage = existingType == 'a' || existingType.startsWith('a');
-            if (!existingIsAnlage) continue;
-
-            final existingLfd = existing.params['lfdNummer']?.toString();
-            if (existingLfd == null || existingLfd.isEmpty) continue;
-
-            if (existing.discipline.label == discipline.label) {
-              parentLfd = existingLfd;
-              break;
-            }
-            fallbackParentLfd ??= existingLfd;
+            final existingIsBauteil = existingType == 'b' || existingType.startsWith('b');
+            
+            // Überspringe andere Bauteile
+            if (existingIsBauteil) continue;
+            
+            // Gefunden: Letzte Anlage (A oder leer) im gleichen Gewerk
+            parentLfd = existingLfd;
+            break;
           }
-          parentLfd ??= fallbackParentLfd;
+          
           if (parentLfd != null) {
             params['__parentLfdNummer'] = parentLfd;
+            debugPrint('Bauteil $nameValue (lfd: $lfdNummerValue) -> Parent: $parentLfd (Gewerk: ${discipline.label})');
+          } else {
+            debugPrint('WARNUNG: Bauteil $nameValue (lfd: $lfdNummerValue, Gewerk: ${discipline.label}) hat kein Parent gefunden!');
           }
         }
 
@@ -883,143 +834,44 @@ class CsvService {
     }
 
     try {
-      // CSV-Einstellungen laden (Spaltenzuordnung)
-      final csvSettings = await _loadCsvSettings(projectId);
-      final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
-      final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
-      final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
-      final etageIdx = csvSettings['etageSpalte'] as int?;
-      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
-
-      // Sammle ALLE Parameter-Keys aus allen Anlagen (nicht nur Schema-Keys)
-      final allParamKeys = <String>{}; 
-      bool hasLeistungsparameter = false;
-      for (final anlage in anlagen) {
-        // Alle Keys aus params hinzufügen
-        for (final key in anlage.params.keys) {
-          // Überspringe interne Keys und bereits behandelte Keys
-          if (key != 'lfdNummer' && 
-              key != 'Etage' && 
-              key != 'Anlage/Bautel' && 
-              key != 'Anlage/Bauteil' &&
-              !key.startsWith('__')) {
-            if (key == 'Leistungsparameter') {
-              hasLeistungsparameter = true;
-            } else {
-              allParamKeys.add(key);
-            }
-          }
-        }
-      }
-
-      // Parameter-Keys sortieren für konsistente Reihenfolge
-      final sortedParamKeys = allParamKeys.toList()..sort();
-
-      debugPrint('Alle Parameter-Keys für Export: $sortedParamKeys');
-      debugPrint('Leistungsparameter gefunden: $hasLeistungsparameter');
-
       // CSV-Daten erstellen
       final csvData = <List<String>>[];
 
-      // Header-Zeile erstellen basierend auf den CSV-Einstellungen (Spaltenzuordnung)
-      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
-      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
-      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
+      // Nutze das Schema der ersten Anlage für die Header-Reihenfolge
+      // Da alle Anlagen einer Disziplin beim Import das gleiche Schema erhalten haben,
+      // entspricht dies der Original-Reihenfolge der CSV.
+      final exportSchema = anlagen.first.discipline.schema;
+      final headerRow = exportSchema.map((e) => e['label'] as String).toList();
       
-      final maxFixedColumn = fixedColumnIndices.reduce((a, b) => a > b ? a : b);
-      final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
-      headerRow[lfdNummerIdx] = 'lfd Nummer';
-      headerRow[nameIdx] = 'Name';
-      headerRow[disciplineIdx] = 'Gewerk';
-      if (etageIdx != null) {
-        headerRow[etageIdx] = 'Etage';
-      }
-      if (anlageBauteilIdx != null) {
-        headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
-      }
-      
-      // Alle Parameter-Keys hinzufügen
-      headerRow.addAll(sortedParamKeys);
+      // Foto-Spalten hinzufügen
       headerRow.addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']);
-
       csvData.add(headerRow);
 
       debugPrint('CSV Header: $headerRow');
-
-      // Zähler für neue Anlagen ohne lfdNummer
-      int neueAnlagenZaehler = 1;
 
       // Hierarchisch anordnen: Parent-Anlage, dann Bauteile darunter
       final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
 
       // Daten-Zeilen
       for (final anlage in orderedAnlagen) {
-        final dataRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+        final dataRow = <String>[];
 
-        // Laufende Nummer aus params
-        String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
-        if (lfdNummer.isEmpty || lfdNummer.trim().isEmpty) {
-          lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
-          neueAnlagenZaehler++;
-        }
-        dataRow[lfdNummerIdx] = lfdNummer;
-
-        // Name
-        dataRow[nameIdx] = anlage.name;
-
-        // Gewerk
-        dataRow[disciplineIdx] = anlage.discipline.label;
-
-        // Etage
-        if (etageIdx != null) {
-          dataRow[etageIdx] = anlage.params['Etage']?.toString() ?? '';
-        }
-
-        // Anlage/Bauteil (a/b)
-        if (anlageBauteilIdx != null) {
-          dataRow[anlageBauteilIdx] = _getAnlageBauteilFlag(anlage);
-        }
-
-        // Alle Parameter aus params hinzufügen
-        for (final paramKey in sortedParamKeys) {
-          final paramValue = anlage.params[paramKey];
-          if (paramValue != null) {
-            // Wert als String konvertieren
-            if (paramValue is Map || paramValue is List) {
-              dataRow.add(json.encode(paramValue));
-            } else {
-              dataRow.add(paramValue.toString());
-            }
-          } else {
-            // Leere Zelle für fehlende Parameter
+        // Alle Felder laut Schema exportieren
+        for (final field in exportSchema) {
+          final key = field['key'] as String;
+          final val = anlage.params[key];
+          
+          if (val == null) {
             dataRow.add('');
-          }
-        }
-
-        // Leistungsparameter zusammenführen (komma-getrennt: "Label: Wert, Label2: Wert2")
-        if (hasLeistungsparameter) {
-          final leistungsparameter = anlage.params['Leistungsparameter'];
-          if (leistungsparameter is Map) {
-            final combinedString = leistungsparameter.entries
-                .map((e) => "${e.key}: ${e.value}")
-                .join(', ');
-            dataRow.add(combinedString);
-          } else if (leistungsparameter is List) {
-            // Fallback für alte Daten
-            dataRow.add(leistungsparameter.join(', '));
-          } else if (leistungsparameter != null) {
-            dataRow.add(leistungsparameter.toString());
+          } else if (val is Map || val is List) {
+            dataRow.add(json.encode(val));
           } else {
-            dataRow.add('');
+            dataRow.add(val.toString());
           }
         }
 
         // Fotonummern hinzufügen (werden später beim ZIP-Export befüllt)
-        // Hier zunächst leer lassen, werden in exportAnlagenWithPhotos gesetzt
-        dataRow.add(''); // Foto1
-        dataRow.add(''); // Foto2
-        dataRow.add(''); // Foto3
-        dataRow.add(''); // Foto4
+        dataRow.addAll(['', '', '', '']);
 
         csvData.add(dataRow);
       }
@@ -1073,14 +925,6 @@ class CsvService {
     }
 
     try {
-      // CSV-Einstellungen laden (Spaltenzuordnung)
-      final csvSettings = await _loadCsvSettings(projectId);
-      final lfdNummerIdx = csvSettings['lfdNummerSpalte'] as int? ?? 0;
-      final nameIdx = csvSettings['nameSpalte'] as int? ?? 1;
-      final disciplineIdx = csvSettings['gewerkSpalte'] as int? ?? 2;
-      final etageIdx = csvSettings['etageSpalte'] as int?;
-      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
-
       // Temporäres Verzeichnis für Export erstellen
       final tempDir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -1090,55 +934,14 @@ class CsvService {
       // Globaler Zähler für Fotonummern (0001, 0002, etc.)
       int fotoCounter = 1;
 
-      // Sammle ALLE Parameter-Keys aus allen Anlagen (nicht nur Schema-Keys)
-      final allParamKeys = <String>{}; 
-      bool hasLeistungsparameter = false;
-      for (final anlage in anlagen) {
-        // Alle Keys aus params hinzufügen
-        for (final key in anlage.params.keys) {
-          // Überspringe interne Keys und bereits behandelte Keys
-          if (key != 'lfdNummer' && 
-              key != 'Etage' && 
-              key != 'Anlage/Bautel' && 
-              key != 'Anlage/Bauteil' &&
-              !key.startsWith('__')) {
-            if (key == 'Leistungsparameter') {
-              hasLeistungsparameter = true;
-            } else {
-              allParamKeys.add(key);
-            }
-          }
-        }
-      }
-
-      final sortedParamKeys = allParamKeys.toList()..sort();
-
       // CSV-Daten erstellen
       final csvData = <List<String>>[];
 
-      // Header-Zeile erstellen basierend auf den CSV-Einstellungen (Spaltenzuordnung)
-      final fixedColumnIndices = {lfdNummerIdx, nameIdx, disciplineIdx};
-      if (etageIdx != null) fixedColumnIndices.add(etageIdx);
-      if (anlageBauteilIdx != null) fixedColumnIndices.add(anlageBauteilIdx);
-
-      final maxFixedColumn = fixedColumnIndices.reduce((a, b) => a > b ? a : b);
-      final headerRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
-      headerRow[lfdNummerIdx] = 'lfd Nummer';
-      headerRow[nameIdx] = 'Name';
-      headerRow[disciplineIdx] = 'Gewerk';
-      if (etageIdx != null) {
-        headerRow[etageIdx] = 'Etage';
-      }
-      if (anlageBauteilIdx != null) {
-        headerRow[anlageBauteilIdx] = 'Anlage/Bauteil';
-      }
+      // Nutze das Schema der ersten Anlage für die Header-Reihenfolge
+      final exportSchema = anlagen.first.discipline.schema;
+      final headerRow = exportSchema.map((e) => e['label'] as String).toList();
       
-      // Alle Parameter-Keys hinzufügen (außer Leistungsparameter, das kommt separat)
-      headerRow.addAll(sortedParamKeys);
-      // Leistungsparameter als eigene Spalte hinzufügen (falls vorhanden)
-      if (hasLeistungsparameter) {
-        headerRow.add('Leistungsparameter');
-      }
+      // Foto-Spalten hinzufügen
       headerRow.addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']);
       csvData.add(headerRow);
 
@@ -1146,18 +949,8 @@ class CsvService {
       int neueAnlagenZaehler = 1;
 
       // Fotos-Ordner erstellen basierend auf Struktur
-      Directory fotosDir;
-      switch (structure) {
-        case PhotoExportStructure.byAnlage:
-        case PhotoExportStructure.byGewerk:
-          fotosDir = Directory('${exportDir.path}/fotos');
-          await fotosDir.create(recursive: true);
-          break;
-        case PhotoExportStructure.allInOne:
-          fotosDir = Directory('${exportDir.path}/fotos');
-          await fotosDir.create(recursive: true);
-          break;
-      }
+      Directory fotosDir = Directory('${exportDir.path}/fotos');
+      await fotosDir.create(recursive: true);
 
       // Map für Gewerk-Ordner (bei byGewerk)
       final Map<String, Directory> gewerkDirs = {};
@@ -1167,62 +960,27 @@ class CsvService {
 
       // Verarbeite jede Anlage
       for (final anlage in orderedAnlagen) {
-        final dataRow = List<String>.filled(maxFixedColumn + 1, '', growable: true);
+        final dataRow = <String>[];
 
-        // Laufende Nummer
+        // Alle Felder laut Schema exportieren
+        for (final field in exportSchema) {
+          final key = field['key'] as String;
+          final val = anlage.params[key];
+          
+          if (val == null) {
+            dataRow.add('');
+          } else if (val is Map || val is List) {
+            dataRow.add(json.encode(val));
+          } else {
+            dataRow.add(val.toString());
+          }
+        }
+
+        // lfdNummer für Dateinamen holen
         String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
-        if (lfdNummer.isEmpty || lfdNummer.trim().isEmpty) {
+        if (lfdNummer.isEmpty) {
           lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
           neueAnlagenZaehler++;
-        }
-        dataRow[lfdNummerIdx] = lfdNummer;
-
-        // Name
-        dataRow[nameIdx] = anlage.name;
-
-        // Gewerk
-        dataRow[disciplineIdx] = anlage.discipline.label;
-
-        // Etage
-        if (etageIdx != null) {
-          dataRow[etageIdx] = anlage.params['Etage']?.toString() ?? '';
-        }
-
-        // Anlage/Bauteil (a/b)
-        if (anlageBauteilIdx != null) {
-          dataRow[anlageBauteilIdx] = _getAnlageBauteilFlag(anlage);
-        }
-
-        // Alle Parameter aus params hinzufügen
-        for (final paramKey in sortedParamKeys) {
-          final paramValue = anlage.params[paramKey];
-          if (paramValue != null) {
-            if (paramValue is Map || paramValue is List) {
-              dataRow.add(json.encode(paramValue));
-            } else {
-              dataRow.add(paramValue.toString());
-            }
-          } else {
-            dataRow.add('');
-          }
-        }
-
-        // Leistungsparameter zusammenführen (komma-getrennt: "Label: Wert, Label2: Wert2")
-        if (hasLeistungsparameter) {
-          final leistungsparameter = anlage.params['Leistungsparameter'];
-          if (leistungsparameter is Map) {
-            final combinedString = leistungsparameter.entries
-                .map((e) => "${e.key}: ${e.value}")
-                .join(', ');
-            dataRow.add(combinedString);
-          } else if (leistungsparameter is List) {
-            // Fallback für alte Daten
-            dataRow.add(leistungsparameter.join(', '));
-          } else if (leistungsparameter != null) {
-            dataRow.add(leistungsparameter.toString());
-          } else {
-            dataRow.add('');
-          }
         }
 
         // Fotos verarbeiten
@@ -1251,15 +1009,12 @@ class CsvService {
               Directory targetDir;
               switch (structure) {
                 case PhotoExportStructure.byAnlage:
-                  // Ordner pro Anlage: {lfdNummer}_{Anlagenname}
                   final safeName = _sanitizeFileName(anlage.name);
                   final anlageDirName = '${lfdNummer}_$safeName';
                   targetDir = Directory('${fotosDir.path}/$anlageDirName');
                   await targetDir.create(recursive: true);
                   break;
-
                 case PhotoExportStructure.byGewerk:
-                  // Ordner pro Gewerk
                   final gewerkName = _sanitizeFileName(anlage.discipline.label);
                   if (!gewerkDirs.containsKey(gewerkName)) {
                     gewerkDirs[gewerkName] = Directory('${fotosDir.path}/$gewerkName');
@@ -1267,9 +1022,7 @@ class CsvService {
                   }
                   targetDir = gewerkDirs[gewerkName]!;
                   break;
-
                 case PhotoExportStructure.allInOne:
-                  // Alle Fotos in einem Ordner
                   targetDir = fotosDir;
                   break;
               }

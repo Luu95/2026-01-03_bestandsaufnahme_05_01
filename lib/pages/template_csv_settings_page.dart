@@ -35,6 +35,8 @@ class _TemplateCsvSettingsPageState extends State<TemplateCsvSettingsPage> {
   bool _parameterBearbeitbar = true;
   bool _auswahlAnlagentypBearbeitbar = true;
 
+  bool _isLoading = true;
+
   @override
   void initState() {
     super.initState();
@@ -42,31 +44,41 @@ class _TemplateCsvSettingsPageState extends State<TemplateCsvSettingsPage> {
   }
 
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'template_csv_settings_${widget.projectId}';
-    final settingsJson = prefs.getString(key);
-    
-    if (settingsJson != null) {
-      try {
-        final settings = json.decode(settingsJson) as Map<String, dynamic>;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'template_csv_settings_${widget.projectId}';
+      final settingsJson = prefs.getString(key);
+      
+      if (settingsJson != null) {
+        try {
+          final settings = json.decode(settingsJson) as Map<String, dynamic>;
+          setState(() {
+            _gewerkSpalte = settings['gewerkSpalte'] as int? ?? 0;
+            _anlageBauteilSpalte = settings['anlageBauteilSpalte'] as int? ?? 1;
+            _anlagentypSpalte = settings['anlagentypSpalte'] as int? ?? 2;
+            _bezeichnungSpalte = settings['bezeichnungSpalte'] as int? ?? 3;
+            _parameterSpalte = settings['parameterSpalte'] as int? ?? 4;
+            _auswahlAnlagentypSpalte = settings['auswahlAnlagentypSpalte'] as int?;
+            
+            // Bearbeitbar-Flags laden
+            _gewerkBearbeitbar = settings['gewerkBearbeitbar'] as bool? ?? true;
+            _anlageBauteilBearbeitbar = settings['anlageBauteilBearbeitbar'] as bool? ?? true;
+            _anlagentypBearbeitbar = settings['anlagentypBearbeitbar'] as bool? ?? true;
+            _bezeichnungBearbeitbar = settings['bezeichnungBearbeitbar'] as bool? ?? true;
+            _parameterBearbeitbar = settings['parameterBearbeitbar'] as bool? ?? true;
+            _auswahlAnlagentypBearbeitbar = settings['auswahlAnlagentypBearbeitbar'] as bool? ?? true;
+          });
+        } catch (e) {
+          debugPrint('Fehler beim JSON-Parsing der Vorlagen-CSV-Einstellungen: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
+    } finally {
+      if (mounted) {
         setState(() {
-          _gewerkSpalte = settings['gewerkSpalte'] as int? ?? 0;
-          _anlageBauteilSpalte = settings['anlageBauteilSpalte'] as int? ?? 1;
-          _anlagentypSpalte = settings['anlagentypSpalte'] as int? ?? 2;
-          _bezeichnungSpalte = settings['bezeichnungSpalte'] as int? ?? 3;
-          _parameterSpalte = settings['parameterSpalte'] as int? ?? 4;
-          _auswahlAnlagentypSpalte = settings['auswahlAnlagentypSpalte'] as int?;
-          
-          // Bearbeitbar-Flags laden
-          _gewerkBearbeitbar = settings['gewerkBearbeitbar'] as bool? ?? true;
-          _anlageBauteilBearbeitbar = settings['anlageBauteilBearbeitbar'] as bool? ?? true;
-          _anlagentypBearbeitbar = settings['anlagentypBearbeitbar'] as bool? ?? true;
-          _bezeichnungBearbeitbar = settings['bezeichnungBearbeitbar'] as bool? ?? true;
-          _parameterBearbeitbar = settings['parameterBearbeitbar'] as bool? ?? true;
-          _auswahlAnlagentypBearbeitbar = settings['auswahlAnlagentypBearbeitbar'] as bool? ?? true;
+          _isLoading = false;
         });
-      } catch (e) {
-        // Fehler beim Laden, verwende Standardwerte
       }
     }
   }
@@ -177,10 +189,17 @@ class _TemplateCsvSettingsPageState extends State<TemplateCsvSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('CSV-Einstellungen – Vorlagen')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
+      backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: const Text('CSV-Einstellungen – Vorlagen'),
-        elevation: 0,
+        title: const Text('Import-Struktur (Vorlagen)'),
         actions: [
           IconButton(
             icon: const Icon(Icons.upload_file),
@@ -208,363 +227,163 @@ class _TemplateCsvSettingsPageState extends State<TemplateCsvSettingsPage> {
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Theme.of(context).colorScheme.primary.withOpacity(0.05),
-              Colors.white,
-            ],
-          ),
-        ),
-        child: ListView(
-          padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header Card
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+            const Padding(
+              padding: EdgeInsets.only(bottom: 16.0, left: 4),
+              child: Text(
+                'Ordnen Sie Ihre CSV-Spalten für Gewerkevorlagen zu:',
+                style: TextStyle(fontSize: 16, color: Colors.grey),
               ),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: LinearGradient(
-                    colors: [
-                      Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                      Theme.of(context).colorScheme.primary.withOpacity(0.05),
+            ),
+
+            // VISUELLE HIERARCHIE
+            
+            // 1. EBENE: GEWERK
+            _buildHierarchicalCard(
+              color: Colors.blueGrey.shade50,
+              borderColor: Colors.blueGrey.shade200,
+              icon: Icons.folder_open,
+              iconColor: Colors.blueGrey,
+              title: "Ebene 1: Gewerk",
+              description: "Welche Spalte definiert das Gewerk der Vorlage?",
+              content: _buildCompactInput(
+                label: 'Spalte für Gewerk',
+                value: _gewerkSpalte,
+                onChanged: (v) => setState(() => _gewerkSpalte = v),
+              ),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.only(left: 32),
+              child: Container(height: 20, width: 2, color: Colors.grey.shade300),
+            ),
+
+            // 2. EBENE: VORLAGEN-DEFINITION (ANLAGE)
+            _buildHierarchicalCard(
+              color: Colors.white,
+              borderColor: Colors.green.shade200,
+              icon: Icons.settings_applications,
+              iconColor: Colors.green,
+              title: "Ebene 2: Vorlage (Anlage/Typ)",
+              description: "Welche Spalten definieren die Vorlagendetails?",
+              content: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildCompactInput(
+                          label: 'Spalte Anlagentyp',
+                          value: _anlagentypSpalte,
+                          onChanged: (v) => setState(() => _anlagentypSpalte = v),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildCompactInput(
+                          label: 'Spalte Bezeichnung',
+                          value: _bezeichnungSpalte,
+                          onChanged: (v) => setState(() => _bezeichnungSpalte = v),
+                        ),
+                      ),
                     ],
                   ),
-                ),
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.table_chart,
-                          color: Theme.of(context).colorScheme.primary,
-                          size: 28,
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildCompactInput(
+                          label: 'Spalte Parameter',
+                          value: _parameterSpalte,
+                          onChanged: (v) => setState(() => _parameterSpalte = v),
                         ),
-                        const SizedBox(width: 12),
-                        const Text(
-                          'Spaltenzuordnung',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Konfigurieren Sie die Spaltenzuordnung und Bearbeitbarkeit für den Gewerkevorlagen-Import.',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[700],
-                        height: 1.4,
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _buildToggleRow(
+                    icon: Icons.checklist,
+                    label: 'Gibt es eine Spalte für Auswahl-Typ?',
+                    isActive: _auswahlAnlagentypSpalte != null,
+                    onToggle: (val) => setState(() => _auswahlAnlagentypSpalte = val ? 2 : null),
+                    child: _auswahlAnlagentypSpalte != null 
+                      ? _buildCompactInput(
+                          label: 'Spalte Auswahl-Typ', 
+                          value: _auswahlAnlagentypSpalte!, 
+                          onChanged: (v) => setState(() => _auswahlAnlagentypSpalte = v)
+                        )
+                      : null,
+                  ),
+                ],
               ),
             ),
-            
-            const SizedBox(height: 20),
-            
-            // Spalten-Konfiguration
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Pflichtfelder',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // Gewerk
-                    _buildSpaltenSelector(
-                      label: 'Gewerk',
-                      value: _gewerkSpalte,
-                      bearbeitbar: _gewerkBearbeitbar,
-                      onChanged: (value) {
-                        setState(() {
-                          _gewerkSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _gewerkBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.build,
-                      color: Colors.orange,
-                    ),
-                    
-                    const Divider(height: 32),
-                    
-                    // Anlage/Bauteil
-                    _buildSpaltenSelector(
-                      label: 'Anlage/Bauteil',
-                      value: _anlageBauteilSpalte,
-                      bearbeitbar: _anlageBauteilBearbeitbar,
-                      onChanged: (value) {
-                        setState(() {
-                          _anlageBauteilSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _anlageBauteilBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.account_tree,
-                      color: Colors.purple,
-                    ),
-                    
-                    const Divider(height: 32),
-                    
-                    // Anlagentyp
-                    _buildSpaltenSelector(
-                      label: 'Anlagentyp',
-                      value: _anlagentypSpalte,
-                      bearbeitbar: _anlagentypBearbeitbar,
-                      onChanged: (value) {
-                        setState(() {
-                          _anlagentypSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _anlagentypBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.category,
-                      color: Colors.blue,
-                    ),
-                    
-                    const Divider(height: 32),
-                    
-                    // Bezeichnung
-                    _buildSpaltenSelector(
-                      label: 'Bezeichnung Anlage/Bauteile',
-                      value: _bezeichnungSpalte,
-                      bearbeitbar: _bezeichnungBearbeitbar,
-                      onChanged: (value) {
-                        setState(() {
-                          _bezeichnungSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _bezeichnungBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.label,
-                      color: Colors.green,
-                    ),
-                    
-                    const Divider(height: 32),
-                    
-                    // Parameter
-                    _buildSpaltenSelector(
-                      label: 'Parameter',
-                      value: _parameterSpalte,
-                      bearbeitbar: _parameterBearbeitbar,
-                      onChanged: (value) {
-                        setState(() {
-                          _parameterSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _parameterBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.settings,
-                      color: Colors.teal,
-                    ),
-                    
-                    const SizedBox(height: 24),
-                    
-                    const Text(
-                      'Optionale Felder',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
 
-                    // Auswahl Anlagentyp (optional)
-                    _buildOptionalSpaltenSelector(
-                      label: 'Auswahl Anlagentyp',
-                      value: _auswahlAnlagentypSpalte,
-                      bearbeitbar: _auswahlAnlagentypBearbeitbar,
-                      enabled: _auswahlAnlagentypSpalte != null,
-                      onEnabledChanged: (enabled) {
-                        setState(() {
-                          if (enabled) {
-                            _auswahlAnlagentypSpalte = 2;
-                          } else {
-                            _auswahlAnlagentypSpalte = null;
-                          }
-                        });
-                      },
-                      onChanged: (value) {
-                        setState(() {
-                          _auswahlAnlagentypSpalte = value;
-                        });
-                      },
-                      onBearbeitbarChanged: (value) {
-                        setState(() {
-                          _auswahlAnlagentypBearbeitbar = value;
-                        });
-                      },
-                      icon: Icons.checklist,
-                      color: Colors.indigo,
-                    ),
-                    
-                    const SizedBox(height: 24),
-                    
-                    // Validierung
-                    if (_hasDuplicateColumns())
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.red.shade200, width: 1.5),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700, size: 24),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Achtung: Alle Spalten müssen unterschiedlich sein!',
-                                style: TextStyle(
-                                  color: Colors.red.shade700,
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
+            Padding(
+              padding: const EdgeInsets.only(left: 32),
+              child: Container(height: 20, width: 2, color: Colors.grey.shade300),
+            ),
+
+            // 3. EBENE: UNTERSCHEIDUNG
+            _buildHierarchicalCard(
+              color: Colors.orange.shade50,
+              borderColor: Colors.orange.shade200,
+              icon: Icons.build_circle_outlined,
+              iconColor: Colors.orange,
+              title: "Ebene 3: Struktur-Kennung",
+              description: "Wie wird zwischen Anlage und Bauteil unterschieden?",
+              content: Column(
+                children: [
+                  const Text(
+                    "Spalte, die 'A' (Anlage) oder 'B' (Bauteil) enthält.",
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildCompactInput(
+                    label: 'Spalte A/B Kennung',
+                    value: _anlageBauteilSpalte,
+                    onChanged: (v) => setState(() => _anlageBauteilSpalte = v),
+                  ),
+                ],
               ),
             ),
             
-            const SizedBox(height: 20),
-            
-            // Hinweise Card
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.blue.shade700, size: 24),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Hinweise',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _buildHintItem('Die Spaltennummern beginnen bei 0 (erste Spalte = 0, zweite Spalte = 1, etc.)'),
-                    _buildHintItem('"Auswahl Anlagentyp" ist die Spalte, die im Dropdown für die Vorlagenauswahl verwendet wird'),
-                    _buildHintItem('"Bearbeitbar" bestimmt, ob die Spalte nach dem Import manuell geändert werden kann'),
-                    _buildHintItem('Diese Einstellungen sind projektbezogen und werden pro Projekt gespeichert'),
-                  ],
-                ),
-              ),
-            ),
+            const SizedBox(height: 24),
+            _buildValidationWarning(),
+            const SizedBox(height: 40),
           ],
         ),
       ),
     );
   }
 
-  bool _hasDuplicateColumns() {
-    final columns = <int?>[
-      _gewerkSpalte,
-      _anlageBauteilSpalte,
-      _anlagentypSpalte,
-      _bezeichnungSpalte,
-      _parameterSpalte,
-      _auswahlAnlagentypSpalte,
-    ].where((c) => c != null).toList();
-    
-    return columns.length != columns.toSet().length;
-  }
+  // --- Helper Widgets ---
 
-  Widget _buildHintItem(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('• ', style: TextStyle(color: Colors.grey[700], fontSize: 16)),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[700],
-                height: 1.5,
-              ),
-            ),
+  Widget _buildHierarchicalCard({
+    required Color color,
+    required Color borderColor,
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String description,
+    required Widget content,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 5,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSpaltenSelector({
-    required String label,
-    required int value,
-    required bool bearbeitbar,
-    required ValueChanged<int> onChanged,
-    required ValueChanged<bool> onBearbeitbarChanged,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -573,315 +392,142 @@ class _TemplateCsvSettingsPageState extends State<TemplateCsvSettingsPage> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: borderColor.withOpacity(0.5)),
                 ),
-                child: Icon(icon, color: color, size: 24),
+                child: Icon(icon, color: iconColor, size: 24),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 16, 
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87
+                      ),
+                    ),
+                    Text(
+                      description,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.grid_on, size: 14, color: Colors.grey[600]),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Spaltennummer',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 120,
-                      child: TextField(
-                        controller: TextEditingController(text: value.toString()),
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: color.withOpacity(0.3)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: color.withOpacity(0.3)),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: color, width: 2),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 12,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          prefixIcon: Icon(Icons.numbers, size: 18, color: color),
-                        ),
-                        onChanged: (text) {
-                          final newValue = int.tryParse(text);
-                          if (newValue != null && newValue >= 0) {
-                            onChanged(newValue);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 2,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          bearbeitbar ? Icons.edit : Icons.lock,
-                          size: 14,
-                          color: Colors.grey[600],
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Bearbeitbar',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: bearbeitbar ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: bearbeitbar ? color.withOpacity(0.3) : Colors.grey.withOpacity(0.3),
-                        ),
-                      ),
-                      child: SwitchListTile(
-                        value: bearbeitbar,
-                        onChanged: onBearbeitbarChanged,
-                        activeColor: color,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                        dense: true,
-                        title: Text(
-                          bearbeitbar ? 'Ja' : 'Nein',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: bearbeitbar ? color : Colors.grey[600],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          Padding(
+            padding: const EdgeInsets.only(left: 4.0), 
+            child: content,
           ),
         ],
       ),
     );
   }
 
-  Widget _buildOptionalSpaltenSelector({
+  Widget _buildCompactInput({
     required String label,
-    required int? value,
-    required bool bearbeitbar,
-    required bool enabled,
-    required ValueChanged<bool> onEnabledChanged,
+    required int value,
     required ValueChanged<int> onChanged,
-    required ValueChanged<bool> onBearbeitbarChanged,
-    required IconData icon,
-    required Color color,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: enabled ? color.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
-        ),
+    return TextField(
+      controller: TextEditingController(text: value.toString())
+        ..selection = TextSelection.fromPosition(TextPosition(offset: value.toString().length)),
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: label,
+        isDense: true,
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        prefixText: 'Spalte ',
+        prefixStyle: const TextStyle(color: Colors.grey, fontSize: 13),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: enabled ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  icon,
-                  color: enabled ? color : Colors.grey,
-                  size: 24,
-                ),
+      onChanged: (text) {
+        final newValue = int.tryParse(text);
+        if (newValue != null && newValue >= 0) {
+          onChanged(newValue);
+        }
+      },
+    );
+  }
+
+  Widget _buildToggleRow({
+    required IconData icon,
+    required String label,
+    required bool isActive,
+    required ValueChanged<bool> onToggle,
+    Widget? child,
+  }) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 20, color: Colors.grey[600]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w500),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: enabled ? Colors.black87 : Colors.grey,
-                  ),
-                ),
-              ),
-              Switch(
-                value: enabled,
-                onChanged: onEnabledChanged,
-                activeColor: color,
-              ),
-            ],
-          ),
-          if (enabled && value != null) ...[
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.grid_on, size: 14, color: Colors.grey[600]),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Spaltennummer',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        width: 120,
-                        child: TextField(
-                          controller: TextEditingController(text: value.toString()),
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: color.withOpacity(0.3)),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: color.withOpacity(0.3)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: color, width: 2),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 12,
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            prefixIcon: Icon(Icons.numbers, size: 18, color: color),
-                          ),
-                          onChanged: (text) {
-                            final newValue = int.tryParse(text);
-                            if (newValue != null && newValue >= 0) {
-                              onChanged(newValue);
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  flex: 2,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            bearbeitbar ? Icons.edit : Icons.lock,
-                            size: 14,
-                            color: Colors.grey[600],
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Bearbeitbar',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey[600],
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: bearbeitbar ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: bearbeitbar ? color.withOpacity(0.3) : Colors.grey.withOpacity(0.3),
-                          ),
-                        ),
-                        child: SwitchListTile(
-                          value: bearbeitbar,
-                          onChanged: onBearbeitbarChanged,
-                          activeColor: color,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                          dense: true,
-                          title: Text(
-                            bearbeitbar ? 'Ja' : 'Nein',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: bearbeitbar ? color : Colors.grey[600],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            ),
+            Switch(
+              value: isActive,
+              onChanged: onToggle,
+              activeColor: Colors.blue,
             ),
           ],
-        ],
-      ),
+        ),
+        if (isActive && child != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, left: 0),
+            child: child,
+          ),
+      ],
     );
+  }
+
+  Widget _buildValidationWarning() {
+    final values = [
+      _gewerkSpalte,
+      _anlageBauteilSpalte,
+      _anlagentypSpalte,
+      _bezeichnungSpalte,
+      _parameterSpalte,
+      if (_auswahlAnlagentypSpalte != null) _auswahlAnlagentypSpalte,
+    ];
+    final uniqueValues = values.toSet();
+    
+    if (values.length != uniqueValues.length) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Achtung: Eine Spaltennummer wurde mehrfach vergeben!',
+                style: TextStyle(
+                  color: Colors.red.shade900,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return const SizedBox.shrink();
   }
 }

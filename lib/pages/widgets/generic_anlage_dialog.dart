@@ -1,11 +1,15 @@
 // lib/pages/widgets/generic_anlage_dialog.dart
 
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
+import '../../providers/database_provider.dart';
 import '../../services/anlage_validation_service.dart';
 import '../../services/ocr_service.dart';
 import 'photo_manager.dart';
@@ -77,7 +81,7 @@ class ShortenedUnderlineInputBorder extends InputBorder {
   }
 }
 
-class GenericAnlageDialog extends StatefulWidget {
+class GenericAnlageDialog extends ConsumerStatefulWidget {
   final Disziplin discipline;
   final String buildingId;
   final String floorId;
@@ -100,16 +104,18 @@ class GenericAnlageDialog extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<GenericAnlageDialog> createState() => _GenericGewerkDialogState();
+  ConsumerState<GenericAnlageDialog> createState() => _GenericGewerkDialogState();
 }
 
-class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
+class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   late TextEditingController _nameController;
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
   late PhotoManager _photoManager;
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
+  bool _isNameEditable = true;
+  late Disziplin _currentDiscipline; // Aktuelle Disziplin-Daten (frisch aus DB geladen)
   
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
@@ -120,6 +126,30 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   void initState() {
     super.initState();
     _photoManager = PhotoManager();
+    // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
+    _currentDiscipline = widget.discipline;
+    _initData();
+  }
+
+  Future<void> _initData() async {
+    // Lade die aktuelle Disziplin aus der Datenbank, um sicherzustellen, dass Schema-Änderungen sofort wirksam werden
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      final disciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+      final updatedDiscipline = disciplines.firstWhere(
+        (d) => d.label == widget.discipline.label,
+        orElse: () => widget.discipline, // Fallback auf übergebene Disziplin
+      );
+      if (mounted) {
+        setState(() {
+          _currentDiscipline = updatedDiscipline;
+        });
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden der Disziplin in GenericAnlageDialog: $e');
+      // Bei Fehler die übergebene Disziplin verwenden
+      _currentDiscipline = widget.discipline;
+    }
     if (widget.existingAnlage != null) {
       _params.addAll(widget.existingAnlage!.params);
       // Tracke alle Felder, die beim Initialisieren bereits einen Wert hatten
@@ -147,6 +177,75 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
     }
     _nameController = TextEditingController(text: widget.existingAnlage?.name ?? '');
     _nameController.addListener(_updateValidationStatus);
+
+    // Lade CSV-Einstellungen für Name-Bearbeitbarkeit und Vorbefüllung
+    await _loadSettingsAndPrefill();
+  }
+
+  Future<void> _loadSettingsAndPrefill() async {
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      final projectId = await dbService.getProjectIdByBuildingId(widget.buildingId);
+      if (projectId == null) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'csv_settings_$projectId';
+      final settingsJson = prefs.getString(key);
+      
+      if (settingsJson != null) {
+        final settings = json.decode(settingsJson) as Map<String, dynamic>;
+        setState(() {
+          _isNameEditable = settings['nameBearbeitbar'] as bool? ?? true;
+        });
+
+        // Vorbefüllung nur bei Neuanlage
+        if (widget.existingAnlage == null) {
+          // Suche Felder im Schema, die diesen Spalten entsprechen
+          for (var field in _currentDiscipline.schema) {
+            final fieldKey = field['key'];
+            if (fieldKey == null) continue;
+
+            // Vorbefüllung "Gewerk"
+            if (field['label']?.toString().toLowerCase().contains('gewerk') == true) {
+              _params[fieldKey] = _currentDiscipline.label;
+              if (!_controllers.containsKey(fieldKey)) {
+                _controllers[fieldKey] = TextEditingController(text: _currentDiscipline.label);
+                _controllers[fieldKey]!.addListener(_updateValidationStatus);
+              } else {
+                _controllers[fieldKey]!.text = _currentDiscipline.label;
+              }
+            }
+
+            // Vorbefüllung "Anlagentyp"
+            if (field['label']?.toString().toLowerCase().contains('anlagentyp') == true ||
+                field['label']?.toString().toLowerCase().contains('typ') == true) {
+              _params[fieldKey] = _currentDiscipline.label; // Standardmäßig das Gewerk als Typ
+              if (!_controllers.containsKey(fieldKey)) {
+                _controllers[fieldKey] = TextEditingController(text: _currentDiscipline.label);
+                _controllers[fieldKey]!.addListener(_updateValidationStatus);
+              } else {
+                _controllers[fieldKey]!.text = _currentDiscipline.label;
+              }
+            }
+
+            // Vorbefüllung "Anlage/Bauteil"
+            if (field['label']?.toString().toLowerCase().contains('bauteil') == true ||
+                field['label']?.toString().toLowerCase() == 'a/b') {
+              final value = widget.parentId != null ? 'B' : 'A';
+              _params[fieldKey] = value;
+              if (!_controllers.containsKey(fieldKey)) {
+                _controllers[fieldKey] = TextEditingController(text: value);
+                _controllers[fieldKey]!.addListener(_updateValidationStatus);
+              } else {
+                _controllers[fieldKey]!.text = value;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
+    }
   }
 
   @override
@@ -321,7 +420,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                     mainAxisSize: MainAxisSize.min,
                     children: results.entries.map((e) {
                       // Finde das Label für den Key im Schema
-                      final fieldDef = widget.discipline.schema.firstWhere(
+                      final fieldDef = _currentDiscipline.schema.firstWhere(
                         (f) => f['key'] == e.key,
                         orElse: () => {'label': e.key},
                       );
@@ -407,14 +506,14 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                   
                   // 1. Suche das passende Feld im Schema
                   // Zuerst versuchen: Exakter Key-Match
-                  var fieldDef = widget.discipline.schema.firstWhere(
+                  var fieldDef = _currentDiscipline.schema.firstWhere(
                     (f) => f['key'] == ocrKey,
-                    orElse: () => <String, String>{},
+                    orElse: () => <String, dynamic>{},
                   );
                   
                   // Falls kein exakter Match: Suche über Label oder Key-Präfix
                   if (fieldDef.isEmpty) {
-                    fieldDef = widget.discipline.schema.firstWhere(
+                    fieldDef = _currentDiscipline.schema.firstWhere(
                       (f) {
                         final schemaKey = f['key'] ?? '';
                         final schemaLabel = f['label'] ?? '';
@@ -439,7 +538,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         
                         return false;
                       },
-                      orElse: () => <String, String>{},
+                      orElse: () => <String, dynamic>{},
                     );
                   }
                   
@@ -487,8 +586,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                   buildingId: widget.buildingId,
                   isMarker: widget.existingAnlage?.isMarker ?? false,
                   markerInfo: widget.existingAnlage?.markerInfo,
-                  markerType: widget.discipline.label,
-                  discipline: widget.discipline,
+                  markerType: _currentDiscipline.label,
+                  discipline: _currentDiscipline,
                 );
 
                 // Setze Validierungsstatus für alle erkannten Felder, die im Schema sind
@@ -497,13 +596,13 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                   String normalize(String s) => s.toLowerCase().replaceAll(RegExp(r'\s+'), '');
                   
                   // Finde das passende Feld (gleiche Logik wie oben)
-                  var fieldDef = widget.discipline.schema.firstWhere(
+                  var fieldDef = _currentDiscipline.schema.firstWhere(
                     (f) => f['key'] == ocrKey,
-                    orElse: () => <String, String>{},
+                    orElse: () => <String, dynamic>{},
                   );
                   
                   if (fieldDef.isEmpty) {
-                    fieldDef = widget.discipline.schema.firstWhere(
+                    fieldDef = _currentDiscipline.schema.firstWhere(
                       (f) {
                         final schemaKey = f['key'] ?? '';
                         final schemaLabel = f['label'] ?? '';
@@ -516,7 +615,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                         if (normalizedSchemaKey.contains(normalizedOcrKey)) return true;
                         return false;
                       },
-                      orElse: () => <String, String>{},
+                      orElse: () => <String, dynamic>{},
                     );
                   }
                   
@@ -827,8 +926,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       buildingId: widget.buildingId,
       isMarker: widget.existingAnlage?.isMarker ?? false,
       markerInfo: widget.existingAnlage?.markerInfo,
-      markerType: widget.discipline.label,
-      discipline: widget.discipline,
+      markerType: _currentDiscipline.label,
+      discipline: _currentDiscipline,
     );
     
     final isCurrentlyValidated = AnlageValidationService.isFieldValidated(tempAnlage, key);
@@ -847,8 +946,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       buildingId: widget.buildingId,
       isMarker: widget.existingAnlage?.isMarker ?? false,
       markerInfo: widget.existingAnlage?.markerInfo,
-      markerType: widget.discipline.label,
-      discipline: widget.discipline,
+      markerType: _currentDiscipline.label,
+      discipline: _currentDiscipline,
     );
     
     final isCurrentlyMissing = AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key);
@@ -858,32 +957,10 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
   }
 
   List<Widget> _buildSchemaFields() {
-    final schema = List<Map<String, dynamic>>.from(widget.discipline.schema);
-    final schemaKeys = schema
-        .map((e) => (e['key'] ?? '').toString())
-        .where((k) => k.trim().isNotEmpty)
-        .toSet();
-
+    // Verwende nur die Felder aus dem Schema - keine extraKeys mehr hinzufügen
+    // Das stellt sicher, dass nur die definierten Felder angezeigt werden
+    final schema = List<Map<String, dynamic>>.from(_currentDiscipline.schema);
     final parameterKeyFromCsv = _params['__parameterKey']?.toString();
-
-    final extraKeys = _params.keys
-        .where((k) =>
-            !schemaKeys.contains(k) &&
-            !k.startsWith('_') &&
-            !k.startsWith('__') &&
-            k != 'photoPaths' &&
-            k != 'Leistungsparameter' &&
-            (parameterKeyFromCsv == null || k != parameterKeyFromCsv)) // "Parameter" ausschließen
-        .toList()
-      ..sort();
-
-    for (final k in extraKeys) {
-      schema.add({
-        'key': k,
-        'label': k,
-        'type': 'text',
-      });
-    }
     
     final fields = <Widget>[];
     final tempAnlage = Anlage(
@@ -895,8 +972,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
       buildingId: widget.buildingId,
       isMarker: widget.existingAnlage?.isMarker ?? false,
       markerInfo: widget.existingAnlage?.markerInfo,
-      markerType: widget.discipline.label,
-      discipline: widget.discipline,
+      markerType: _currentDiscipline.label,
+      discipline: _currentDiscipline,
     );
     
     for (var fieldDef in schema) {
@@ -907,6 +984,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
 
       final label = fieldDef['label'] as String;
       final type = fieldDef['type'] ?? 'text';
+      final isEditable = fieldDef['editable'] ?? true;
       
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
@@ -922,7 +1000,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
         actionButton = Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _toggleFieldMissing(key),
+            onTap: isEditable ? () => _toggleFieldMissing(key) : null,
             borderRadius: BorderRadius.circular(12),
             child: Container(
               padding: const EdgeInsets.all(10),
@@ -939,7 +1017,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
         actionButton = Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _toggleFieldValidation(key),
+            onTap: isEditable ? () => _toggleFieldValidation(key) : null,
             borderRadius: BorderRadius.circular(12),
             child: Container(
               padding: const EdgeInsets.all(10),
@@ -958,7 +1036,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: isFieldMissing ? Colors.grey[200] : Colors.grey[50],
+            color: !isEditable ? Colors.grey[100] : (isFieldMissing ? Colors.grey[200] : Colors.grey[50]),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: isFieldValidated ? Colors.green.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
@@ -972,12 +1050,17 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                 Expanded(
                   child: TextField(
                     controller: controller,
+                    readOnly: !isEditable,
                     keyboardType: type == 'number' || type == 'int' ? TextInputType.number : TextInputType.text,
-                    style: TextStyle(fontSize: 15, color: Colors.grey[900]),
+                    style: TextStyle(
+                      fontSize: 15, 
+                      color: isEditable ? Colors.grey[900] : Colors.grey[600],
+                    ),
                     decoration: InputDecoration(
                       labelText: label,
                       labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
                       border: InputBorder.none,
+                      suffixIcon: !isEditable ? Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]) : null,
                     ),
                     onChanged: (val) {
                       final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
@@ -1273,9 +1356,11 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                           ),
                           child: TextField(
                             controller: _nameController,
-                            style: const TextStyle(
+                            readOnly: !_isNameEditable,
+                            style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
+                              color: _isNameEditable ? Colors.black87 : Colors.grey[600],
                             ),
                             decoration: InputDecoration(
                               labelText: (widget.parentId != null || widget.existingAnlage?.parentId != null) 
@@ -1285,6 +1370,7 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                                 color: Colors.grey[600],
                                 fontWeight: FontWeight.w500,
                               ),
+                              suffixIcon: !_isNameEditable ? Icon(Icons.lock_outline, size: 18, color: Colors.grey[400]) : null,
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16,
@@ -1386,8 +1472,8 @@ class _GenericGewerkDialogState extends State<GenericAnlageDialog> {
                           buildingId: widget.buildingId,
                           isMarker: widget.existingAnlage?.isMarker ?? false,
                           markerInfo: widget.existingAnlage?.markerInfo,
-                          markerType: widget.discipline.label,
-                          discipline: widget.discipline,
+                          markerType: _currentDiscipline.label,
+                          discipline: _currentDiscipline,
                         );
 
                         // Prüfe Validierung und setze Status automatisch
