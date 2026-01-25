@@ -13,7 +13,6 @@ import 'package:path_provider/path_provider.dart';
 import '../models/disziplin_manager.dart';
 import '../models/project.dart';
 import '../models/building.dart';
-import '../models/envelope.dart';
 import '../models/floor_plan.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../models/anlage.dart';
@@ -40,6 +39,7 @@ import 'tabs/technik_main_tab.dart';
 // SystemsPage importieren
 import 'systems_page.dart';
 import 'csv_settings_page.dart';
+import 'settings_page.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -130,12 +130,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         protectedMonument: false,
         units: 0,
         floorArea: 0.0,
-        envelope: Envelope(
-          walls: [],
-          roof: Roof(type: '', uValue: 0.0, area: 0.0, insulation: false),
-          floor: FloorSurface(type: '', uValue: 0.0, area: 0.0, insulated: false),
-          windows: [],
-        ),
         systems: BuildingSystems(),
         floors: [],
       );
@@ -1075,12 +1069,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         protectedMonument: false,
         units: 0,
         floorArea: 0.0,
-        envelope: Envelope(
-          walls: [],
-          roof: Roof(type: '', uValue: 0.0, area: 0.0, insulation: false),
-          floor: FloorSurface(type: '', uValue: 0.0, area: 0.0, insulated: false),
-          windows: [],
-        ),
         systems: BuildingSystems(),
         floors: <FloorPlan>[],
       );
@@ -1971,7 +1959,16 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ),
         actions: inSelectionMode
             ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
-            : [],
+            : [
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (context) => const SettingsPage()),
+                    );
+                  },
+                ),
+              ],
       ),
       body: TabBarView(
         controller: _tabController,
@@ -1998,6 +1995,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           // neu: mit controller & keys
           TechnikMainTab(
             key: _technikTabKey,
+            projectId: _currentProject.id,
             building: _building,
             index: _currentBuildingIndex,
             tabController: _technikTabController,

@@ -1,6 +1,5 @@
 // lib/models/building.dart
 
-import 'envelope.dart';
 import 'floor_plan.dart';
 import 'anlage.dart';
 
@@ -50,7 +49,6 @@ class Building {
   bool protectedMonument;
   int units;
   double floorArea;
-  Envelope envelope;
   BuildingSystems systems;
   List<FloorPlan> floors;
 
@@ -67,23 +65,11 @@ class Building {
     required this.protectedMonument,
     required this.units,
     required this.floorArea,
-    required this.envelope,
     required this.systems,
     required this.floors,
   });
 
   factory Building.fromJson(Map<String, dynamic> json) {
-    // Envelope
-    final envelopeJson = json['envelope'] as Map<String, dynamic>?;
-    final envelope = envelopeJson != null
-        ? Envelope.fromJson(envelopeJson)
-        : Envelope(
-      walls: [],
-      roof: Roof(type: '', uValue: 0.0, area: 0.0, insulation: false),
-      floor: FloorSurface(type: '', uValue: 0.0, area: 0.0, insulated: false),
-      windows: [],
-    );
-
     // Systems
     final systemsJson = json['systems'] as Map<String, dynamic>?;
     final systems = BuildingSystems.fromJson(systemsJson);
@@ -111,7 +97,6 @@ class Building {
       protectedMonument: json['protectedMonument'] as bool? ?? false,
       units: json['units'] as int? ?? 0,
       floorArea: (json['floorArea'] as num?)?.toDouble() ?? 0.0,
-      envelope: envelope,
       systems: systems,
       floors: floorsList,
     );
@@ -130,7 +115,6 @@ class Building {
     'protectedMonument': protectedMonument,
     'units': units,
     'floorArea': floorArea,
-    'envelope': envelope.toJson(),
     'systems': systems.toJson(),
     'floors': floors.map((e) => e.toJson()).toList(),
   };

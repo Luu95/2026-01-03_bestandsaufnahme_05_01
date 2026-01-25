@@ -42,6 +42,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   bool _isLoading = true;
   List<Disziplin> _disciplines = [];
+  List<Map<String, dynamic>> _globalSchema = [];
+  bool _showDisciplineSelection = true;
+  int? _editingDisciplineIndex;
+  bool _editingGlobal = false;
   
   // Template CSV Settings
   int _templateGewerkSpalte = 0;
@@ -63,9 +67,38 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _loadCsvSettings(),
       _loadDisciplines(),
       _loadTemplateCsvSettings(),
+      _loadGlobalSchema(),
     ]);
+    _syncGlobalSchemaToDisciplines();
     if (mounted) {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadGlobalSchema() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'global_schema_${widget.projectId}';
+      final schemaJson = prefs.getString(key);
+      if (schemaJson != null) {
+        setState(() {
+          _globalSchema = (json.decode(schemaJson) as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+    }
+  }
+
+  Future<void> _saveGlobalSchema() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'global_schema_${widget.projectId}';
+      await prefs.setString(key, json.encode(_globalSchema));
+    } catch (e) {
+      debugPrint('Fehler beim Speichern des globalen Schemas: $e');
     }
   }
   
@@ -169,8 +202,36 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   }
 
   Future<void> _saveDisciplines() async {
+    _syncGlobalSchemaToDisciplines();
     final dbService = ref.read(databaseServiceProvider);
     await dbService.replaceDisciplines(widget.buildingId, _disciplines);
+  }
+
+  void _syncGlobalSchemaToDisciplines() {
+    // Markiere alle Felder im globalen Schema als global
+    final markedGlobalSchema = _globalSchema.map((f) => {...f, 'isGlobal': true}).toList();
+    final globalKeys = markedGlobalSchema.map((f) => f['key']).toSet();
+
+    for (int i = 0; i < _disciplines.length; i++) {
+      final d = _disciplines[i];
+      
+      // Trenne bestehende individuelle Felder von alten globalen Feldern
+      final individualFields = d.schema.where((f) => f['isGlobal'] != true).toList();
+      
+      // Entferne individuelle Felder, die jetzt im globalen Schema sind (Vermeidung von Dubletten)
+      individualFields.removeWhere((f) => globalKeys.contains(f['key']));
+
+      // Neues kombiniertes Schema: Global zuerst, dann individuell
+      final newSchema = [...markedGlobalSchema, ...individualFields];
+
+      _disciplines[i] = Disziplin(
+        label: d.label,
+        icon: d.icon,
+        color: d.color,
+        schema: newSchema,
+        groupingKey: d.groupingKey,
+      );
+    }
   }
 
 
@@ -179,9 +240,19 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     return DefaultTabController(
       length: 3,
       child: Scaffold(
-        backgroundColor: Colors.grey[100],
+        backgroundColor: const Color(0xFFF5F7FA),
         appBar: AppBar(
-          title: const Text('Anlagen-Einstellungen'),
+          title: const Text(
+            'CSV Einstellungen',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+          ),
+          backgroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black87),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
           bottom: const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
@@ -198,6 +269,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   _saveCsvSettings(),
                   _saveDisciplines(),
                   _saveTemplateCsvSettings(),
+                  _saveGlobalSchema(),
                 ]);
                 if (mounted) {
                   setState(() => _isLoading = false);
@@ -227,19 +299,22 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   Widget _buildMappingTab() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(bottom: 16.0, left: 4),
-            child: Text(
-              'Ordnen Sie Ihre CSV-Spalten der App-Hierarchie zu:',
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
+          _buildInfoCard(
+            'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
+            'Die Spaltennummern sind 0-basiert (Spalte 0 ist die erste Spalte).',
           ),
+          const SizedBox(height: 20),
+          _buildSectionHeader(
+            title: 'CSV-Mapping',
+            subtitle: 'Gewerk → Anlage → Bauteil',
+          ),
+          const SizedBox(height: 16),
           _buildHierarchicalCard(
-            color: Colors.blueGrey.shade50,
+            color: Colors.blueGrey,
             borderColor: Colors.blueGrey.shade200,
             icon: Icons.folder_open,
             iconColor: Colors.blueGrey,
@@ -253,7 +328,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ),
           _buildConnector(),
           _buildHierarchicalCard(
-            color: Colors.white,
+            color: Colors.green,
             borderColor: Colors.green.shade200,
             icon: Icons.settings_applications,
             iconColor: Colors.green,
@@ -285,7 +360,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   icon: Icons.layers,
                   label: 'Spalte für Etage?',
                   isActive: _etageSpalte != null,
-                  onToggle: (val) => setState(() => _etageSpalte = val ? 3 : null),
+                  onToggle: (val) => setState(() {
+                    _etageSpalte = val
+                        ? _nextFreeIndex([
+                            _lfdNummerSpalte,
+                            _nameSpalte,
+                            _gewerkSpalte,
+                            _parameterSpalte,
+                            _anlageBauteilSpalte,
+                          ])
+                        : null;
+                  }),
                   child: _etageSpalte != null 
                     ? _buildCompactInput(
                         label: 'Spalte Etage', 
@@ -299,7 +384,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   icon: Icons.settings_input_component,
                   label: 'Spalte für Leistungsparameter?',
                   isActive: _parameterSpalte != null,
-                  onToggle: (val) => setState(() => _parameterSpalte = val ? 4 : null),
+                  onToggle: (val) => setState(() {
+                    _parameterSpalte = val
+                        ? _nextFreeIndex([
+                            _lfdNummerSpalte,
+                            _nameSpalte,
+                            _gewerkSpalte,
+                            _etageSpalte,
+                            _anlageBauteilSpalte,
+                          ])
+                        : null;
+                  }),
                   child: _parameterSpalte != null 
                     ? _buildCompactInput(
                         label: 'Spalte Parameter', 
@@ -313,7 +408,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ),
           _buildConnector(),
           _buildHierarchicalCard(
-            color: Colors.orange.shade50,
+            color: Colors.orange,
             borderColor: Colors.orange.shade200,
             icon: Icons.build_circle_outlined,
             iconColor: Colors.orange,
@@ -323,7 +418,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               icon: Icons.account_tree,
               label: 'Unterscheidung A/B nutzen?',
               isActive: _anlageBauteilSpalte != null,
-              onToggle: (val) => setState(() => _anlageBauteilSpalte = val ? 4 : null),
+              onToggle: (val) => setState(() {
+                _anlageBauteilSpalte = val
+                    ? _nextFreeIndex([
+                        _lfdNummerSpalte,
+                        _nameSpalte,
+                        _gewerkSpalte,
+                        _etageSpalte,
+                        _parameterSpalte,
+                      ])
+                    : null;
+              }),
               child: _anlageBauteilSpalte != null 
                 ? _buildCompactInput(
                     label: 'Spalte A/B', 
@@ -343,251 +448,200 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   // --- SCHEMA TAB ---
 
   Widget _buildSchemaTab() {
-    // Nimm das Schema des ersten Gewerks (alle haben das gleiche Schema)
-    final currentSchema = _disciplines.isNotEmpty 
-        ? List<Map<String, dynamic>>.from(_disciplines.first.schema)
-        : <Map<String, dynamic>>[];
+    if (_disciplines.isEmpty && _globalSchema.isEmpty) {
+      // Wenn alles leer ist, lade Standard-Heizung als Basis für Global wenn nichts da ist
+      // Aber eigentlich sollte der User einfach starten können.
+    }
 
-    return Column(
-      children: [
-        // Header mit Info und Button
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border(
-              bottom: BorderSide(color: Colors.grey.withOpacity(0.2)),
+    if (!_showDisciplineSelection) {
+      if (_editingGlobal) {
+        return Column(
+          children: [
+            _buildBackToSelectionHeader('Globales Standard-Schema'),
+            Expanded(
+              child: SchemaEditorWidget(
+                existingSchema: _globalSchema,
+                allowEditGlobal: true,
+                onSchemaChanged: (newSchema) {
+                  setState(() {
+                    _globalSchema = newSchema.map((f) => {...f, 'isGlobal': true}).toList();
+                    _syncGlobalSchemaToDisciplines();
+                  });
+                },
+              ),
             ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Eingabefelder',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _disciplines.isEmpty
-                          ? 'Keine Gewerke definiert'
-                          : 'Gemeinsames Schema für alle ${_disciplines.length} Gewerke',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
+          ],
+        );
+      } else if (_editingDisciplineIndex != null) {
+        final d = _disciplines[_editingDisciplineIndex!];
+        return Column(
+          children: [
+            _buildBackToSelectionHeader('Gewerk: ${d.label}'),
+            Expanded(
+              child: SchemaEditorWidget(
+                existingSchema: d.schema,
+                onSchemaChanged: (newSchema) {
+                  setState(() {
+                    _disciplines[_editingDisciplineIndex!] = Disziplin(
+                      label: d.label,
+                      icon: d.icon,
+                      color: d.color,
+                      schema: newSchema,
+                      groupingKey: d.groupingKey,
+                    );
+                  });
+                },
               ),
-              ElevatedButton.icon(
-                onPressed: _editSchemaForAllDisciplines,
-                icon: const Icon(Icons.edit_note, size: 20),
-                label: const Text('Bearbeiten'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Liste der Felder anzeigen
-        Expanded(
-          child: _disciplines.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.info_outline, size: 48, color: Colors.grey),
-                      const SizedBox(height: 16),
-                      const Text('Keine Gewerke definiert'),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Bitte fügen Sie zuerst Gewerke hinzu',
-                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                      ),
-                    ],
-                  ),
-                )
-              : currentSchema.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.schema_outlined, size: 48, color: Colors.grey),
-                          const SizedBox(height: 16),
-                          const Text('Noch keine Eingabefelder'),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Klicken Sie auf "Bearbeiten" um Felder hinzuzufügen',
-                            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: currentSchema.length,
-                      itemBuilder: (context, index) {
-                        final field = currentSchema[index];
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          child: ListTile(
-                            leading: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: field['type'] == 'int'
-                                    ? Colors.orange.withOpacity(0.15)
-                                    : Colors.green.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                field['type'] == 'int' ? Icons.numbers : Icons.text_fields,
-                                color: field['type'] == 'int' ? Colors.orange[700] : Colors.green[700],
-                                size: 20,
-                              ),
-                            ),
-                            title: Text(
-                              field['label'] ?? field['key'] ?? 'Unbekannt',
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Key: ${field['key'] ?? 'N/A'}',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey[600], fontFamily: 'monospace'),
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: field['type'] == 'int'
-                                            ? Colors.orange.withOpacity(0.15)
-                                            : Colors.green.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        field['type'] == 'int' ? 'Zahl' : 'Text',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: field['type'] == 'int' ? Colors.orange[800] : Colors.green[800],
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: (field['editable'] ?? true)
-                                            ? Colors.blue.withOpacity(0.15)
-                                            : Colors.grey.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        (field['editable'] ?? true) ? 'Editierbar' : 'Gesperrt',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: (field['editable'] ?? true) ? Colors.blue[800] : Colors.grey[800],
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _editSchemaForAllDisciplines() async {
-    if (_disciplines.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Keine Gewerke definiert'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    // Nimm das Schema des ersten Gewerks (alle haben das gleiche Schema)
-    final currentSchema = List<Map<String, dynamic>>.from(_disciplines.first.schema);
-
-    final newSchema = await showModalBottomSheet<List<Map<String, dynamic>>>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => SchemaEditorDialog(existingSchema: currentSchema),
-    );
-
-    if (newSchema != null) {
-      _applySchemaToAllDisciplines(newSchema);
-    }
-  }
-
-  void _applySchemaToAllDisciplines(List<Map<String, dynamic>> newSchema) {
-    setState(() {
-      // Wende das neue Schema auf alle Gewerke an
-      for (int i = 0; i < _disciplines.length; i++) {
-        final d = _disciplines[i];
-        _disciplines[i] = Disziplin(
-          label: d.label,
-          icon: d.icon,
-          color: d.color,
-          schema: newSchema,
-          groupingKey: d.groupingKey,
+            ),
+          ],
         );
       }
-    });
+    }
+
+    return _buildSchemaSelectionView();
+  }
+
+  Widget _buildBackToSelectionHeader(String title) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: Colors.white,
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => setState(() {
+              _showDisciplineSelection = true;
+              _editingGlobal = false;
+              _editingDisciplineIndex = null;
+            }),
+          ),
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSchemaSelectionView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Konfigurations-Modus wählen',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Wählen Sie, ob Sie das globale Standard-Schema für neue Gewerke oder ein spezifisches Gewerk bearbeiten möchten.',
+            style: TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 24),
+          
+          // GLOBAL CARD
+          _buildSelectionCard(
+            title: 'Globales Standard-Schema',
+            subtitle: 'Definiert, wie neue Gewerke standardmäßig aussehen',
+            icon: Icons.public,
+            color: Colors.blue,
+            onTap: () => setState(() {
+              _showDisciplineSelection = false;
+              _editingGlobal = true;
+            }),
+          ),
+          
+          const SizedBox(height: 32),
+          const Text(
+            'Individuelle Gewerke',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          
+          if (_disciplines.isEmpty)
+            const Center(child: Text('Keine Gewerke vorhanden'))
+          else
+            ...List.generate(_disciplines.length, (index) {
+              final d = _disciplines[index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _buildSelectionCard(
+                  title: d.label,
+                  subtitle: '${d.schema.length} Felder definiert',
+                  icon: d.icon,
+                  color: d.color,
+                  onTap: () => setState(() {
+                    _showDisciplineSelection = false;
+                    _editingDisciplineIndex = index;
+                  }),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(16),
+        leading: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
+    );
   }
 
   // --- TEMPLATE TAB ---
 
   Widget _buildTemplateTab() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(bottom: 16.0, left: 4),
-                  child: Text(
-                    'Ordnen Sie Ihre CSV-Spalten für Gewerkevorlagen zu:',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.upload_file),
-                tooltip: 'Vorlagen importieren',
-                onPressed: _importTemplates,
-              ),
-            ],
+          _buildInfoCard(
+            'Konfigurieren Sie hier das Mapping für Vorlagen. '
+            'Damit lassen sich Gewerke und Anlagentypen später schneller anlegen.',
           ),
+          const SizedBox(height: 20),
+          _buildSectionHeader(
+            title: 'CSV-Mapping für Vorlagen',
+            subtitle: 'Gewerk → Vorlagendetails → Struktur',
+            trailing: _buildHeaderAction(
+              icon: Icons.upload_file,
+              label: 'Vorlagen importieren',
+              onPressed: _importTemplates,
+            ),
+          ),
+          const SizedBox(height: 16),
 
           // 1. EBENE: GEWERK
           _buildTemplateHierarchicalCard(
-            color: Colors.blueGrey.shade50,
+            color: Colors.blueGrey,
             borderColor: Colors.blueGrey.shade200,
             icon: Icons.folder_open,
             iconColor: Colors.blueGrey,
@@ -604,7 +658,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
           // 2. EBENE: VORLAGEN-DEFINITION (ANLAGE)
           _buildTemplateHierarchicalCard(
-            color: Colors.white,
+            color: Colors.green,
             borderColor: Colors.green.shade200,
             icon: Icons.settings_applications,
             iconColor: Colors.green,
@@ -648,7 +702,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   icon: Icons.checklist,
                   label: 'Gibt es eine Spalte für Auswahl-Typ?',
                   isActive: _templateAuswahlAnlagentypSpalte != null,
-                  onToggle: (val) => setState(() => _templateAuswahlAnlagentypSpalte = val ? 2 : null),
+                  onToggle: (val) => setState(() {
+                    _templateAuswahlAnlagentypSpalte = val
+                        ? _nextFreeIndex([
+                            _templateGewerkSpalte,
+                            _templateAnlageBauteilSpalte,
+                            _templateAnlagentypSpalte,
+                            _templateBezeichnungSpalte,
+                            _templateParameterSpalte,
+                          ])
+                        : null;
+                  }),
                   child: _templateAuswahlAnlagentypSpalte != null 
                     ? _buildCompactInput(
                         label: 'Spalte Auswahl-Typ', 
@@ -665,7 +729,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
           // 3. EBENE: UNTERSCHEIDUNG
           _buildTemplateHierarchicalCard(
-            color: Colors.orange.shade50,
+            color: Colors.orange,
             borderColor: Colors.orange.shade200,
             icon: Icons.build_circle_outlined,
             iconColor: Colors.orange,
@@ -705,8 +769,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: borderColor, width: 1.5),
         boxShadow: [
           BoxShadow(
@@ -725,9 +789,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: borderColor.withOpacity(0.5)),
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(icon, color: iconColor, size: 24),
               ),
@@ -907,9 +970,16 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -917,7 +987,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         children: [
           Row(
             children: [
-              Icon(icon, color: iconColor, size: 24),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: iconColor, size: 24),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -950,7 +1027,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         isDense: true,
         filled: true,
         fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        helperText: '0 = erste Spalte',
         prefixText: 'Spalte ',
       ),
       onChanged: (text) {
@@ -971,13 +1049,21 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   }) {
     return Column(
       children: [
-        Row(
-          children: [
-            Icon(icon, size: 20, color: Colors.grey[600]),
-            const SizedBox(width: 8),
-            Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w500))),
-            Switch(value: isActive, onChanged: onToggle),
-          ],
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: Colors.grey[600]),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w500))),
+              Switch.adaptive(value: isActive, onChanged: onToggle),
+            ],
+          ),
         ),
         if (isActive && child != null) Padding(padding: const EdgeInsets.only(top: 8), child: child),
       ],
@@ -1009,5 +1095,82 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       );
     }
     return const SizedBox.shrink();
+  }
+
+  Widget _buildInfoCard(String text, {Color color = Colors.blue}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.1)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, color: color, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: Colors.grey[800], fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader({
+    required String title,
+    required String subtitle,
+    Widget? trailing,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        if (trailing != null) trailing,
+      ],
+    );
+  }
+
+  Widget _buildHeaderAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.orange,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+    );
+  }
+
+  int _nextFreeIndex(List<int?> values) {
+    final used = values.whereType<int>().toSet();
+    var candidate = 0;
+    while (used.contains(candidate)) {
+      candidate++;
+    }
+    return candidate;
   }
 }

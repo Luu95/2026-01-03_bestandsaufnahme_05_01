@@ -277,5 +277,11 @@ final projectsProvider = StateNotifierProvider<ProjectsNotifier, ProjectsState>(
   return ProjectsNotifier(dbService);
 });
 
+/// Provider für das aktuell ausgewählte Projekt
+final currentProjectProvider = Provider<Project?>((ref) {
+  final state = ref.watch(projectsProvider);
+  return state.selectedProject;
+});
+
 
 

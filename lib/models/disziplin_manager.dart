@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 import 'disziplin_schnittstelle.dart'; // Nutzung des zentralen Disziplin-Modells
 import 'disziplin_defaults.dart'; // Import der Standard-Disziplinen
 import '../utils/delete_utils.dart'; // Für Bestätigungsdialog
 import '../providers/database_provider.dart';
+import '../providers/projects_provider.dart';
 import '../pages/widgets/schema_editor_dialog.dart';
 
 /// Widget zum Verwalten (Anzeigen, Hinzufügen, Bearbeiten, Löschen) von Disziplinen.
@@ -175,7 +178,10 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     final d = disziplinen[idx];
     final editedDisziplin = await showDialog<Disziplin>(
       context: context,
-      builder: (_) => DisziplinEditDialog(disziplin: d),
+      builder: (_) => DisziplinEditDialog(
+        disziplin: d,
+        projectId: ref.read(currentProjectProvider)?.id, // Wir brauchen hier auch die ProjectId
+      ),
     );
 
     if (editedDisziplin != null) {
@@ -355,7 +361,8 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
 
 class DisziplinEditDialog extends StatefulWidget {
   final Disziplin? disziplin;
-  const DisziplinEditDialog({Key? key, this.disziplin}) : super(key: key);
+  final String? projectId;
+  const DisziplinEditDialog({Key? key, this.disziplin, this.projectId}) : super(key: key);
 
   @override
   State<DisziplinEditDialog> createState() => _DisziplinEditDialogState();
@@ -365,6 +372,7 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
   late final TextEditingController nameCtrl;
   late IconData selectedIcon;
   late Color selectedColor;
+  List<Map<String, dynamic>>? _globalSchema;
 
   @override
   void initState() {
@@ -372,6 +380,27 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
     nameCtrl = TextEditingController(text: widget.disziplin?.label ?? '');
     selectedIcon = widget.disziplin?.icon ?? Icons.build;
     selectedColor = widget.disziplin?.color ?? Colors.blue;
+    _loadGlobalSchema();
+  }
+
+  Future<void> _loadGlobalSchema() async {
+    if (widget.projectId == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'global_schema_${widget.projectId}';
+      final schemaJson = prefs.getString(key);
+      if (schemaJson != null) {
+        if (mounted) {
+          setState(() {
+            _globalSchema = (json.decode(schemaJson) as List)
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+    }
   }
 
   @override
@@ -457,7 +486,7 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
                       label: nameCtrl.text.trim(),
                       icon: selectedIcon,
                       color: selectedColor,
-                      schema: widget.disziplin?.schema ?? [],
+                      schema: widget.disziplin?.schema ?? _globalSchema ?? [],
                     ));
                   },
                   style: ElevatedButton.styleFrom(

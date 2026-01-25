@@ -13,6 +13,7 @@ import '../models/floor_plan.dart';
 import '../models/marker.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/database_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/anlage_validation_service.dart';
 
 // Widgets für Anlage-Dialoge (relativ zu lib/pages/)
@@ -1143,6 +1144,25 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     bool isExpanded = false,
     VoidCallback? onToggleExpanded,
   }) {
+    final uiSettings = ref.watch(uiSettingsProvider);
+
+    String getValueByKey(String key) {
+      if (key == 'Bezeichnung') return a.name;
+      final entries = a.params.entries
+          .where((e) => e.key.toLowerCase() == key.toLowerCase())
+          .toList();
+      if (entries.isNotEmpty) return entries.first.value.toString();
+      if (key == 'Anlage/Bauteil' || key == 'Anlage/Bautel') {
+        return a.params['Anlage/Bautel']?.toString() ??
+            a.params['Anlage/Bauteil']?.toString() ??
+            '';
+      }
+      return '';
+    }
+
+    final displayTitle = getValueByKey(uiSettings.titleKey);
+    final displaySubtitle = getValueByKey(uiSettings.subtitleKey);
+
     final isSelected = _selectedAnlagenIds.contains(a.id);
     final isValidated = AnlageValidationService.getValidatedStatus(a);
     final isLastOpened = _lastOpenedAnlageId == a.id;
@@ -1153,8 +1173,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     }
     final itemKey = _anlageKeys[a.id]!;
 
-    final anlageBautel = a.params['Anlage/Bautel']?.toString() ?? '';
-    
     // Prüfe, ob irgendwo ein Selection-Mode aktiv ist (gewerkeübergreifend)
     final anySelectionActive = widget.isAnySelectionActive?.call() ?? false;
     final showSelectionCircles = _isSelectionMode || anySelectionActive;
@@ -1499,7 +1517,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                               children: [
                                 Flexible(
                                   child: Text(
-                                    a.name,
+                                    displayTitle.isEmpty ? a.name : displayTitle,
                                     style: TextStyle(
                                       fontWeight: isChild ? FontWeight.w500 : FontWeight.w600,
                                       color: isSelected
@@ -1533,14 +1551,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                         children: [
                           Expanded(
                             child: Text(
-                              () {
-                                final herstellerEntries = a.params.entries
-                                    .where((e) => e.key.toLowerCase() == 'hersteller')
-                                    .toList();
-                                return herstellerEntries.isEmpty
-                                    ? (anlageBautel.isNotEmpty ? 'Typ: $anlageBautel' : '')
-                                    : herstellerEntries.first.value.toString();
-                              }(),
+                              displaySubtitle,
                               style: TextStyle(
                                 color: Colors.grey[600],
                                 fontSize: 13,

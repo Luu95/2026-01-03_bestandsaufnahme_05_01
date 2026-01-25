@@ -6,10 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'database.dart';
 import '../models/project.dart' as models;
 import '../models/building.dart' as models;
-import '../models/envelope.dart' as models;
 import '../models/floor_plan.dart' as models;
 import '../models/anlage.dart' as models;
-import '../models/consumption.dart' as models;
 import '../models/attachments.dart' as models;
 import '../models/disziplin_schnittstelle.dart';
 
@@ -145,17 +143,6 @@ class DatabaseService {
 
   Future<models.Building> _buildingRowToModel(BuildingDb row) async {
     // Building ist hier die generierte Drift-Klasse
-    // Envelope laden
-    final envelopeRow = await _db.getEnvelopeByBuildingId(row.id);
-    final envelope = envelopeRow != null
-        ? await _envelopeRowToModel(envelopeRow)
-        : models.Envelope(
-            walls: [],
-            roof: models.Roof(type: '', uValue: 0.0, area: 0.0, insulation: false),
-            floor: models.FloorSurface(type: '', uValue: 0.0, area: 0.0, insulated: false),
-            windows: [],
-          );
-
     // Systems laden
     final anlagenRows = await _db.getAnlagenByBuildingId(row.id);
     final disciplinesMap = await _getDisciplinesMap(row.id);
@@ -198,7 +185,6 @@ class DatabaseService {
       protectedMonument: row.protectedMonument,
       units: row.units,
       floorArea: row.floorArea,
-      envelope: envelope,
       systems: systems,
       floors: floors,
     );
@@ -220,9 +206,6 @@ class DatabaseService {
       units: building.units,
       floorArea: building.floorArea,
     ));
-
-    // Envelope einfügen
-    await insertEnvelope(building.envelope, building.id);
 
     // Systems einfügen
     for (final entry in building.systems.systemsMap.entries) {
@@ -254,14 +237,6 @@ class DatabaseService {
         floorArea: Value(building.floorArea),
       ),
     );
-
-    // Envelope aktualisieren
-    final existingEnvelope = await _db.getEnvelopeByBuildingId(building.id);
-    if (existingEnvelope != null) {
-      await updateEnvelope(building.envelope, existingEnvelope.id);
-    } else {
-      await insertEnvelope(building.envelope, building.id);
-    }
 
     // Systems (Anlagen/Marker) werden NICHT mehr über updateBuilding synchronisiert.
     //
@@ -297,135 +272,6 @@ class DatabaseService {
 
   Future<void> deleteBuilding(String id) async {
     await _db.deleteBuilding(id);
-  }
-
-  // ========== ENVELOPES ==========
-
-  Future<models.Envelope> _envelopeRowToModel(EnvelopeDb row) async {
-    // Envelope ist hier die generierte Drift-Klasse
-    final wallsRows = await _db.getWallsByEnvelopeId(row.id);
-    final walls = wallsRows.map((w) => models.Wall(
-          orientation: w.orientation,
-          type: w.type,
-          uValue: w.uValue,
-          area: w.area,
-          insulation: w.insulation,
-        )).toList();
-
-    final roof = models.Roof(
-      type: row.roofType,
-      uValue: row.roofUValue,
-      area: row.roofArea,
-      insulation: row.roofInsulation,
-    );
-
-    final floor = models.FloorSurface(
-      type: row.floorType,
-      uValue: row.floorUValue,
-      area: row.floorArea,
-      insulated: row.floorInsulated,
-    );
-
-    final windowsRows = await _db.getWindowsByEnvelopeId(row.id);
-    final windows = windowsRows.map((w) => models.WindowElement(
-          orientation: w.orientation,
-          year: w.year,
-          frame: w.frame,
-          glazing: w.glazing,
-          uValue: w.uValue,
-          area: w.area,
-        )).toList();
-
-    return models.Envelope(
-      walls: walls,
-      roof: roof,
-      floor: floor,
-      windows: windows,
-    );
-  }
-
-  Future<void> insertEnvelope(models.Envelope envelope, String buildingId) async {
-    final envelopeId = buildingId; // Verwende buildingId als envelopeId
-    await _db.insertEnvelope(EnvelopesCompanion.insert(
-      id: envelopeId,
-      buildingId: buildingId,
-      roofType: envelope.roof.type,
-      roofUValue: envelope.roof.uValue,
-      roofArea: envelope.roof.area,
-      roofInsulation: envelope.roof.insulation,
-      floorType: envelope.floor.type,
-      floorUValue: envelope.floor.uValue,
-      floorArea: envelope.floor.area,
-      floorInsulated: envelope.floor.insulated,
-    ));
-
-    // Walls einfügen
-    for (final wall in envelope.walls) {
-      await _db.insertWall(WallsCompanion.insert(
-        envelopeId: envelopeId,
-        orientation: wall.orientation,
-        type: wall.type,
-        uValue: wall.uValue,
-        area: wall.area,
-        insulation: wall.insulation,
-      ));
-    }
-
-    // Windows einfügen
-    for (final window in envelope.windows) {
-      await _db.insertWindow(WindowsCompanion.insert(
-        envelopeId: envelopeId,
-        orientation: window.orientation,
-        year: window.year,
-        frame: window.frame,
-        glazing: window.glazing,
-        uValue: window.uValue,
-        area: window.area,
-      ));
-    }
-  }
-
-  Future<void> updateEnvelope(models.Envelope envelope, String envelopeId) async {
-    await _db.updateEnvelope(
-      envelopeId,
-      EnvelopesCompanion(
-        roofType: Value(envelope.roof.type),
-        roofUValue: Value(envelope.roof.uValue),
-        roofArea: Value(envelope.roof.area),
-        roofInsulation: Value(envelope.roof.insulation),
-        floorType: Value(envelope.floor.type),
-        floorUValue: Value(envelope.floor.uValue),
-        floorArea: Value(envelope.floor.area),
-        floorInsulated: Value(envelope.floor.insulated),
-      ),
-    );
-
-    // Walls aktualisieren
-    await _db.deleteWallsByEnvelopeId(envelopeId);
-    for (final wall in envelope.walls) {
-      await _db.insertWall(WallsCompanion.insert(
-        envelopeId: envelopeId,
-        orientation: wall.orientation,
-        type: wall.type,
-        uValue: wall.uValue,
-        area: wall.area,
-        insulation: wall.insulation,
-      ));
-    }
-
-    // Windows aktualisieren
-    await _db.deleteWindowsByEnvelopeId(envelopeId);
-    for (final window in envelope.windows) {
-      await _db.insertWindow(WindowsCompanion.insert(
-        envelopeId: envelopeId,
-        orientation: window.orientation,
-        year: window.year,
-        frame: window.frame,
-        glazing: window.glazing,
-        uValue: window.uValue,
-        area: window.area,
-      ));
-    }
   }
 
   // ========== FLOOR PLANS ==========
@@ -678,43 +524,6 @@ class DatabaseService {
     await _db.deleteDisziplin(buildingId, label);
     _disciplinesCache.remove(buildingId);
     await _markDisciplinesInitialized(buildingId);
-  }
-
-  // ========== CONSUMPTIONS ==========
-
-  Future<models.Consumption?> getConsumptionByBuildingId(String buildingId) async {
-    final row = await _db.getConsumptionByBuildingId(buildingId);
-    if (row == null) return null;
-
-    return models.Consumption(
-      electricityKWh: (json.decode(row.electricityKWh) as List<dynamic>)
-          .map((e) => (e as num).toInt())
-          .toList(),
-      gasKWh: (json.decode(row.gasKWh) as List<dynamic>)
-          .map((e) => (e as num).toInt())
-          .toList(),
-    );
-  }
-
-  Future<void> insertConsumption(models.Consumption consumption, String buildingId) async {
-    final consumptionId = buildingId; // Verwende buildingId als consumptionId
-    await _db.insertConsumption(ConsumptionsCompanion.insert(
-      id: consumptionId,
-      buildingId: buildingId,
-      electricityKWh: json.encode(consumption.electricityKWh),
-      gasKWh: json.encode(consumption.gasKWh),
-    ));
-  }
-
-  Future<void> updateConsumption(models.Consumption consumption, String buildingId) async {
-    final consumptionId = buildingId;
-    await _db.updateConsumption(
-      consumptionId,
-      ConsumptionsCompanion(
-        electricityKWh: Value(json.encode(consumption.electricityKWh)),
-        gasKWh: Value(json.encode(consumption.gasKWh)),
-      ),
-    );
   }
 
   // ========== ATTACHMENTS ==========

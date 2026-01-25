@@ -39,46 +39,6 @@ class Buildings extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DataClassName('EnvelopeDb')
-class Envelopes extends Table {
-  TextColumn get id => text()();
-  TextColumn get buildingId => text().references(Buildings, #id, onDelete: KeyAction.cascade)();
-  TextColumn get roofType => text()();
-  RealColumn get roofUValue => real()();
-  RealColumn get roofArea => real()();
-  BoolColumn get roofInsulation => boolean()();
-  TextColumn get floorType => text()();
-  RealColumn get floorUValue => real()();
-  RealColumn get floorArea => real()();
-  BoolColumn get floorInsulated => boolean()();
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
-@DataClassName('WallDb')
-class Walls extends Table {
-  IntColumn get id => integer().autoIncrement()();
-  TextColumn get envelopeId => text().references(Envelopes, #id, onDelete: KeyAction.cascade)();
-  TextColumn get orientation => text()();
-  TextColumn get type => text()();
-  RealColumn get uValue => real()();
-  RealColumn get area => real()();
-  BoolColumn get insulation => boolean()();
-}
-
-@DataClassName('WindowDb')
-class Windows extends Table {
-  IntColumn get id => integer().autoIncrement()();
-  TextColumn get envelopeId => text().references(Envelopes, #id, onDelete: KeyAction.cascade)();
-  TextColumn get orientation => text()();
-  IntColumn get year => integer()();
-  TextColumn get frame => text()();
-  TextColumn get glazing => text()();
-  RealColumn get uValue => real()();
-  RealColumn get area => real()();
-}
-
 @DataClassName('FloorPlanDb')
 class FloorPlans extends Table {
   TextColumn get id => text()();
@@ -103,17 +63,6 @@ class Anlagen extends Table {
   TextColumn get markerInfo => text().nullable()(); // JSON als String
   TextColumn get markerType => text()();
   TextColumn get discipline => text()(); // JSON als String
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
-@DataClassName('ConsumptionDb')
-class Consumptions extends Table {
-  TextColumn get id => text()();
-  TextColumn get buildingId => text().references(Buildings, #id, onDelete: KeyAction.cascade)();
-  TextColumn get electricityKWh => text()(); // JSON-Array als String
-  TextColumn get gasKWh => text()(); // JSON-Array als String
 
   @override
   Set<Column> get primaryKey => {id};
@@ -157,12 +106,8 @@ class Templates extends Table {
 @DriftDatabase(tables: [
   Projects,
   Buildings,
-  Envelopes,
-  Walls,
-  Windows,
   FloorPlans,
   Anlagen,
-  Consumptions,
   AttachmentsTable,
   Disziplinen,
   Templates,
@@ -205,26 +150,6 @@ class AppDatabase extends _$AppDatabase {
   Future<int> updateBuilding(String id, BuildingsCompanion building) => (update(buildings)..where((b) => b.id.equals(id))).write(building);
   Future<int> deleteBuilding(String id) => (delete(buildings)..where((b) => b.id.equals(id))).go();
 
-  // CRUD-Methoden für Envelopes
-  Future<EnvelopeDb?> getEnvelopeByBuildingId(String buildingId) => (select(envelopes)..where((e) => e.buildingId.equals(buildingId))).getSingleOrNull();
-  Future<int> insertEnvelope(EnvelopesCompanion envelope) => into(envelopes).insert(envelope);
-  Future<int> updateEnvelope(String id, EnvelopesCompanion envelope) => (update(envelopes)..where((e) => e.id.equals(id))).write(envelope);
-  Future<int> deleteEnvelope(String id) => (delete(envelopes)..where((e) => e.id.equals(id))).go();
-
-  // CRUD-Methoden für Walls
-  Future<List<WallDb>> getWallsByEnvelopeId(String envelopeId) => (select(walls)..where((w) => w.envelopeId.equals(envelopeId))).get();
-  Future<int> insertWall(WallsCompanion wall) => into(walls).insert(wall);
-  Future<int> updateWall(int id, WallsCompanion wall) => (update(walls)..where((w) => w.id.equals(id))).write(wall);
-  Future<int> deleteWall(int id) => (delete(walls)..where((w) => w.id.equals(id))).go();
-  Future<int> deleteWallsByEnvelopeId(String envelopeId) => (delete(walls)..where((w) => w.envelopeId.equals(envelopeId))).go();
-
-  // CRUD-Methoden für Windows
-  Future<List<WindowDb>> getWindowsByEnvelopeId(String envelopeId) => (select(windows)..where((w) => w.envelopeId.equals(envelopeId))).get();
-  Future<int> insertWindow(WindowsCompanion window) => into(windows).insert(window);
-  Future<int> updateWindow(int id, WindowsCompanion window) => (update(windows)..where((w) => w.id.equals(id))).write(window);
-  Future<int> deleteWindow(int id) => (delete(windows)..where((w) => w.id.equals(id))).go();
-  Future<int> deleteWindowsByEnvelopeId(String envelopeId) => (delete(windows)..where((w) => w.envelopeId.equals(envelopeId))).go();
-
   // CRUD-Methoden für FloorPlans
   Future<List<FloorPlanDb>> getFloorPlansByBuildingId(String buildingId) => (select(floorPlans)..where((f) => f.buildingId.equals(buildingId))).get();
   Future<FloorPlanDb?> getFloorPlanById(String id) => (select(floorPlans)..where((f) => f.id.equals(id))).getSingleOrNull();
@@ -254,12 +179,6 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> deleteAnlage(String id) => (delete(anlagen)..where((a) => a.id.equals(id))).go();
   Future<int> deleteAnlagenByBuildingId(String buildingId) => (delete(anlagen)..where((a) => a.buildingId.equals(buildingId))).go();
-
-  // CRUD-Methoden für Consumptions
-  Future<ConsumptionDb?> getConsumptionByBuildingId(String buildingId) => (select(consumptions)..where((c) => c.buildingId.equals(buildingId))).getSingleOrNull();
-  Future<int> insertConsumption(ConsumptionsCompanion consumption) => into(consumptions).insert(consumption);
-  Future<int> updateConsumption(String id, ConsumptionsCompanion consumption) => (update(consumptions)..where((c) => c.id.equals(id))).write(consumption);
-  Future<int> deleteConsumption(String id) => (delete(consumptions)..where((c) => c.id.equals(id))).go();
 
   // CRUD-Methoden für Attachments
   Future<AttachmentsTableDb?> getAttachmentsByBuildingId(String buildingId) => (select(attachmentsTable)..where((a) => a.buildingId.equals(buildingId))).getSingleOrNull();

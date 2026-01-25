@@ -1,8 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/building.dart';
-import '../../models/envelope.dart';
 import '../../providers/projects_provider.dart';
 
 class EditTab extends ConsumerStatefulWidget {
@@ -32,11 +30,6 @@ class _EditTabState extends ConsumerState<EditTab> {
   bool _protectedMonument = false;
   late final TextEditingController _unitsController;
 
-  late final TextEditingController _wallsController;
-  late final TextEditingController _roofController;
-  late final TextEditingController _floorController;
-  late final TextEditingController _windowsController;
-
   @override
   void initState() {
     super.initState();
@@ -65,27 +58,6 @@ class _EditTabState extends ConsumerState<EditTab> {
     _unitsController = TextEditingController(
       text: widget.building.units != 0 ? widget.building.units.toString() : '',
     );
-
-    _wallsController = TextEditingController(
-      text: widget.building.envelope.walls.isNotEmpty
-          ? widget.building.envelope.walls.map((w) => json.encode(w.toJson())).join('; ')
-          : '',
-    );
-    _roofController = TextEditingController(
-      text: widget.building.envelope.roof.uValue != 0.0
-          ? json.encode(widget.building.envelope.roof.toJson())
-          : '',
-    );
-    _floorController = TextEditingController(
-      text: widget.building.envelope.floor.uValue != 0.0
-          ? json.encode(widget.building.envelope.floor.toJson())
-          : '',
-    );
-    _windowsController = TextEditingController(
-      text: widget.building.envelope.windows.isNotEmpty
-          ? widget.building.envelope.windows.map((w) => json.encode(w.toJson())).join('; ')
-          : '',
-    );
   }
 
   @override
@@ -110,19 +82,6 @@ class _EditTabState extends ConsumerState<EditTab> {
       _protectedMonument = widget.building.protectedMonument;
       _unitsController.text =
       widget.building.units != 0 ? widget.building.units.toString() : '';
-
-      _wallsController.text = widget.building.envelope.walls.isNotEmpty
-          ? widget.building.envelope.walls.map((w) => json.encode(w.toJson())).join('; ')
-          : '';
-      _roofController.text = widget.building.envelope.roof.uValue != 0.0
-          ? json.encode(widget.building.envelope.roof.toJson())
-          : '';
-      _floorController.text = widget.building.envelope.floor.uValue != 0.0
-          ? json.encode(widget.building.envelope.floor.toJson())
-          : '';
-      _windowsController.text = widget.building.envelope.windows.isNotEmpty
-          ? widget.building.envelope.windows.map((w) => json.encode(w.toJson())).join('; ')
-          : '';
     }
   }
 
@@ -137,10 +96,6 @@ class _EditTabState extends ConsumerState<EditTab> {
     _constructionYearController.dispose();
     _renovationsController.dispose();
     _unitsController.dispose();
-    _wallsController.dispose();
-    _roofController.dispose();
-    _floorController.dispose();
-    _windowsController.dispose();
     super.dispose();
   }
 
@@ -349,136 +304,6 @@ class _EditTabState extends ConsumerState<EditTab> {
                 final parsed = int.tryParse(val.trim());
                 if (parsed != null) {
                   widget.building.units = parsed;
-                  _updateBuilding();
-                }
-              },
-            ),
-            spacing,
-
-            // Hüllflächen – Wände (JSON; semikolon-getrennt)
-            TextField(
-              controller: _wallsController,
-              decoration: _buildDecoration(
-                label: 'Hüllflächen – Wände (JSON; semikolon-getrennt)',
-                icon: Icons.wallpaper,
-                example:
-                '{"orientation":"Nord","type":"Ziegel","uValue":0.35,"area":150.0,"insulation":true}; …',
-              ),
-              textInputAction: TextInputAction.next,
-              maxLines: 2,
-              onChanged: (val) {
-                final parts = val.split(';');
-                List<Wall> parsedWalls = [];
-                for (var part in parts) {
-                  final trimmed = part.trim();
-                  if (trimmed.isEmpty) continue;
-                  try {
-                    final map = json.decode(trimmed) as Map<String, dynamic>;
-                    parsedWalls.add(Wall.fromJson(map));
-                  } catch (_) {}
-                }
-                if (parsedWalls.isNotEmpty) {
-                  final currentEnv = widget.building.envelope;
-                  final updatedEnv = Envelope(
-                    walls: parsedWalls,
-                    roof: currentEnv.roof,
-                    floor: currentEnv.floor,
-                    windows: currentEnv.windows,
-                  );
-                  widget.building.envelope = updatedEnv;
-                  _updateBuilding();
-                }
-              },
-            ),
-            spacing,
-
-            // Hüllflächen – Dach (JSON)
-            TextField(
-              controller: _roofController,
-              decoration: _buildDecoration(
-                label: 'Hüllflächen – Dach (JSON)',
-                icon: Icons.roofing,
-                example: '{"type":"Satteldach","uValue":0.25,"area":200.0,"insulation":true}',
-              ),
-              textInputAction: TextInputAction.next,
-              maxLines: 1,
-              onChanged: (val) {
-                try {
-                  final map = json.decode(val.trim()) as Map<String, dynamic>;
-                  final parsed = Roof.fromJson(map);
-                  final currentEnv = widget.building.envelope;
-                  final updatedEnv = Envelope(
-                    walls: currentEnv.walls,
-                    roof: parsed,
-                    floor: currentEnv.floor,
-                    windows: currentEnv.windows,
-                  );
-                  widget.building.envelope = updatedEnv;
-                  _updateBuilding();
-                } catch (_) {}
-              },
-            ),
-            spacing,
-
-            // Hüllflächen – Kellerdecke/Bodenplatte (JSON)
-            TextField(
-              controller: _floorController,
-              decoration: _buildDecoration(
-                label: 'Hüllflächen – Kellerdecke/Bodenplatte (JSON)',
-                icon: Icons.layers,
-                example: '{"type":"Bodenplatte","uValue":0.30,"area":150.0,"insulated":false}',
-              ),
-              textInputAction: TextInputAction.next,
-              maxLines: 1,
-              onChanged: (val) {
-                try {
-                  final map = json.decode(val.trim()) as Map<String, dynamic>;
-                  final parsed = FloorSurface.fromJson(map);
-                  final currentEnv = widget.building.envelope;
-                  final updatedEnv = Envelope(
-                    walls: currentEnv.walls,
-                    roof: currentEnv.roof,
-                    floor: parsed,
-                    windows: currentEnv.windows,
-                  );
-                  widget.building.envelope = updatedEnv;
-                  _updateBuilding();
-                } catch (_) {}
-              },
-            ),
-            spacing,
-
-            // Fenster (JSON; semikolon-getrennt)
-            TextField(
-              controller: _windowsController,
-              decoration: _buildDecoration(
-                label: 'Fenster (JSON; semikolon-getrennt)',
-                icon: Icons.window,
-                example:
-                '{"orientation":"Ost","year":2010,"frame":"Kunststoff","glazing":"Doppel","uValue":1.1,"area":10.0}; …',
-              ),
-              textInputAction: TextInputAction.done,
-              maxLines: 2,
-              onChanged: (val) {
-                final parts = val.split(';');
-                List<WindowElement> parsedWindows = [];
-                for (var part in parts) {
-                  final trimmed = part.trim();
-                  if (trimmed.isEmpty) continue;
-                  try {
-                    final map = json.decode(trimmed) as Map<String, dynamic>;
-                    parsedWindows.add(WindowElement.fromJson(map));
-                  } catch (_) {}
-                }
-                if (parsedWindows.isNotEmpty) {
-                  final currentEnv = widget.building.envelope;
-                  final updatedEnv = Envelope(
-                    walls: currentEnv.walls,
-                    roof: currentEnv.roof,
-                    floor: currentEnv.floor,
-                    windows: parsedWindows,
-                  );
-                  widget.building.envelope = updatedEnv;
                   _updateBuilding();
                 }
               },
