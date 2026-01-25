@@ -38,7 +38,6 @@ import 'tabs/technik_main_tab.dart';
 
 // SystemsPage importieren
 import 'systems_page.dart';
-import 'csv_settings_page.dart';
 import 'settings_page.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
@@ -1959,16 +1958,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ),
         actions: inSelectionMode
             ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
-            : [
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (context) => const SettingsPage()),
-                    );
-                  },
-                ),
-              ],
+            : [],
       ),
       body: TabBarView(
         controller: _tabController,
@@ -3254,17 +3244,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   ),
                   const SizedBox(height: 8),
                   _buildActionButton(
-                    icon: Icons.settings_rounded,
-                    label: 'CSV-Einstellungen',
-                    color: Colors.purple,
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => CsvSettingsPage(
-                            projectId: _currentProject.id,
-                            buildingId: _building.id,
-                          ),
-                        ),
+                    icon: Icons.settings_outlined,
+                    label: 'Einstellungen',
+                    color: Colors.grey,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (context) => const SettingsPage()),
                       );
                     },
                   ),

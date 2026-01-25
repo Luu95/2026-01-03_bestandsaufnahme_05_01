@@ -17,6 +17,7 @@ import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../database/database.dart' as db;
 import '../database/database_service.dart';
+import '../providers/csv_settings_provider.dart';
 
 /// Enum für die Ordnerstruktur beim Foto-Export
 enum PhotoExportStructure {
@@ -316,6 +317,28 @@ class CsvService {
     return params;
   }
 
+  static List<String> _parseKuerzel(String? raw, List<String> fallback) {
+    final tokens = (raw ?? '')
+        .split(RegExp(r'[,;]'))
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) return fallback;
+    return tokens;
+  }
+
+  static bool _matchesAnyToken(String value, List<String> tokens) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    for (final token in tokens) {
+      if (token.isEmpty) continue;
+      if (normalized == token || normalized.startsWith(token)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static dynamic _parseDynamicValue(String value) {
     final lower = value.toLowerCase();
     if (lower == 'true' || lower == 'false') {
@@ -380,6 +403,10 @@ class CsvService {
   /// Lädt die CSV-Einstellungen für ein bestimmtes Projekt.
   /// Gibt die Standardwerte zurück, wenn keine Einstellungen gefunden werden.
   static Future<Map<String, dynamic>> _loadCsvSettings(String projectId) async {
+    final cached = CsvSettingsCache.get(projectId);
+    if (cached != null) {
+      return cached.toJson();
+    }
     final prefs = await SharedPreferences.getInstance();
     final key = 'csv_settings_$projectId';
     final settingsJson = prefs.getString(key);
@@ -394,6 +421,9 @@ class CsvService {
           'etageSpalte': settings['etageSpalte'] as int?,
           'anlageBauteilSpalte': settings['anlageBauteilSpalte'] as int?,
           'parameterSpalte': settings['parameterSpalte'] as int?,
+          'delimiterMode': settings['delimiterMode'] as String? ?? 'auto',
+          'anlageKuerzel': settings['anlageKuerzel'] as String? ?? 'A,Anlage',
+          'bauteilKuerzel': settings['bauteilKuerzel'] as String? ?? 'B,Bauteil',
         };
       } catch (e) {
         debugPrint('Fehler beim Laden der CSV-Einstellungen: $e');
@@ -408,6 +438,9 @@ class CsvService {
       'etageSpalte': null,
       'anlageBauteilSpalte': null,
       'parameterSpalte': null,
+      'delimiterMode': 'auto',
+      'anlageKuerzel': 'A,Anlage',
+      'bauteilKuerzel': 'B,Bauteil',
     };
   }
 
@@ -477,12 +510,28 @@ class CsvService {
       // Leerzeichen am Anfang/Ende entfernen
       csvString = csvString.trim();
       
-      // Delimiter automatisch erkennen (Semikolon oder Komma)
-      String delimiter = _delimiter; // Standard: Semikolon
-      if (csvString.contains(',') && !csvString.contains(';')) {
-        delimiter = ',';
-      } else if (csvString.contains(';')) {
-        delimiter = ';';
+      // CSV-Einstellungen für dieses Projekt laden
+      final csvSettings = await _loadCsvSettings(projectId);
+      final lfdNummerIdx = csvSettings['lfdNummerSpalte']!;
+      final nameIdx = csvSettings['nameSpalte']!;
+      final disciplineIdx = csvSettings['gewerkSpalte']!;
+      final etageIdx = csvSettings['etageSpalte'] as int?;
+      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
+      final configuredParameterIdx = csvSettings['parameterSpalte'] as int?;
+      final delimiterMode = csvSettings['delimiterMode'] as String? ?? 'auto';
+
+      // Trennzeichen: Auto oder explizit
+      String delimiter = _delimiter;
+      if (delimiterMode == 'auto') {
+        if (csvString.contains(',') && !csvString.contains(';')) {
+          delimiter = ',';
+        } else if (csvString.contains(';')) {
+          delimiter = ';';
+        } else if (csvString.contains('\t')) {
+          delimiter = '\t';
+        }
+      } else {
+        delimiter = delimiterMode;
       }
       
       // CSV parsen
@@ -507,16 +556,14 @@ class CsvService {
       debugPrint('CSV Header: $headerRow');
       debugPrint('Anzahl Header-Spalten: ${headerRow.length}');
       
-      // CSV-Einstellungen für dieses Projekt laden
-      final csvSettings = await _loadCsvSettings(projectId);
-      final lfdNummerIdx = csvSettings['lfdNummerSpalte']!;
-      final nameIdx = csvSettings['nameSpalte']!;
-      final disciplineIdx = csvSettings['gewerkSpalte']!;
-      final etageIdx = csvSettings['etageSpalte'] as int?;
-      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
-      final configuredParameterIdx = csvSettings['parameterSpalte'] as int?;
-      
-      debugPrint('CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, etage=$etageIdx, anlageBauteil=$anlageBauteilIdx, parameter=$configuredParameterIdx');
+      final anlageKuerzel = _parseKuerzel(csvSettings['anlageKuerzel'] as String?, ['a', 'anlage']);
+      final bauteilKuerzel = _parseKuerzel(csvSettings['bauteilKuerzel'] as String?, ['b', 'bauteil']);
+
+      debugPrint(
+        'CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, '
+        'etage=$etageIdx, anlageBauteil=$anlageBauteilIdx, parameter=$configuredParameterIdx, '
+        'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel',
+      );
 
       final dataRows = csvData.sublist(1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
       if (dataRows.isEmpty) {
@@ -688,7 +735,7 @@ class CsvService {
             .toString()
             .trim()
             .toLowerCase();
-        final isBauteil = anlageBautel == 'b' || anlageBautel.startsWith('b');
+        final isBauteil = _matchesAnyToken(anlageBautel, bauteilKuerzel);
 
         if (isBauteil) {
           String? parentLfd;
@@ -707,7 +754,7 @@ class CsvService {
                 .toString()
                 .trim()
                 .toLowerCase();
-            final existingIsBauteil = existingType == 'b' || existingType.startsWith('b');
+            final existingIsBauteil = _matchesAnyToken(existingType, bauteilKuerzel);
             
             // Überspringe andere Bauteile
             if (existingIsBauteil) continue;
