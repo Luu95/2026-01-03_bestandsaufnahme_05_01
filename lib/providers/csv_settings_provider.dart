@@ -14,6 +14,10 @@ class CsvSettings {
   final String delimiterMode;
   final String anlageKuerzel;
   final String bauteilKuerzel;
+  final bool useDisciplineGrouping;
+  final String labelGewerk;
+  final String labelAnlage;
+  final String labelBauteil;
 
   const CsvSettings({
     required this.lfdNummerSpalte,
@@ -25,6 +29,10 @@ class CsvSettings {
     required this.delimiterMode,
     required this.anlageKuerzel,
     required this.bauteilKuerzel,
+    required this.useDisciplineGrouping,
+    required this.labelGewerk,
+    required this.labelAnlage,
+    required this.labelBauteil,
   });
 
   factory CsvSettings.defaults() {
@@ -38,6 +46,10 @@ class CsvSettings {
       delimiterMode: 'auto',
       anlageKuerzel: 'A,Anlage',
       bauteilKuerzel: 'B,Bauteil',
+      useDisciplineGrouping: true,
+      labelGewerk: 'Gewerk',
+      labelAnlage: 'Anlage',
+      labelBauteil: 'Bauteil',
     );
   }
 
@@ -51,6 +63,10 @@ class CsvSettings {
     String? delimiterMode,
     String? anlageKuerzel,
     String? bauteilKuerzel,
+    bool? useDisciplineGrouping,
+    String? labelGewerk,
+    String? labelAnlage,
+    String? labelBauteil,
   }) {
     return CsvSettings(
       lfdNummerSpalte: lfdNummerSpalte ?? this.lfdNummerSpalte,
@@ -62,6 +78,10 @@ class CsvSettings {
       delimiterMode: delimiterMode ?? this.delimiterMode,
       anlageKuerzel: anlageKuerzel ?? this.anlageKuerzel,
       bauteilKuerzel: bauteilKuerzel ?? this.bauteilKuerzel,
+      useDisciplineGrouping: useDisciplineGrouping ?? this.useDisciplineGrouping,
+      labelGewerk: labelGewerk ?? this.labelGewerk,
+      labelAnlage: labelAnlage ?? this.labelAnlage,
+      labelBauteil: labelBauteil ?? this.labelBauteil,
     );
   }
 
@@ -76,6 +96,10 @@ class CsvSettings {
       'delimiterMode': delimiterMode,
       'anlageKuerzel': anlageKuerzel,
       'bauteilKuerzel': bauteilKuerzel,
+      'useDisciplineGrouping': useDisciplineGrouping,
+      'labelGewerk': labelGewerk,
+      'labelAnlage': labelAnlage,
+      'labelBauteil': labelBauteil,
     };
   }
 
@@ -90,6 +114,10 @@ class CsvSettings {
       delimiterMode: json['delimiterMode'] as String? ?? 'auto',
       anlageKuerzel: json['anlageKuerzel'] as String? ?? 'A,Anlage',
       bauteilKuerzel: json['bauteilKuerzel'] as String? ?? 'B,Bauteil',
+      useDisciplineGrouping: json['useDisciplineGrouping'] as bool? ?? true,
+      labelGewerk: json['labelGewerk'] as String? ?? 'Gewerk',
+      labelAnlage: json['labelAnlage'] as String? ?? 'Anlage',
+      labelBauteil: json['labelBauteil'] as String? ?? 'Bauteil',
     );
   }
 }

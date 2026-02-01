@@ -424,6 +424,10 @@ class CsvService {
           'delimiterMode': settings['delimiterMode'] as String? ?? 'auto',
           'anlageKuerzel': settings['anlageKuerzel'] as String? ?? 'A,Anlage',
           'bauteilKuerzel': settings['bauteilKuerzel'] as String? ?? 'B,Bauteil',
+          'useDisciplineGrouping': settings['useDisciplineGrouping'] as bool? ?? true,
+          'labelGewerk': settings['labelGewerk'] as String? ?? 'Gewerk',
+          'labelAnlage': settings['labelAnlage'] as String? ?? 'Anlage',
+          'labelBauteil': settings['labelBauteil'] as String? ?? 'Bauteil',
           'headerZeile': settings['headerZeile'] as int? ?? 1,
         };
       } catch (e) {
@@ -442,6 +446,10 @@ class CsvService {
       'delimiterMode': 'auto',
       'anlageKuerzel': 'A,Anlage',
       'bauteilKuerzel': 'B,Bauteil',
+      'useDisciplineGrouping': true,
+      'labelGewerk': 'Gewerk',
+      'labelAnlage': 'Anlage',
+      'labelBauteil': 'Bauteil',
       'headerZeile': 1,
     };
   }
@@ -522,6 +530,7 @@ class CsvService {
       final configuredParameterIdx = csvSettings['parameterSpalte'] as int?;
       final delimiterMode = csvSettings['delimiterMode'] as String? ?? 'auto';
       final headerZeile = csvSettings['headerZeile'] as int? ?? 1;
+      final useDisciplineGrouping = csvSettings['useDisciplineGrouping'] as bool? ?? true;
 
       // Trennzeichen: Auto oder explizit
       String delimiter = _delimiter;
@@ -572,7 +581,8 @@ class CsvService {
       debugPrint(
         'CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, '
         'etage=$etageIdx, anlageBauteil=$anlageBauteilIdx, parameter=$configuredParameterIdx, '
-        'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel',
+        'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel, '
+        'useDisciplineGrouping=$useDisciplineGrouping',
       );
 
       // Datenzeilen: alle Zeilen nach der Header-Zeile
@@ -626,9 +636,12 @@ class CsvService {
       final uniqueDisciplines = <String>{};
       for (var i = 0; i < dataRows.length; i++) {
         final row = dataRows[i];
-        final disciplineLabel = _safeCell(row, disciplineIdx);
-        if (disciplineLabel.isNotEmpty) {
-          uniqueDisciplines.add(disciplineLabel.trim());
+        final disciplineLabel = useDisciplineGrouping
+            ? _safeCell(row, disciplineIdx)
+            : 'Inventur';
+        final disciplineLabelValue = disciplineLabel.trim();
+        if (disciplineLabelValue.isNotEmpty) {
+          uniqueDisciplines.add(disciplineLabelValue);
         }
       }
 
@@ -679,7 +692,9 @@ class CsvService {
         final nameValue = name.isEmpty ? 'Anlage_${i + 1}' : name.trim();
         
         // Disziplinname aus Spalte 2 (C = "Gewerk")
-        final disciplineLabel = _safeCell(row, disciplineIdx);
+        final disciplineLabel = useDisciplineGrouping
+            ? _safeCell(row, disciplineIdx)
+            : 'Inventur';
         if (disciplineLabel.isEmpty) {
           debugPrint('Zeile ${i + 1} übersprungen: Keine Disziplin angegeben');
           continue; // Zeile überspringen, wenn keine Disziplin angegeben

@@ -286,10 +286,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       }
     }
     
+    // Prüfe, ob sich die Anzahl der Disziplinen geändert hat
+    final previousCount = _disciplines.length;
+    final newCount = disciplines.length;
+    final disciplinesChanged = previousCount != newCount || 
+        !_disciplines.every((d) => disciplines.any((nd) => nd.label == d.label));
+    
     setState(() {
       _disciplines = disciplines;
     });
     _reinitTechnikTabController();
+    
+    // Wenn sich Disziplinen geändert haben, TechnikTab neu erstellen
+    if (disciplinesChanged) {
+      _technikTabKey = UniqueKey();
+    }
+    
     // SystemsPages neu laden
     _refreshSystemsPages();
   }
@@ -3255,6 +3267,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           ),
                         ),
                       );
+                      // Disziplinen neu laden, falls sie in den Einstellungen geändert wurden
+                      await _loadDisciplines();
                     },
                   ),
                 ],

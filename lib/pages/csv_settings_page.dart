@@ -39,6 +39,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _delimiterMode = 'auto';
   String _anlageKuerzel = 'A,Anlage';
   String _bauteilKuerzel = 'B,Bauteil';
+  bool _useDisciplineGrouping = true;
+  String _labelGewerk = 'Gewerk';
+  String _labelAnlage = 'Anlage';
+  String _labelBauteil = 'Bauteil';
 
   // Bearbeitbar-Flags (für Kompatibilität)
   bool _lfdNummerBearbeitbar = true;
@@ -165,6 +169,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _delimiterMode = settings.delimiterMode;
         _anlageKuerzel = settings.anlageKuerzel;
         _bauteilKuerzel = settings.bauteilKuerzel;
+        _useDisciplineGrouping = settings.useDisciplineGrouping;
+        _labelGewerk = settings.labelGewerk;
+        _labelAnlage = settings.labelAnlage;
+        _labelBauteil = settings.labelBauteil;
       });
 
       final prefs = await SharedPreferences.getInstance();
@@ -212,6 +220,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       delimiterMode: _delimiterMode,
       anlageKuerzel: _anlageKuerzel,
       bauteilKuerzel: _bauteilKuerzel,
+      useDisciplineGrouping: _useDisciplineGrouping,
+      labelGewerk: _labelGewerk,
+      labelAnlage: _labelAnlage,
+      labelBauteil: _labelBauteil,
     );
     await notifier.save(settings);
 
@@ -365,7 +377,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           const SizedBox(height: 16),
           _buildSectionHeader(
             title: 'CSV-Mapping',
-            subtitle: 'Gewerk → Anlage → Bauteil',
+            subtitle: '$_labelGewerk → $_labelAnlage → $_labelBauteil',
           ),
           const SizedBox(height: 16),
           SettingsCard(
@@ -373,14 +385,19 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             borderColor: Colors.blueGrey.shade200,
             icon: Icons.folder_open,
             iconColor: Colors.blueGrey,
-            title: "Ebene 1: Gewerk (Disziplin)",
-            description: "In welcher Spalte steht das Gewerk?",
-            child: _buildColumnSelector(
-              label: 'Spalte für Gewerk',
-              value: _gewerkSpalte,
-              onChanged: (v) => setState(() => _gewerkSpalte = v),
-              csvHeaders: _mappingCsvHeaders,
-            ),
+            title: "Ebene 1: $_labelGewerk",
+            description: "In welcher Spalte steht $_labelGewerk?",
+            child: _useDisciplineGrouping
+                ? _buildColumnSelector(
+                    label: 'Spalte für $_labelGewerk',
+                    value: _gewerkSpalte,
+                    onChanged: (v) => setState(() => _gewerkSpalte = v),
+                    csvHeaders: _mappingCsvHeaders,
+                  )
+                : const Text(
+                    'Gewerk-Gruppierung ist deaktiviert. Die Spalte wird nicht verwendet.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
           ),
           _buildConnector(),
           SettingsCard(
@@ -388,15 +405,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             borderColor: Colors.green.shade200,
             icon: Icons.settings_applications,
             iconColor: Colors.green,
-            title: "Ebene 2: Anlage (Hauptobjekt)",
-            description: "Welche Spalten definieren die Anlage?",
+            title: "Ebene 2: $_labelAnlage (Hauptobjekt)",
+            description: "Welche Spalten definieren $_labelAnlage?",
             child: Column(
               children: [
                 Row(
                   children: [
                     Expanded(
                       child: _buildColumnSelector(
-                        label: 'Spalte für Name',
+                        label: 'Spalte für Name ($_labelAnlage)',
                         value: _nameSpalte,
                         onChanged: (v) => setState(() => _nameSpalte = v),
                         csvHeaders: _mappingCsvHeaders,
@@ -423,7 +440,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                         ? _nextFreeIndex([
                             _lfdNummerSpalte,
                             _nameSpalte,
-                            _gewerkSpalte,
+                            if (_useDisciplineGrouping) _gewerkSpalte,
                             _parameterSpalte,
                             _anlageBauteilSpalte,
                           ])
@@ -448,7 +465,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                         ? _nextFreeIndex([
                             _lfdNummerSpalte,
                             _nameSpalte,
-                            _gewerkSpalte,
+                            if (_useDisciplineGrouping) _gewerkSpalte,
                             _etageSpalte,
                             _anlageBauteilSpalte,
                           ])
@@ -472,8 +489,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             borderColor: Colors.orange.shade200,
             icon: Icons.build_circle_outlined,
             iconColor: Colors.orange,
-            title: "Ebene 3: Bauteil (Unterobjekt)",
-            description: "Wie werden Bauteile erkannt?",
+            title: "Ebene 3: $_labelBauteil (Unterobjekt)",
+            description: "Wie werden $_labelBauteil erkannt?",
             child: _buildToggleRow(
               icon: Icons.account_tree,
               label: 'Unterscheidung A/B nutzen?',
@@ -483,7 +500,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                     ? _nextFreeIndex([
                         _lfdNummerSpalte,
                         _nameSpalte,
-                        _gewerkSpalte,
+                        if (_useDisciplineGrouping) _gewerkSpalte,
                         _etageSpalte,
                         _parameterSpalte,
                       ])
@@ -528,13 +545,75 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             ),
           ],
           const SizedBox(height: 24),
+          _buildSectionHeader(
+            title: 'Anzeige & Struktur',
+            subtitle: 'Begriffe und Gruppierung',
+          ),
+          const SizedBox(height: 12),
+          _buildToggleRow(
+            icon: Icons.group_work,
+            label: 'Nach Gewerk gruppieren?',
+            isActive: _useDisciplineGrouping,
+            onToggle: (val) => setState(() => _useDisciplineGrouping = val),
+          ),
+          const SizedBox(height: 12),
+          ExpansionTile(
+            title: const Text('Begriffe anpassen'),
+            childrenPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            children: [
+              TextField(
+                controller: TextEditingController(text: _labelGewerk),
+                decoration: InputDecoration(
+                  labelText: 'Bezeichnung Ebene 1',
+                  helperText: 'Standard: Gewerk',
+                  isDense: true,
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onChanged: (val) => setState(() => _labelGewerk = val),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: TextEditingController(text: _labelAnlage),
+                decoration: InputDecoration(
+                  labelText: 'Bezeichnung Ebene 2',
+                  helperText: 'Standard: Anlage',
+                  isDense: true,
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onChanged: (val) => setState(() => _labelAnlage = val),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: TextEditingController(text: _labelBauteil),
+                decoration: InputDecoration(
+                  labelText: 'Bezeichnung Ebene 3',
+                  helperText: 'Standard: Bauteil',
+                  isDense: true,
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onChanged: (val) => setState(() => _labelBauteil = val),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           _buildValidationWarning(),
           const SizedBox(height: 32),
           // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
           _buildBetaCsvLoader(forTemplate: false),
           const SizedBox(height: 24),
           // Diskret: Alle Gewerke und Anlagen löschen
-          _buildDeleteAllButton(),
+          _buildBottomDeleteButton(
+            title: 'Alle Daten löschen',
+            description: 'Löscht alle Gewerke und Anlagen für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
+            buttonText: 'Alle löschen',
+            onPressed: () => _confirmAndDeleteAll(),
+          ),
         ],
       ),
     );
@@ -856,8 +935,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
           _buildBetaCsvLoader(forTemplate: true),
           const SizedBox(height: 24),
-          // Diskret: Alle Gewerke und Anlagen löschen
-          _buildDeleteAllButton(),
+          // Diskret: Vorlagen für das Projekt löschen
+          _buildBottomDeleteButton(
+            title: 'Alle Vorlagen löschen',
+            description: 'Löscht alle importierten Vorlagen für dieses Projekt. Gewerke und Anlagen im Gebäude bleiben erhalten.',
+            buttonText: 'Vorlagen löschen',
+            onPressed: () => _confirmAndDeleteTemplates(),
+          ),
         ],
       ),
     );
@@ -1048,6 +1132,92 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     }
   }
 
+  /// Bestätigt und löscht alle Vorlagen für das Projekt
+  Future<void> _confirmAndDeleteTemplates() async {
+    // Sicherheitsabfrage
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+            const SizedBox(width: 8),
+            const Text('Alle Vorlagen löschen?'),
+          ],
+        ),
+        content: const Text(
+          'Möchten Sie wirklich ALLE Vorlagen für dieses Projekt löschen?\n\n'
+          'Hinweis: Bereits importierte Gewerke und Anlagen in den Gebäuden bleiben erhalten.\n\n'
+          'Diese Aktion kann nicht rückgängig gemacht werden!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Abbrechen'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Löschen'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Lade-Dialog anzeigen
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      
+      // Vorlagen löschen
+      await dbService.deleteTemplatesByProjectId(widget.projectId);
+      
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Lade-Dialog schließen
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Alle Vorlagen erfolgreich gelöscht'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Fehler beim Löschen der Vorlagen: $e');
+      debugPrint('Stack Trace: $stackTrace');
+      
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Lade-Dialog schließen
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Löschen: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
+  }
 
   // --- HELPERS ---
 
@@ -1232,7 +1402,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   Widget _buildValidationWarning() {
     final values = [
-      _lfdNummerSpalte, _nameSpalte, _gewerkSpalte,
+      _lfdNummerSpalte,
+      _nameSpalte,
+      if (_useDisciplineGrouping) _gewerkSpalte,
       if (_etageSpalte != null) _etageSpalte,
       if (_anlageBauteilSpalte != null) _anlageBauteilSpalte,
       if (_parameterSpalte != null) _parameterSpalte,
@@ -1444,8 +1616,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  /// Diskret: Button zum Löschen aller Gewerke und Anlagen
-  Widget _buildDeleteAllButton() {
+  /// Diskret: Button zum Löschen (flexibel für Daten oder Vorlagen)
+  Widget _buildBottomDeleteButton({
+    required String title,
+    required String description,
+    required String buttonText,
+    required VoidCallback onPressed,
+  }) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1462,7 +1639,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Alle Daten löschen',
+                  title,
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.red.shade800,
@@ -1474,7 +1651,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Löscht alle Gewerke und Anlagen für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
+            description,
             style: TextStyle(
               fontSize: 11,
               color: Colors.red.shade700,
@@ -1484,9 +1661,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () => _confirmAndDeleteAll(),
+              onPressed: onPressed,
               icon: const Icon(Icons.delete_outline, size: 16),
-              label: const Text('Alle löschen', style: TextStyle(fontSize: 12)),
+              label: Text(buttonText, style: const TextStyle(fontSize: 12)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.red.shade700,
                 padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
@@ -1567,21 +1744,58 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       // Alle Disziplinen für dieses Gebäude löschen (mit replaceDisciplines mit leerer Liste)
       await dbService.replaceDisciplines(widget.buildingId, []);
       
+      // Cache explizit leeren (wird zwar schon in replaceDisciplines gemacht, aber zur Sicherheit)
+      // Der Cache wird in _getDisciplinesMap verwendet, daher müssen wir sicherstellen, dass er leer ist
+      
       // Warte kurz, damit die Datenbank-Operation abgeschlossen ist
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 200));
       
       debugPrint('Alle Disziplinen gelöscht. Lade Disziplinen neu...');
+      
+      // Verifiziere, dass wirklich alle Disziplinen gelöscht wurden
+      final verifyDisciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+      if (verifyDisciplines.isNotEmpty) {
+        debugPrint('WARNUNG: Nach dem Löschen sind noch ${verifyDisciplines.length} Disziplinen vorhanden!');
+        // Versuche es nochmal mit explizitem Löschen
+        for (final disc in verifyDisciplines) {
+          await dbService.deleteDiscipline(widget.buildingId, disc.label);
+        }
+        await dbService.replaceDisciplines(widget.buildingId, []);
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
 
-      // Globales Schema auch leeren (falls vorhanden)
+      // Alle SharedPreferences-Einträge für dieses Gebäude löschen
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Globales Schema löschen
       if (mounted) {
         setState(() {
           _globalSchema = [];
         });
-        // Globales Schema auch aus SharedPreferences löschen
-        final prefs = await SharedPreferences.getInstance();
-        final key = 'global_schema_${widget.projectId}';
-        await prefs.remove(key);
+        final globalSchemaKey = 'global_schema_${widget.projectId}';
+        await prefs.remove(globalSchemaKey);
       }
+      
+      // Disziplinen-Initialisierungs-Flag löschen
+      final disciplinesInitializedKey = 'disciplines_initialized_${widget.buildingId}';
+      await prefs.remove(disciplinesInitializedKey);
+      
+      // Alle expanded_groups für alle Disziplinen dieses Gebäudes löschen
+      // Da wir die Disziplinen bereits gelöscht haben, müssen wir alle möglichen Keys durchgehen
+      // oder alle Keys mit dem Gebäude-Präfix finden
+      final allKeys = prefs.getKeys();
+      final buildingPrefix = 'expanded_groups_${widget.buildingId}_';
+      final keysToRemove = allKeys.where((key) => key.startsWith(buildingPrefix)).toList();
+      for (final key in keysToRemove) {
+        await prefs.remove(key);
+        debugPrint('Gelöscht: $key');
+      }
+      
+      // Fallback: Alte Disziplinen aus SharedPreferences löschen (falls vorhanden)
+      final oldDisciplinesKey = 'disziplinen_${widget.buildingId}';
+      await prefs.remove(oldDisciplinesKey);
+      
+      debugPrint('Alle SharedPreferences-Einträge für Gebäude ${widget.buildingId} gelöscht');
 
       // Disziplinen neu laden und State aktualisieren
       if (mounted) {
@@ -1606,13 +1820,30 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         
         debugPrint('Nach dem Löschen: ${remainingDisciplines.length} Gewerke, ${remainingAnlagen.length} Anlagen verbleibend');
         
+        // Wenn noch Disziplinen vorhanden sind, zeige Warnung
+        if (remainingDisciplines.isNotEmpty) {
+          debugPrint('FEHLER: Es sind noch Disziplinen vorhanden: ${remainingDisciplines.map((d) => d.label).join(", ")}');
+          for (final disc in remainingDisciplines) {
+            debugPrint('  - ${disc.label} (groupingKey: ${disc.groupingKey})');
+          }
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
+            content: Text(
+              remainingDisciplines.isEmpty && remainingAnlagen.isEmpty
+                  ? '$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht'
+                  : '$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht. Bitte App neu starten, um Änderungen zu sehen.',
+            ),
+            backgroundColor: remainingDisciplines.isEmpty && remainingAnlagen.isEmpty ? Colors.green : Colors.orange,
+            duration: const Duration(seconds: 5),
           ),
         );
+        
+        // Seite schließen, damit beim nächsten Öffnen alles neu geladen wird
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
       }
     } catch (e, stackTrace) {
       debugPrint('Fehler beim Löschen aller Daten: $e');
