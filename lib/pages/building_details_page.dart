@@ -38,7 +38,7 @@ import 'tabs/technik_main_tab.dart';
 
 // SystemsPage importieren
 import 'systems_page.dart';
-import 'settings_page.dart';
+import 'csv_settings_page.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -1985,7 +1985,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           // neu: mit controller & keys
           TechnikMainTab(
             key: _technikTabKey,
-            projectId: _currentProject.id,
             building: _building,
             index: _currentBuildingIndex,
             tabController: _technikTabController,
@@ -3244,12 +3243,17 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   ),
                   const SizedBox(height: 8),
                   _buildActionButton(
-                    icon: Icons.settings_outlined,
-                    label: 'Einstellungen',
-                    color: Colors.grey,
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (context) => const SettingsPage()),
+                    icon: Icons.settings_rounded,
+                    label: 'CSV-Einstellungen',
+                    color: Colors.purple,
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => CsvSettingsPage(
+                            projectId: _currentProject.id,
+                            buildingId: _building.id,
+                          ),
+                        ),
                       );
                     },
                   ),

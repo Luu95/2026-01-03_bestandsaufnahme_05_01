@@ -424,6 +424,7 @@ class CsvService {
           'delimiterMode': settings['delimiterMode'] as String? ?? 'auto',
           'anlageKuerzel': settings['anlageKuerzel'] as String? ?? 'A,Anlage',
           'bauteilKuerzel': settings['bauteilKuerzel'] as String? ?? 'B,Bauteil',
+          'headerZeile': settings['headerZeile'] as int? ?? 1,
         };
       } catch (e) {
         debugPrint('Fehler beim Laden der CSV-Einstellungen: $e');
@@ -441,6 +442,7 @@ class CsvService {
       'delimiterMode': 'auto',
       'anlageKuerzel': 'A,Anlage',
       'bauteilKuerzel': 'B,Bauteil',
+      'headerZeile': 1,
     };
   }
 
@@ -519,6 +521,7 @@ class CsvService {
       final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
       final configuredParameterIdx = csvSettings['parameterSpalte'] as int?;
       final delimiterMode = csvSettings['delimiterMode'] as String? ?? 'auto';
+      final headerZeile = csvSettings['headerZeile'] as int? ?? 1;
 
       // Trennzeichen: Auto oder explizit
       String delimiter = _delimiter;
@@ -545,12 +548,19 @@ class CsvService {
         throw Exception('CSV-Datei ist leer');
       }
 
-      if (csvData.length < 2) {
-        throw Exception('CSV-Datei benötigt mindestens Header und eine Datenzeile (gefunden: ${csvData.length} Zeilen)');
+      // Header-Zeile bestimmen (1-basiert für User, 0-basiert für Array)
+      final headerRowIndex = headerZeile - 1;
+      if (headerRowIndex < 0 || headerRowIndex >= csvData.length) {
+        throw Exception('Header-Zeile $headerZeile existiert nicht in der CSV (${csvData.length} Zeilen gefunden)');
       }
 
-      // Header lesen (erste Zeile)
-      final headerRow = csvData.first.map((e) => e.toString().trim()).toList();
+      // Mindestens Header-Zeile + eine Datenzeile nach dem Header
+      if (csvData.length < headerRowIndex + 2) {
+        throw Exception('CSV-Datei benötigt mindestens Header-Zeile ($headerZeile) und eine Datenzeile (gefunden: ${csvData.length} Zeilen)');
+      }
+
+      // Header lesen (aus konfigurierter Zeile)
+      final headerRow = csvData[headerRowIndex].map((e) => e.toString().trim()).toList();
       
       // Debug: Header ausgeben
       debugPrint('CSV Header: $headerRow');
@@ -565,7 +575,8 @@ class CsvService {
         'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel',
       );
 
-      final dataRows = csvData.sublist(1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
+      // Datenzeilen: alle Zeilen nach der Header-Zeile
+      final dataRows = csvData.sublist(headerRowIndex + 1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
       if (dataRows.isEmpty) {
         throw Exception('Keine Datenzeilen gefunden');
       }

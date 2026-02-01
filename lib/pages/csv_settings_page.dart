@@ -332,46 +332,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildInfoCard(
-            _mappingCsvHeaders == null
-                ? 'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
-                    'Laden Sie eine Beispiel-CSV, um Spaltennamen statt Nummern zu sehen.'
-                : 'Beispiel-CSV geladen. Wählen Sie die passenden Spalten aus dem Dropdown.',
-          ),
-          const SizedBox(height: 12),
-          // Toggle-Button für Beispiel-CSV
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _loadExampleCsvHeaders(forTemplate: false),
-                  icon: Icon(_mappingCsvHeaders == null ? Icons.table_chart_outlined : Icons.refresh),
-                  label: Text(_mappingCsvHeaders == null ? 'Beispiel-CSV laden' : 'CSV neu laden'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _mappingCsvHeaders == null ? Colors.blue : Colors.orange,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              if (_mappingCsvHeaders != null) ...[
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() => _mappingCsvHeaders = null);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Dropdown-Modus deaktiviert. Verwenden Sie Spaltennummern.')),
-                    );
-                  },
-                  icon: const Icon(Icons.close),
-                  label: const Text('Deaktivieren'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  ),
-                ),
-              ],
-            ],
+            'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
+                'Geben Sie die Spaltennummern manuell ein (Start bei 1).',
           ),
           const SizedBox(height: 20),
           _buildSectionHeader(
@@ -567,6 +529,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ],
           const SizedBox(height: 24),
           _buildValidationWarning(),
+          const SizedBox(height: 32),
+          // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
+          _buildBetaCsvLoader(forTemplate: false),
+          const SizedBox(height: 24),
+          // Diskret: Alle Gewerke und Anlagen löschen
+          _buildDeleteAllButton(),
         ],
       ),
     );
@@ -750,44 +718,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildInfoCard(_templateCsvHeaders == null
-              ? 'Tipp: Laden Sie eine Beispiel-CSV, um Spaltennamen statt Nummern zu sehen.'
-              : 'Beispiel-CSV geladen. Wählen Sie die passenden Spalten aus dem Dropdown.'),
-          const SizedBox(height: 12),
-          // Toggle-Button für Beispiel-CSV
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _loadExampleCsvHeaders(forTemplate: true),
-                  icon: Icon(_templateCsvHeaders == null ? Icons.table_chart_outlined : Icons.refresh),
-                  label: Text(_templateCsvHeaders == null ? 'Beispiel-CSV laden' : 'CSV neu laden'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _templateCsvHeaders == null ? Colors.blue : Colors.orange,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              if (_templateCsvHeaders != null) ...[
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() => _templateCsvHeaders = null);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Dropdown-Modus deaktiviert. Verwenden Sie Spaltennummern.')),
-                    );
-                  },
-                  icon: const Icon(Icons.close),
-                  label: const Text('Deaktivieren'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  ),
-                ),
-              ],
-            ],
+          _buildInfoCard(
+            'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
+                'Geben Sie die Spaltennummern manuell ein (Start bei 1).',
           ),
           const SizedBox(height: 12),
           Align(
@@ -919,6 +852,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           
           const SizedBox(height: 24),
           _buildTemplateValidationWarning(),
+          const SizedBox(height: 32),
+          // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
+          _buildBetaCsvLoader(forTemplate: true),
+          const SizedBox(height: 24),
+          // Diskret: Alle Gewerke und Anlagen löschen
+          _buildDeleteAllButton(),
         ],
       ),
     );
@@ -1393,5 +1332,304 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       candidate++;
     }
     return candidate;
+  }
+
+  /// Beta-Funktion: Kleine Option ganz unten zum Laden einer Beispiel-CSV
+  Widget _buildBetaCsvLoader({required bool forTemplate}) {
+    final headers = forTemplate ? _templateCsvHeaders : _mappingCsvHeaders;
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade100,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'BETA',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange.shade800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Beispiel-CSV laden (optional)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _loadExampleCsvHeaders(forTemplate: forTemplate),
+                  icon: Icon(
+                    headers == null ? Icons.table_chart_outlined : Icons.refresh,
+                    size: 16,
+                  ),
+                  label: Text(
+                    headers == null ? 'CSV laden' : 'Neu laden',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.grey.shade700,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    side: BorderSide(color: Colors.grey.shade400),
+                  ),
+                ),
+              ),
+              if (headers != null) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      if (forTemplate) {
+                        _templateCsvHeaders = null;
+                      } else {
+                        _mappingCsvHeaders = null;
+                      }
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Dropdown-Modus deaktiviert'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.close, size: 16),
+                  label: const Text('Aus', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.grey.shade600,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    side: BorderSide(color: Colors.grey.shade400),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (headers != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              '${headers.length} Spalten geladen - Dropdowns aktiv',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.green.shade700,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Diskret: Button zum Löschen aller Gewerke und Anlagen
+  Widget _buildDeleteAllButton() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 16, color: Colors.red.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Alle Daten löschen',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.red.shade800,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Löscht alle Gewerke und Anlagen für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.red.shade700,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _confirmAndDeleteAll(),
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('Alle löschen', style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.red.shade700,
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                side: BorderSide(color: Colors.red.shade400),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Bestätigt und löscht alle Gewerke und Anlagen
+  Future<void> _confirmAndDeleteAll() async {
+    // Sicherheitsabfrage
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+            const SizedBox(width: 8),
+            const Text('Alle Daten löschen?'),
+          ],
+        ),
+        content: const Text(
+          'Möchten Sie wirklich ALLE Gewerke und Anlagen für dieses Gebäude löschen?\n\n'
+          'Diese Aktion kann nicht rückgängig gemacht werden!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Abbrechen'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Löschen'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Lade-Dialog anzeigen
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      
+      // Anzahl vor dem Löschen speichern für die Meldung
+      final anlagen = await dbService.getAnlagenByBuildingId(widget.buildingId);
+      final disciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+      final anlagenCount = anlagen.length;
+      final disciplinesCount = disciplines.length;
+      
+      debugPrint('Lösche $anlagenCount Anlagen und $disciplinesCount Gewerke für Gebäude ${widget.buildingId}');
+      
+      // Alle Anlagen für dieses Gebäude löschen
+      for (final anlage in anlagen) {
+        await dbService.deleteAnlage(anlage.id);
+      }
+
+      // Alle Disziplinen für dieses Gebäude löschen (mit replaceDisciplines mit leerer Liste)
+      await dbService.replaceDisciplines(widget.buildingId, []);
+      
+      // Warte kurz, damit die Datenbank-Operation abgeschlossen ist
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      debugPrint('Alle Disziplinen gelöscht. Lade Disziplinen neu...');
+
+      // Globales Schema auch leeren (falls vorhanden)
+      if (mounted) {
+        setState(() {
+          _globalSchema = [];
+        });
+        // Globales Schema auch aus SharedPreferences löschen
+        final prefs = await SharedPreferences.getInstance();
+        final key = 'global_schema_${widget.projectId}';
+        await prefs.remove(key);
+      }
+
+      // Disziplinen neu laden und State aktualisieren
+      if (mounted) {
+        await _loadDisciplines();
+        
+        // Zusätzlich setState aufrufen, um sicherzustellen, dass die UI aktualisiert wird
+        setState(() {
+          // State wird bereits in _loadDisciplines aktualisiert, aber zur Sicherheit hier nochmal
+          _showDisciplineSelection = true;
+          _editingDisciplineIndex = null;
+          _editingGlobal = false;
+        });
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Lade-Dialog schließen
+
+      if (mounted) {
+        // Prüfen, ob wirklich alle gelöscht wurden
+        final remainingDisciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+        final remainingAnlagen = await dbService.getAnlagenByBuildingId(widget.buildingId);
+        
+        debugPrint('Nach dem Löschen: ${remainingDisciplines.length} Gewerke, ${remainingAnlagen.length} Anlagen verbleibend');
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      debugPrint('Fehler beim Löschen aller Daten: $e');
+      debugPrint('Stack Trace: $stackTrace');
+      
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Lade-Dialog schließen
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Löschen: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 }

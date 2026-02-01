@@ -8,7 +8,6 @@ import '../../models/disziplin_manager.dart';
 import '../../database/database_service.dart';
 
 class TechnikMainTab extends StatefulWidget {
-  final String projectId;
   final Building building;
   final int index;
   final TabController tabController; // Wird noch für Kompatibilität benötigt, aber nicht mehr verwendet
@@ -29,7 +28,6 @@ class TechnikMainTab extends StatefulWidget {
 
   const TechnikMainTab({
     Key? key,
-    required this.projectId,
     required this.building,
     required this.index,
     required this.tabController,
@@ -93,7 +91,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
   Future<void> _addDisziplin() async {
     final newDisziplin = await showDialog<Disziplin>(
       context: context,
-      builder: (_) => DisziplinEditDialog(projectId: widget.projectId),
+      builder: (_) => const DisziplinEditDialog(),
     );
 
     if (newDisziplin != null) {
