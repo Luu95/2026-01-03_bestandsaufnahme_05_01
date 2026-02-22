@@ -1,10 +1,10 @@
 // lib/database/database.dart
 
-import 'dart:io';
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
+
+import 'database_connection_stub.dart'
+    if (dart.library.io) 'database_connection_io.dart'
+    if (dart.library.html) 'database_connection_web.dart';
 
 part 'database.g.dart';
 
@@ -113,7 +113,7 @@ class Templates extends Table {
   Templates,
 ])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  AppDatabase() : super(createConnection());
 
   @override
   int get schemaVersion => 4; // v2: parentId, v3: disziplinen, v4: templates
@@ -215,12 +215,3 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteTemplatesByProjectId(String projectId) =>
       (delete(templates)..where((t) => t.projectId.equals(projectId))).go();
 }
-
-LazyDatabase _openConnection() {
-  return LazyDatabase(() async {
-    final dbFolder = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dbFolder.path, 'bestandsaufnahme.db'));
-    return NativeDatabase(file);
-  });
-}
-

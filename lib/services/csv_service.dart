@@ -363,24 +363,12 @@ class CsvService {
 
   static Future<Map<String, Disziplin>> _loadPersistedDisciplines(String buildingId) async {
     final dbService = DatabaseService.instance;
-    if (dbService != null) {
-      final list = await dbService.getDisciplinesByBuildingId(buildingId);
-      final map = <String, Disziplin>{};
-      for (final disc in list) {
-        map[disc.label.toLowerCase()] = disc;
-      }
-      return map;
+    if (dbService == null) {
+      throw StateError('DatabaseService ist nicht initialisiert');
     }
-
-    // Fallback (z.B. wenn DatabaseService noch nicht initialisiert ist)
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'disziplinen_$buildingId';
-    final jsonStr = prefs.getString(key);
-    if (jsonStr == null) return {};
-    final List<dynamic> list = json.decode(jsonStr);
+    final list = await dbService.getDisciplinesByBuildingId(buildingId);
     final map = <String, Disziplin>{};
-    for (final entry in list) {
-      final disc = Disziplin.fromJson(entry as Map<String, dynamic>);
+    for (final disc in list) {
       map[disc.label.toLowerCase()] = disc;
     }
     return map;
@@ -388,16 +376,10 @@ class CsvService {
 
   static Future<void> _persistDisciplines(String buildingId, List<Disziplin> disciplines) async {
     final dbService = DatabaseService.instance;
-    if (dbService != null) {
-      await dbService.replaceDisciplines(buildingId, disciplines);
-      return;
+    if (dbService == null) {
+      throw StateError('DatabaseService ist nicht initialisiert');
     }
-
-    // Fallback
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'disziplinen_$buildingId';
-    final jsonList = disciplines.map((d) => d.toJson()).toList();
-    await prefs.setString(key, json.encode(jsonList));
+    await dbService.replaceDisciplines(buildingId, disciplines);
   }
 
   /// Lädt die CSV-Einstellungen für ein bestimmtes Projekt.
@@ -452,6 +434,31 @@ class CsvService {
       'labelBauteil': 'Bauteil',
       'headerZeile': 1,
     };
+  }
+
+  static Future<List<Map<String, dynamic>>> _loadGlobalSchema(String projectId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'global_schema_$projectId';
+    final schemaJson = prefs.getString(key);
+    if (schemaJson == null || schemaJson.trim().isEmpty) return [];
+    try {
+      return (json.decode(schemaJson) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (e) {
+      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+      return [];
+    }
+  }
+
+  static Future<void> _saveGlobalSchema(String projectId, List<Map<String, dynamic>> schema) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'global_schema_$projectId';
+      await prefs.setString(key, json.encode(schema));
+    } catch (e) {
+      debugPrint('Fehler beim Speichern des globalen Schemas: $e');
+    }
   }
 
   /// Importiert Anlagen aus CSV und aktualisiert Disziplinen-Schema.
@@ -605,7 +612,7 @@ class CsvService {
       }
 
       // Schema-Einträge erstellen
-      final schema = <Map<String, String>>[];
+      final schemaFromCsv = <Map<String, dynamic>>[];
       for (var i = 0; i < headerRow.length; i++) {
         final headerName = schemaColumns[i]!;
         final lowerName = headerName.toLowerCase();
@@ -617,16 +624,16 @@ class CsvService {
           type = 'number';
         }
         
-        schema.add({
+        schemaFromCsv.add({
           'key': headerName,
           'label': headerName,
           'type': type,
         });
       }
 
-      debugPrint('Vollständiges Schema aus CSV erstellt: $schema');
+      debugPrint('Vollständiges Schema aus CSV erstellt: $schemaFromCsv');
 
-      debugPrint('Erstelltes Schema: $schema');
+      debugPrint('Erstelltes Schema: $schemaFromCsv');
 
       // Bestehende Disziplinen für dieses Gebäude laden
       final disciplineCache = await _loadPersistedDisciplines(buildingId);
@@ -647,32 +654,67 @@ class CsvService {
 
       debugPrint('Gefundene Disziplinen in CSV: $uniqueDisciplines');
 
-      // Disziplinen-Schema aktualisieren oder neue erstellen
+      // Globales Standard-Schema: aus CSV ableiten (aber bestehende globale Einstellungen behalten)
+      final existingGlobalSchemaRaw = await _loadGlobalSchema(projectId);
+      final existingGlobalSchema = existingGlobalSchemaRaw
+          .map((f) => {...Map<String, dynamic>.from(f), 'isGlobal': true})
+          .toList();
+      final existingGlobalKeys = existingGlobalSchema
+          .map((f) => (f['key'] ?? '').toString())
+          .where((k) => k.isNotEmpty)
+          .toSet();
+
+      // Fallback: Falls ein Feld bereits in einem Gewerk existiert (z.B. typ/editable angepasst),
+      // übernehmen wir diese Definition bevorzugt ins globale Schema, wenn es dort noch fehlt.
+      final fallbackFieldByKey = <String, Map<String, dynamic>>{};
+      for (final d in disciplineCache.values) {
+        for (final field in d.schema) {
+          final key = (field['key'] ?? '').toString();
+          if (key.isEmpty) continue;
+          fallbackFieldByKey.putIfAbsent(key, () => Map<String, dynamic>.from(field));
+        }
+      }
+
+      final mergedGlobalSchema = [...existingGlobalSchema];
+      final mergedGlobalKeys = {...existingGlobalKeys};
+      for (final field in schemaFromCsv) {
+        final key = (field['key'] ?? '').toString();
+        if (key.isEmpty || mergedGlobalKeys.contains(key)) continue;
+        final fallback = fallbackFieldByKey[key];
+        final toAdd = fallback != null ? Map<String, dynamic>.from(fallback) : Map<String, dynamic>.from(field);
+        toAdd['isGlobal'] = true;
+        mergedGlobalSchema.add(toAdd);
+        mergedGlobalKeys.add(key);
+      }
+
+      // Speichere globales Schema projektbezogen
+      await _saveGlobalSchema(projectId, mergedGlobalSchema);
+
+      // Stelle sicher, dass alle in der CSV vorkommenden Gewerke existieren (Schema bleibt individuell erweiterbar)
       for (final discLabel in uniqueDisciplines) {
         final discLabelLower = discLabel.toLowerCase();
         final existing = disciplineCache[discLabelLower];
-        if (existing != null) {
-          // Bestehende Disziplin: Schema aus CSV übernehmen
-          // Icon und Farbe beibehalten, nur Schema aktualisieren
-          existing.schema = schema;
-          disciplineCache[discLabelLower] = existing;
-          debugPrint('Disziplin aktualisiert: $discLabel');
-        } else {
-          // Neue Disziplin mit Schema aus CSV erstellen
-          final newDiscipline = Disziplin(
-            label: discLabel,
-            icon: Icons.build,
-            color: Colors.blueGrey,
-            schema: schema,
-          );
-          disciplineCache[discLabelLower] = newDiscipline;
-          debugPrint('Neue Disziplin erstellt: $discLabel mit Schema: $schema');
-        }
+        if (existing != null) continue;
+        disciplineCache[discLabelLower] = Disziplin(
+          label: discLabel,
+          icon: Icons.build,
+          color: Colors.blueGrey,
+          schema: <Map<String, dynamic>>[],
+        );
+        debugPrint('Neue Disziplin erstellt (ohne individuelles Schema): $discLabel');
+      }
+
+      // Globales Schema in alle Disziplinen syncen (Global zuerst, danach echte individuelle Felder)
+      for (final entry in disciplineCache.entries) {
+        final d = entry.value;
+        final individualFields = d.schema.where((f) => f['isGlobal'] != true).map((f) => Map<String, dynamic>.from(f)).toList();
+        individualFields.removeWhere((f) => mergedGlobalKeys.contains((f['key'] ?? '').toString()));
+        d.schema = [...mergedGlobalSchema, ...individualFields];
       }
 
       // Disziplinen für dieses Gebäude persistieren
       await _persistDisciplines(buildingId, disciplineCache.values.toList());
-      debugPrint('Disziplinen für Gebäude $buildingId gespeichert: ${disciplineCache.length}');
+      debugPrint('Disziplinen für Gebäude $buildingId gespeichert (global gesynct): ${disciplineCache.length}');
 
       // Anlagen aus CSV erstellen
       final anlagen = <Anlage>[];
@@ -720,6 +762,12 @@ class CsvService {
         // Die lfdNummer wird zur Identifikation benötigt
         if (lfdNummerValue.isNotEmpty) {
           params['lfdNummer'] = lfdNummerValue;
+        }
+        
+        // Etage explizit setzen (falls aus Mapping-Spalte gelesen)
+        if (etageValue != null && etageValue.isNotEmpty) {
+          params['Etage'] = etageValue;
+          params['__etageName'] = etageValue; // Für Kompatibilität
         }
         
         // Anlage/Bauteil explizit setzen (falls aus Mapping-Spalte gelesen)

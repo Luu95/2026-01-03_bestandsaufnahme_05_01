@@ -41,23 +41,11 @@ class FloorPlansTab extends ConsumerStatefulWidget {
 }
 
 class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
-  late Building _building;
   final Set<String> _expandedFloorIds = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _building = widget.building;
-  }
 
   @override
   void didUpdateWidget(covariant FloorPlansTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.building.id != widget.building.id ||
-        oldWidget.building.floors.length != widget.building.floors.length) {
-      _building = widget.building;
-    }
-
     // Aufgeräumt halten, falls Etagen gelöscht wurden
     final currentIds = widget.building.floors.map((f) => f.id).toSet();
     _expandedFloorIds.removeWhere((id) => !currentIds.contains(id));
@@ -76,7 +64,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
         PageRouteBuilder(
           opaque: false,
           pageBuilder: (_, __, ___) => FloorPlanFullScreen(
-            building: _building,
+            building: widget.building,
             floor: floor,
           ),
           transitionsBuilder: (_, animation, __, child) {
@@ -85,7 +73,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
           },
         ),
       );
-      await ref.read(projectsProvider.notifier).updateBuilding(_building);
+      await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
       return;
     }
 
@@ -99,7 +87,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
     final originalPath = result.files.single.path!;
     final originalName = result.files.single.name;
     final appDir = await getApplicationDocumentsDirectory();
-    final newPath = path.join(appDir.path, '${_building.id}_${floor.id}.pdf');
+    final newPath = path.join(appDir.path, '${widget.building.id}_${floor.id}.pdf');
     final newFile = await File(originalPath).copy(newPath);
 
     setState(() {
@@ -108,7 +96,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
     });
 
     // PDF-Pfade werden jetzt in Drift gespeichert, keine SharedPreferences mehr nötig
-    await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
 
     // direkt Vollbild anzeigen
     await Navigator.push(
@@ -116,7 +104,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
       PageRouteBuilder(
         opaque: false,
         pageBuilder: (_, __, ___) => FloorPlanFullScreen(
-          building: _building,
+          building: widget.building,
           floor: floor,
         ),
         transitionsBuilder: (_, animation, __, child) {
@@ -125,12 +113,12 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
         },
       ),
     );
-    await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
   }
 
   @override
   Widget build(BuildContext context) {
-    final floors = _building.floors;
+    final floors = widget.building.floors;
 
     return Padding(
       padding: const EdgeInsets.all(16),

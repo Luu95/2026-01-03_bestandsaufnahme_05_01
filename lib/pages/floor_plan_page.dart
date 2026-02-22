@@ -3,12 +3,15 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart' as pdf;
+import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfx/pdfx.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as path;
+import 'package:share_plus/share_plus.dart';
 import '../database/database_service.dart';
 
 import '../models/anlage.dart';
@@ -39,6 +42,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   double _pdfPageWidth = 0;
   double _pdfPageHeight = 0;
   int _currentPage = 1;
+  bool _isExporting = false;
 
   List<Anlage> _allAnlagen = [];
   List<Disziplin> _disziplinen = [];
@@ -47,6 +51,11 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   String? _currentPdfName;
   final TransformationController _transformationController =
   TransformationController();
+  String? _draggingCalloutAnlageId;
+  String? _draggingAnchorAnlageId;
+
+  static const double _defaultLabelDx = 90.0;
+  static const double _defaultLabelDy = -70.0;
 
   @override
   void initState() {
@@ -65,50 +74,18 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
   Future<void> _loadDisziplinen() async {
     final dbService = DatabaseService.instance;
-    if (dbService != null) {
-      final list = await dbService.getDisciplinesByBuildingId(widget.building.id);
+    if (dbService == null) {
+      debugPrint('Fehler: DatabaseService ist nicht initialisiert');
       if (!mounted) return;
       setState(() {
-        _disziplinen = list;
+        _disziplinen = [];
       });
       return;
     }
-
-    // Fallback (z.B. wenn DatabaseService noch nicht initialisiert ist)
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString('disziplinen_${widget.building.id}');
-    if (jsonStr != null) {
-      final list = json.decode(jsonStr) as List<dynamic>;
-      setState(() {
-        _disziplinen = list
-            .map((e) => Disziplin.fromJson(e as Map<String, dynamic>))
-            .toList();
-      });
-      return;
-    }
-
-    // Standard-Disziplinen falls keine gespeichert
+    final list = await dbService.getDisciplinesByBuildingId(widget.building.id);
+    if (!mounted) return;
     setState(() {
-      _disziplinen = [
-        Disziplin(
-          label: 'Heizung',
-          icon: Icons.local_fire_department,
-          color: const Color.fromRGBO(255, 165, 0, 0.9),
-          schema: [
-            {'key': 'leistung', 'label': 'Leistung (kW)', 'type': 'int'},
-            {'key': 'brennstoff', 'label': 'Brennstofftyp', 'type': 'string'},
-          ],
-        ),
-        Disziplin(
-          label: 'Lüftung',
-          icon: Icons.air,
-          color: const Color.fromRGBO(0, 0, 255, 0.8),
-          schema: [
-            {'key': 'volumenstrom', 'label': 'Volumenstrom (m³/h)', 'type': 'int'},
-            {'key': 'filtertyp', 'label': 'Filtertyp', 'type': 'string'},
-          ],
-        ),
-      ];
+      _disziplinen = list;
     });
   }
 
@@ -250,6 +227,376 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
       (a.markerInfo!['pageNumber'] as int) == _currentPage)
       .toList();
 
+  List<Anlage> _markerAnlagenForPage(int pageNumber) => _allAnlagen
+      .where((a) =>
+          a.isMarker &&
+          a.floorId == widget.floor.id &&
+          a.markerInfo != null &&
+          (a.markerInfo!['pageNumber'] as int) == pageNumber)
+      .toList();
+
+  String _markerLabel(Anlage a) {
+    final name = a.name.trim();
+    if (name.isNotEmpty) return name;
+    return 'Marker ${a.id}';
+  }
+
+  Offset _getLabelOffset(Anlage a) {
+    final mi = a.markerInfo ?? const <String, dynamic>{};
+    final dx = (mi['labelDx'] as num?)?.toDouble() ?? _defaultLabelDx;
+    final dy = (mi['labelDy'] as num?)?.toDouble() ?? _defaultLabelDy;
+    return Offset(dx, dy);
+  }
+
+  void _setLabelOffset(Anlage a, Offset offset) {
+    final current = a.markerInfo != null
+        ? Map<String, dynamic>.from(a.markerInfo!)
+        : <String, dynamic>{};
+    current['labelDx'] = offset.dx;
+    current['labelDy'] = offset.dy;
+    a.markerInfo = current;
+  }
+
+  void _setMarkerAnchor(Anlage a, Offset anchor) {
+    final current = a.markerInfo != null
+        ? Map<String, dynamic>.from(a.markerInfo!)
+        : <String, dynamic>{};
+    current['x'] = anchor.dx;
+    current['y'] = anchor.dy;
+    current['pageNumber'] = (current['pageNumber'] as int?) ?? _currentPage;
+    a.markerInfo = current;
+  }
+
+  Future<void> _persistMarker(Anlage a) async {
+    await _saveAnlagenForDisziplin(a.discipline);
+  }
+
+  String _sanitizeFileName(String input) {
+    final cleaned = input
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned.isEmpty) return 'grundriss';
+    return cleaned.length > 80 ? cleaned.substring(0, 80) : cleaned;
+  }
+
+  Rect _computeExpandedPageRectScene({
+    required List<_RasterMarkerLayout> layouts,
+    required double baseWidth,
+    required double baseHeight,
+  }) {
+    // Standard: Original-PDF-Seite vollständig exportieren.
+    final baseRect = Rect.fromLTWH(0, 0, baseWidth, baseHeight);
+    if (layouts.isEmpty) return baseRect;
+
+    Rect? box;
+    for (final m in layouts) {
+      final bubble = Rect.fromLTWH(
+        m.calloutTopLeft.dx,
+        m.calloutTopLeft.dy,
+        _RasterMarkerLayout.bubbleWidth,
+        _RasterMarkerLayout.bubbleHeight,
+      );
+      final anchor = Rect.fromCircle(
+        center: m.anchor,
+        radius: _RasterMarkerLayout.anchorDiameter / 2,
+      );
+      final leader = Rect.fromPoints(m.anchor, m.leaderTarget).inflate(6.0);
+      final piece = bubble.expandToInclude(anchor).expandToInclude(leader);
+      if (box == null) {
+        box = piece;
+      } else {
+        box = box.expandToInclude(piece);
+      }
+    }
+
+    if (box == null) return baseRect;
+
+    // +10% Rand (mind. 24 Scene-Units). Kein Cropping: Grundriss bleibt immer komplett,
+    // wir erweitern nur nach außen, wenn Sprechblasen/Marker außerhalb liegen.
+    final padX = max(24.0, box.width * 0.10);
+    final padY = max(24.0, box.height * 0.10);
+    final padded = Rect.fromLTRB(
+      box.left - padX,
+      box.top - padY,
+      box.right + padX,
+      box.bottom + padY,
+    );
+
+    return Rect.fromLTRB(
+      min(baseRect.left, padded.left),
+      min(baseRect.top, padded.top),
+      max(baseRect.right, padded.right),
+      max(baseRect.bottom, padded.bottom),
+    );
+  }
+
+  Future<_RasterizedPage> _rasterizePageWithMarkers({
+    required Uint8List backgroundPng,
+    required double baseWidth,
+    required double baseHeight,
+    required List<_RasterMarkerLayout> layouts,
+    required Rect pageRectScene,
+  }) async {
+    final codec = await ui.instantiateImageCodec(backgroundPng);
+    final frame = await codec.getNextFrame();
+    final bg = frame.image;
+
+    final outW = bg.width.toDouble();
+    final outH = bg.height.toDouble();
+
+    // Exakt wie in der App: Bild liegt per BoxFit.contain in einem Scene-Container
+    // von (baseWidth/baseHeight). Marker-Koordinaten beziehen sich auf diese Scene.
+    // Optional erweitern wir die Seite nach außen via pageRectScene (kann negative left/top haben).
+    final baseContainer = Size(max(1.0, baseWidth), max(1.0, baseHeight));
+    final imageSize = Size(outW, outH);
+    final fitted = applyBoxFit(BoxFit.contain, imageSize, baseContainer);
+    final destRectScene =
+        Alignment.center.inscribe(fitted.destination, Offset.zero & baseContainer);
+
+    final scale = destRectScene.width > 0 ? (outW / destRectScene.width) : 1.0;
+    final sMin = scale;
+
+    // Scene -> Pixel im (ggf. erweiterten) Seitenraum
+    final originPx = Offset(-pageRectScene.left * scale, -pageRectScene.top * scale);
+    Offset toPx(Offset scene) => originPx + (scene * scale);
+
+    final canvasW = max(2.0, pageRectScene.width * scale);
+    final canvasH = max(2.0, pageRectScene.height * scale);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, canvasW, canvasH));
+
+    // Weißer Hintergrund für evtl. Seiten-Erweiterungen
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, canvasW, canvasH),
+      Paint()..color = Colors.white,
+    );
+
+    // Bild an die contain-Position zeichnen
+    final imageTopLeftPx = originPx + Offset(destRectScene.left * scale, destRectScene.top * scale);
+    canvas.drawImage(bg, imageTopLeftPx, Paint());
+
+    if (layouts.isNotEmpty) {
+      for (final m in layouts) {
+        final accentFill = m.accent.withOpacity(0.85);
+        final accentStroke = m.accent.withOpacity(0.75);
+
+        final anchor = toPx(m.anchor);
+        final calloutTopLeft = toPx(m.calloutTopLeft);
+
+        final bubbleW = _RasterMarkerLayout.bubbleWidth * scale;
+        final bubbleH = _RasterMarkerLayout.bubbleHeight * scale;
+        final tailW = _RasterMarkerLayout.tailWidth * scale;
+        final tailH = _RasterMarkerLayout.tailHeight * scale;
+
+        final leaderTarget = calloutTopLeft +
+            Offset(m.tailOnLeft ? 0.0 : bubbleW, bubbleH / 2);
+
+        // Leader line
+        final linePaint = Paint()
+          ..color = accentStroke
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0 * sMin
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(anchor, leaderTarget, linePaint);
+
+        // Anchor
+        final anchorDiameter = _RasterMarkerLayout.anchorDiameter * sMin;
+        final anchorRadius = anchorDiameter / 2;
+        final anchorPath = Path()..addOval(Rect.fromCircle(center: anchor, radius: anchorRadius));
+        canvas.drawShadow(anchorPath, Colors.black.withOpacity(0.18), 6.0 * sMin, true);
+        canvas.drawCircle(anchor, anchorRadius, Paint()..color = accentFill);
+        canvas.drawCircle(
+          anchor,
+          anchorRadius,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.0 * sMin,
+        );
+
+        // Bubble (Body + Tail + Text)
+        canvas.save();
+        canvas.translate(calloutTopLeft.dx, calloutTopLeft.dy);
+
+        final bubbleRect = Rect.fromLTWH(0, 0, bubbleW, bubbleH);
+        final bodyRect = m.tailOnLeft
+            ? Rect.fromLTWH(tailW, 0, bubbleRect.width - tailW, bubbleRect.height)
+            : Rect.fromLTWH(0, 0, bubbleRect.width - tailW, bubbleRect.height);
+        final rrect = RRect.fromRectAndRadius(bodyRect, Radius.circular(10.0 * sMin));
+        final bubblePath = Path()..addRRect(rrect);
+        canvas.drawShadow(bubblePath, Colors.black.withOpacity(0.10), 6.0 * sMin, true);
+
+        final fillPaint = Paint()
+          ..color = Colors.white.withOpacity(0.98)
+          ..style = PaintingStyle.fill;
+        final strokePaint = Paint()
+          ..color = m.accent.withOpacity(0.85)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2 * sMin;
+
+        canvas.drawRRect(rrect, fillPaint);
+        canvas.drawRRect(rrect, strokePaint);
+
+        final midY = bubbleRect.height / 2;
+        final tailTop = midY - tailH / 2;
+        final tailBottom = midY + tailH / 2;
+        final tailPath = Path();
+        if (m.tailOnLeft) {
+          tailPath
+            ..moveTo(tailW, tailTop)
+            ..lineTo(0, midY)
+            ..lineTo(tailW, tailBottom)
+            ..close();
+        } else {
+          final x = bubbleRect.width - tailW;
+          tailPath
+            ..moveTo(x, tailTop)
+            ..lineTo(bubbleRect.width, midY)
+            ..lineTo(x, tailBottom)
+            ..close();
+        }
+        canvas.drawPath(tailPath, fillPaint);
+        canvas.drawPath(tailPath, strokePaint);
+
+        final leftPad = m.tailOnLeft ? (tailW + 10.0 * sMin) : (12.0 * sMin);
+        final rightPad = m.tailOnLeft ? (12.0 * sMin) : (tailW + 10.0 * sMin);
+        final maxTextWidth = max(0.0, bubbleRect.width - leftPad - rightPad);
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: m.text,
+            style: TextStyle(
+              fontSize: 13.0 * sMin,
+              height: 1.15,
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
+          ),
+          maxLines: 2,
+          ellipsis: '…',
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: maxTextWidth);
+        tp.paint(canvas, Offset(leftPad, 8.0 * sMin));
+
+        canvas.restore();
+      }
+    }
+
+    final picture = recorder.endRecording();
+    ui.Image? outImage;
+    try {
+      outImage = await picture.toImage(canvasW.toInt(), canvasH.toInt());
+      final outBytes = await outImage.toByteData(format: ui.ImageByteFormat.png);
+      if (outBytes == null) {
+        throw StateError('Konnte gerasterte PNG-Daten nicht erzeugen.');
+      }
+      return _RasterizedPage(
+        bytes: outBytes.buffer.asUint8List(),
+        width: canvasW,
+        height: canvasH,
+      );
+    } finally {
+      // Verhindert Peak-Memory bei mehrseitigem Export.
+      outImage?.dispose();
+      bg.dispose();
+    }
+  }
+
+  Future<void> _exportPdfWithMarkers() async {
+    if (_isLoading || _isExporting) return;
+    if (_pageImages.isEmpty || _pdfPageWidth <= 0 || _pdfPageHeight <= 0) return;
+
+    setState(() => _isExporting = true);
+    try {
+      final doc = pw.Document();
+
+      final baseTitle = (widget.floor.name.trim().isNotEmpty)
+          ? widget.floor.name.trim()
+          : (_currentPdfName?.trim().isNotEmpty == true ? _currentPdfName!.trim() : 'Grundriss');
+      final safeBase = _sanitizeFileName(baseTitle);
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+      for (int pageNumber = 1; pageNumber <= _pageImages.length; pageNumber++) {
+        final markerAnlagen = _markerAnlagenForPage(pageNumber);
+        final layouts = markerAnlagen.map((a) {
+          final mi = a.markerInfo ?? const <String, dynamic>{};
+          final ax = (mi['x'] as num?)?.toDouble() ?? 0.0;
+          final ay = (mi['y'] as num?)?.toDouble() ?? 0.0;
+          final anchor = Offset(ax, ay);
+          final labelOffset = _getLabelOffset(a);
+          final calloutTopLeft = anchor + labelOffset;
+          final tailOnLeft = calloutTopLeft.dx >= anchor.dx;
+          final text = _markerLabel(a);
+          return _RasterMarkerLayout(
+            anchor: anchor,
+            calloutTopLeft: calloutTopLeft,
+            tailOnLeft: tailOnLeft,
+            accent: a.discipline.color,
+            text: text,
+          );
+        }).toList();
+
+        final pageRectScene = _computeExpandedPageRectScene(
+          layouts: layouts,
+          baseWidth: _pdfPageWidth,
+          baseHeight: _pdfPageHeight,
+        );
+
+        final rasterized = await _rasterizePageWithMarkers(
+          backgroundPng: _pageImages[pageNumber - 1],
+          baseWidth: _pdfPageWidth,
+          baseHeight: _pdfPageHeight,
+          layouts: layouts,
+          pageRectScene: pageRectScene,
+        );
+
+        final pageImage = pw.MemoryImage(rasterized.bytes);
+        doc.addPage(
+          pw.Page(
+            // 1:1 Raster -> PDF, damit keine zusätzliche Skalierung passiert.
+            pageFormat: pdf.PdfPageFormat(rasterized.width, rasterized.height),
+            margin: pw.EdgeInsets.zero,
+            build: (context) {
+              return pw.SizedBox(
+                width: rasterized.width,
+                height: rasterized.height,
+                child: pw.Image(pageImage, fit: pw.BoxFit.fill),
+              );
+            },
+          ),
+        );
+      }
+
+      final bytes = await doc.save();
+      final tempDir = await getTemporaryDirectory();
+      final outFile = File(
+        path.join(tempDir.path, '${safeBase}_mit_markern_$timestamp.pdf'),
+      );
+      await outFile.writeAsBytes(bytes, flush: true);
+
+      if (!mounted) return;
+      await Share.shareXFiles(
+        [XFile(outFile.path)],
+        text: 'Grundriss mit Markern',
+        subject: 'Grundriss-Export',
+      );
+    } catch (e, stackTrace) {
+      debugPrint('Fehler beim Grundriss-PDF-Export: $e');
+      debugPrint('Stack Trace: $stackTrace');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export fehlgeschlagen: $e'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() => _isExporting = false);
+    }
+  }
+
   void _handleTapUp(TapUpDetails details) {
     final local = details.localPosition;
     final matrix = _transformationController.value;
@@ -266,8 +613,8 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     const double hitRadius = 20.0;
     for (final a in _markerAnlagen) {
       final mi = a.markerInfo!;
-      final dx = (mi['x'] as double) - tappedX;
-      final dy = (mi['y'] as double) - tappedY;
+      final dx = ((mi['x'] as num).toDouble()) - tappedX;
+      final dy = ((mi['y'] as num).toDouble()) - tappedY;
       if (sqrt(dx * dx + dy * dy) <= hitRadius) {
         _showEditMarkerDialog(a);
         return;
@@ -298,7 +645,29 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     );
   }
 
-  void _showAddMarkerDialog(double x, double y, int pageNumber) {
+  Future<void> _showAddMarkerDialog(double x, double y, int pageNumber) async {
+    final dbService = DatabaseService.instance;
+    final selectableExisting = <Anlage>[];
+    if (dbService != null) {
+      try {
+        final all = await dbService.getAnlagenByBuildingId(widget.building.id);
+        selectableExisting.addAll(
+          all
+              .where((a) => a.parentId == null)
+              // Nur "normale" Anlagen (noch kein Marker irgendwo).
+              .where((a) => !a.isMarker)
+              .toList()
+            ..sort((a, b) {
+              final dl = a.discipline.label.toLowerCase().compareTo(b.discipline.label.toLowerCase());
+              if (dl != 0) return dl;
+              return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+            }),
+        );
+      } catch (e) {
+        debugPrint('Fehler beim Laden bestehender Anlagen: $e');
+      }
+    }
+
     showDialog(
       context: context,
       builder: (ctx) {
@@ -308,6 +677,15 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
           y: y,
           buildingId: widget.building.id,
           existing: null,
+          selectableExistingAnlagen: selectableExisting,
+          onSelectExistingAnlage: (Anlage selected) async {
+            await _addAnlageAsMarker(
+              selected,
+              x,
+              y,
+              pageNumber: pageNumber,
+            );
+          },
           onSave: (Marker newMarker) async {
             final newId = newMarker.id;
             final newDisziplin = _disziplinen.firstWhere(
@@ -344,6 +722,8 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                 'x': newMarker.x,
                 'y': newMarker.y,
                 'pageNumber': newMarker.pageNumber,
+                'labelDx': _defaultLabelDx,
+                'labelDy': _defaultLabelDy,
               },
               markerType: newDisziplin.label,
               discipline: newDisziplin,
@@ -360,13 +740,80 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     );
   }
 
+  Future<void> _addAnlageAsMarker(
+    Anlage anlage,
+    double x,
+    double y, {
+    required int pageNumber,
+  }) async {
+    // Erstelle eine Kopie der Anlage mit Marker-Informationen
+    final updatedAnlage = Anlage(
+      id: anlage.id,
+      parentId: anlage.parentId,
+      name: anlage.name,
+      params: Map<String, dynamic>.from(anlage.params),
+      floorId: widget.floor.id, // Aktualisiere floorId auf den aktuellen Grundriss
+      buildingId: anlage.buildingId,
+      isMarker: true,
+      markerInfo: {
+        'x': x,
+        'y': y,
+        'pageNumber': pageNumber,
+        'labelDx': _defaultLabelDx,
+        'labelDy': _defaultLabelDy,
+      },
+      markerType: anlage.discipline.label,
+      discipline: anlage.discipline,
+    );
+
+    // Etage automatisch setzen
+    final floorLabel = widget.floor.name.trim().isNotEmpty
+        ? widget.floor.name.trim()
+        : (_currentPdfName?.trim().isNotEmpty == true
+            ? _currentPdfName!.trim()
+            : '');
+    if (floorLabel.isNotEmpty) {
+      final existing = updatedAnlage.params['Etage']?.toString().trim() ?? '';
+      if (existing.isEmpty) {
+        updatedAnlage.params['Etage'] = floorLabel;
+      }
+    }
+
+    // Speichere in der Datenbank
+    final dbService = DatabaseService.instance;
+    if (dbService != null) {
+      await dbService.updateAnlage(updatedAnlage);
+    }
+
+    // Aktualisiere lokale Liste
+    setState(() {
+      final index = _allAnlagen.indexWhere((a) => a.id == anlage.id);
+      if (index >= 0) {
+        _allAnlagen[index] = updatedAnlage;
+      } else {
+        _allAnlagen.add(updatedAnlage);
+      }
+    });
+
+    await _saveAnlagenForDisziplin(updatedAnlage.discipline);
+    await _loadAllAnlagen();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Anlage als Marker hinzugefügt'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   void _showEditMarkerDialog(Anlage a) {
     final existingMarker = Marker(
       id: a.id,
       discipline: a.discipline,
       title: a.name,
-      x: a.markerInfo!['x'] as double,
-      y: a.markerInfo!['y'] as double,
+      x: (a.markerInfo!['x'] as num).toDouble(),
+      y: (a.markerInfo!['y'] as num).toDouble(),
       pageNumber: a.markerInfo!['pageNumber'] as int,
       params: a.params,
     );
@@ -380,6 +827,30 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
           y: existingMarker.y,
           buildingId: widget.building.id,
           existing: existingMarker,
+          onRemoveFromFloorPlan: () async {
+            final dbService = DatabaseService.instance;
+
+            setState(() {
+              a.isMarker = false;
+              a.markerInfo = null;
+            });
+
+            // Direkt persistieren, ohne die Anlage zu löschen.
+            if (dbService != null) {
+              await dbService.updateAnlage(a);
+            }
+
+            await _saveAnlagenForDisziplin(a.discipline);
+            await _loadAllAnlagen();
+
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Marker vom Grundriss entfernt (Anlage bleibt erhalten)'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
           onSave: (Marker updatedMarker) async {
             setState(() {
               a.name = updatedMarker.title;
@@ -399,7 +870,11 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                 }
               }
               a.params = params;
+              final oldMarkerInfo = a.markerInfo != null
+                  ? Map<String, dynamic>.from(a.markerInfo!)
+                  : <String, dynamic>{};
               a.markerInfo = {
+                ...oldMarkerInfo,
                 'x': updatedMarker.x,
                 'y': updatedMarker.y,
                 'pageNumber': updatedMarker.pageNumber,
@@ -442,7 +917,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                   color: Colors.white,
                   child: Column(
                     children: [
-                      // Header mit X-Button, Titel
+                      // Header mit X-Button, Titel, Add-Button
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12.0, vertical: 16.0),
@@ -465,7 +940,23 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            const SizedBox(width: 36),
+                            SizedBox(
+                              width: 36,
+                              height: 36,
+                              child: _isExporting
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(8.0),
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : IconButton(
+                                      padding: EdgeInsets.zero,
+                                      tooltip: 'PDF mit Markern exportieren',
+                                      icon: const Icon(Icons.picture_as_pdf),
+                                      onPressed: (_pdfFile == null || _pageImages.isEmpty)
+                                          ? null
+                                          : _exportPdfWithMarkers,
+                                    ),
+                            ),
                           ],
                         ),
                       ),
@@ -503,33 +994,129 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                                         fit: BoxFit.contain,
                                       ),
                                     ),
-                                    // Marker-Symbole
+                                    // Leader-Lines (hinter den Callouts)
+                                    CustomPaint(
+                                      size: Size(_pdfPageWidth, _pdfPageHeight),
+                                      painter: _MarkerLeaderLinesPainter(
+                                        markerAnlagen: _markerAnlagen,
+                                        getLabelOffset: _getLabelOffset,
+                                        getLabelText: _markerLabel,
+                                        scale: scale,
+                                      ),
+                                    ),
+
+                                    // Marker: Ankerpunkt + Callout (Bezeichnung)
                                     for (final a in _markerAnlagen)
                                       Builder(builder: (_) {
                                         final disziplin = a.discipline;
-                                        const iconSize = 40.0;
-                                        final halfIcon = iconSize / 2;
-                                        final offset = halfIcon / scale;
+                                        final color = disziplin.color.withOpacity(0.85);
 
-                                        final iconData = disziplin.icon;
-                                        final iconColor =disziplin.color.withOpacity(0.8);
+                                        final mx = (a.markerInfo!['x'] as num).toDouble();
+                                        final my = (a.markerInfo!['y'] as num).toDouble();
+                                        final anchor = Offset(mx, my);
+                                        final labelOffset = _getLabelOffset(a);
+                                        final calloutTopLeft = anchor + labelOffset;
+                                        final tailOnLeft = calloutTopLeft.dx >= anchor.dx;
 
-                                        final mx = a.markerInfo!['x'] as double;
-                                        final my = a.markerInfo!['y'] as double;
+                                        // Anker-Punktgröße in Screen-Pixeln konstant halten
+                                        const double anchorDiameter = 12.0;
+                                        final anchorOffset = (anchorDiameter / 2) / scale;
 
-                                        return Positioned(
-                                          left: mx - offset,
-                                          top: my - offset * 2,
-                                          child: Transform.scale(
-                                            scale: 1 / scale,
-                                            alignment:
-                                            Alignment.topLeft,
-                                            child: Icon(
-                                              iconData,
-                                              size: iconSize,
-                                              color: iconColor,
+                                        return Stack(
+                                          children: [
+                                            // Ankerpunkt (kleiner Punkt statt Symbol)
+                                            Positioned(
+                                              left: anchor.dx - anchorOffset,
+                                              top: anchor.dy - anchorOffset,
+                                              child: Transform.scale(
+                                                scale: 1 / scale,
+                                                alignment: Alignment.topLeft,
+                                                child: GestureDetector(
+                                                  behavior: HitTestBehavior.opaque,
+                                                  onTap: () => _showEditMarkerDialog(a),
+                                                  onPanStart: (_) {
+                                                    setState(() {
+                                                      _draggingAnchorAnlageId = a.id;
+                                                    });
+                                                  },
+                                                  onPanUpdate: (d) {
+                                                    if (_draggingAnchorAnlageId != a.id) return;
+                                                    final deltaScene = d.delta / scale;
+                                                    setState(() {
+                                                      final currentAx = (a.markerInfo?['x'] as num?)?.toDouble() ?? anchor.dx;
+                                                      final currentAy = (a.markerInfo?['y'] as num?)?.toDouble() ?? anchor.dy;
+                                                      _setMarkerAnchor(a, Offset(currentAx, currentAy) + deltaScene);
+                                                    });
+                                                  },
+                                                  onPanEnd: (_) async {
+                                                    if (_draggingAnchorAnlageId != a.id) return;
+                                                    setState(() {
+                                                      _draggingAnchorAnlageId = null;
+                                                    });
+                                                    await _persistMarker(a);
+                                                  },
+                                                  child: Container(
+                                                    width: anchorDiameter,
+                                                    height: anchorDiameter,
+                                                    decoration: BoxDecoration(
+                                                      color: color,
+                                                      shape: BoxShape.circle,
+                                                      border: Border.all(
+                                                        color: Colors.white,
+                                                        width: 2,
+                                                      ),
+                                                      boxShadow: [
+                                                        BoxShadow(
+                                                          color: Colors.black.withOpacity(0.18),
+                                                          blurRadius: 6,
+                                                          offset: const Offset(0, 2),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                          ),
+
+                                            // Callout-Label (sprechblasenartig), verschiebbar
+                                            Positioned(
+                                              left: calloutTopLeft.dx,
+                                              top: calloutTopLeft.dy,
+                                              child: Transform.scale(
+                                                scale: 1 / scale,
+                                                alignment: Alignment.topLeft,
+                                                child: GestureDetector(
+                                                  behavior: HitTestBehavior.translucent,
+                                                  onTap: () => _showEditMarkerDialog(a),
+                                                  onPanStart: (_) {
+                                                    setState(() {
+                                                      _draggingCalloutAnlageId = a.id;
+                                                    });
+                                                  },
+                                                  onPanUpdate: (d) {
+                                                    if (_draggingCalloutAnlageId != a.id) return;
+                                                    final deltaScene = d.delta / scale;
+                                                    setState(() {
+                                                      final currentOffset = _getLabelOffset(a);
+                                                      _setLabelOffset(a, currentOffset + deltaScene);
+                                                    });
+                                                  },
+                                                  onPanEnd: (_) async {
+                                                    if (_draggingCalloutAnlageId != a.id) return;
+                                                    setState(() {
+                                                      _draggingCalloutAnlageId = null;
+                                                    });
+                                                    await _persistMarker(a);
+                                                  },
+                                                  child: _MarkerCalloutBubble(
+                                                    text: _markerLabel(a),
+                                                    accent: disziplin.color,
+                                                    tailOnLeft: tailOnLeft,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         );
                                       }),
                                   ],
@@ -586,4 +1173,257 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
       ),
     );
   }
+}
+
+class _MarkerLeaderLinesPainter extends CustomPainter {
+  final List<Anlage> markerAnlagen;
+  final Offset Function(Anlage) getLabelOffset;
+  final String Function(Anlage) getLabelText;
+  final double scale;
+
+  _MarkerLeaderLinesPainter({
+    required this.markerAnlagen,
+    required this.getLabelOffset,
+    required this.getLabelText,
+    required this.scale,
+  });
+
+  static const _bubbleMaxWidthPx = 240.0;
+  static const _tailWidthPx = 10.0;
+  static const _textStyle = TextStyle(
+    fontSize: 13,
+    height: 1.15,
+    fontWeight: FontWeight.w600,
+    color: Colors.black87,
+  );
+
+  Size _estimateBubbleSizePx({
+    required String text,
+    required bool tailOnLeft,
+  }) {
+    final leftPad = tailOnLeft ? _tailWidthPx + 10.0 : 12.0;
+    final rightPad = tailOnLeft ? 12.0 : _tailWidthPx + 10.0;
+    const verticalPad = 16.0; // 8 oben + 8 unten
+
+    final maxTextWidth = max(0.0, _bubbleMaxWidthPx - leftPad - rightPad);
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: _textStyle),
+      maxLines: 2,
+      ellipsis: '…',
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxTextWidth);
+
+    final width = min(_bubbleMaxWidthPx, tp.width + leftPad + rightPad);
+    final height = tp.height + verticalPad;
+    return Size(width, height);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (markerAnlagen.isEmpty) return;
+
+    for (final a in markerAnlagen) {
+      final mi = a.markerInfo;
+      if (mi == null) continue;
+
+      final ax = (mi['x'] as num?)?.toDouble();
+      final ay = (mi['y'] as num?)?.toDouble();
+      if (ax == null || ay == null) continue;
+
+      final anchor = Offset(ax, ay);
+      final offset = getLabelOffset(a);
+      final calloutTopLeft = anchor + offset;
+
+      final tailOnLeft = calloutTopLeft.dx >= anchor.dx;
+      final label = getLabelText(a);
+      final bubbleSizePx = _estimateBubbleSizePx(text: label, tailOnLeft: tailOnLeft);
+
+      // Andockpunkt: an die Tail-Spitze (links/rechts) + vertikale Mitte.
+      // Wichtig: Bubble wird mit 1/scale gegengezoomt, daher hier Screen-Pixel -> Scene-Units via /scale.
+      final localTargetPx = Offset(
+        tailOnLeft ? 0.0 : bubbleSizePx.width,
+        bubbleSizePx.height / 2,
+      );
+      final target = calloutTopLeft + (localTargetPx / scale);
+
+      final paint = Paint()
+        ..color = a.discipline.color.withOpacity(0.75)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0 / scale
+        ..strokeCap = StrokeCap.round;
+
+      final dotPaint = Paint()
+        ..color = a.discipline.color.withOpacity(0.85)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(anchor, 2.2 / scale, dotPaint);
+
+      canvas.drawLine(anchor, target, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MarkerLeaderLinesPainter oldDelegate) {
+    // Repaint bei Zoom oder Marker-Änderungen.
+    return oldDelegate.scale != scale || oldDelegate.markerAnlagen != markerAnlagen;
+  }
+}
+
+class _MarkerCalloutBubble extends StatelessWidget {
+  final String text;
+  final Color accent;
+  final bool tailOnLeft;
+
+  const _MarkerCalloutBubble({
+    required this.text,
+    required this.accent,
+    required this.tailOnLeft,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const tailWidth = 10.0;
+
+    return RepaintBoundary(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 240),
+        child: CustomPaint(
+          painter: _CalloutBubblePainter(
+            borderColor: accent.withOpacity(0.85),
+            tailOnLeft: tailOnLeft,
+            tailWidth: tailWidth,
+          ),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              tailOnLeft ? tailWidth + 10 : 12,
+              8,
+              tailOnLeft ? 12 : tailWidth + 10,
+              8,
+            ),
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.15,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CalloutBubblePainter extends CustomPainter {
+  final Color borderColor;
+  final bool tailOnLeft;
+  final double tailWidth;
+
+  _CalloutBubblePainter({
+    required this.borderColor,
+    required this.tailOnLeft,
+    required this.tailWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final radius = 10.0;
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+
+    final fillPaint = Paint()
+      ..color = Colors.white.withOpacity(0.98)
+      ..style = PaintingStyle.fill;
+
+    final strokePaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.10)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+
+    final bodyRect = tailOnLeft
+        ? Rect.fromLTWH(tailWidth, 0, rect.width - tailWidth, rect.height)
+        : Rect.fromLTWH(0, 0, rect.width - tailWidth, rect.height);
+
+    final rrect = RRect.fromRectAndRadius(bodyRect, Radius.circular(radius));
+
+    // Shadow (leicht nach unten versetzt)
+    canvas.drawRRect(rrect.shift(const Offset(0, 2)), shadowPaint);
+
+    // Body
+    canvas.drawRRect(rrect, fillPaint);
+    canvas.drawRRect(rrect, strokePaint);
+
+    // Tail (kleines Dreieck in der Mitte)
+    final midY = rect.height / 2;
+    final tailHeight = 12.0;
+    final tailTop = midY - tailHeight / 2;
+    final tailBottom = midY + tailHeight / 2;
+
+    final path = Path();
+    if (tailOnLeft) {
+      path.moveTo(tailWidth, tailTop);
+      path.lineTo(0, midY);
+      path.lineTo(tailWidth, tailBottom);
+      path.close();
+    } else {
+      final x = rect.width - tailWidth;
+      path.moveTo(x, tailTop);
+      path.lineTo(rect.width, midY);
+      path.lineTo(x, tailBottom);
+      path.close();
+    }
+
+    canvas.drawPath(path, fillPaint);
+    canvas.drawPath(path, strokePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CalloutBubblePainter oldDelegate) {
+    return oldDelegate.borderColor != borderColor ||
+        oldDelegate.tailOnLeft != tailOnLeft ||
+        oldDelegate.tailWidth != tailWidth;
+  }
+}
+
+class _RasterMarkerLayout {
+  final Offset anchor;
+  final Offset calloutTopLeft;
+  final bool tailOnLeft;
+  final Color accent;
+  final String text;
+
+  static const double bubbleWidth = 240.0;
+  static const double bubbleHeight = 46.0;
+  static const double tailWidth = 10.0;
+  static const double tailHeight = 12.0;
+  static const double anchorDiameter = 12.0;
+
+  const _RasterMarkerLayout({
+    required this.anchor,
+    required this.calloutTopLeft,
+    required this.tailOnLeft,
+    required this.accent,
+    required this.text,
+  });
+
+  Offset get leaderTarget =>
+      calloutTopLeft + Offset(tailOnLeft ? 0.0 : bubbleWidth, bubbleHeight / 2);
+}
+
+class _RasterizedPage {
+  final Uint8List bytes;
+  final double width;
+  final double height;
+
+  const _RasterizedPage({
+    required this.bytes,
+    required this.width,
+    required this.height,
+  });
 }

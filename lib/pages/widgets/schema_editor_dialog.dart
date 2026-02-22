@@ -6,12 +6,20 @@ class SchemaEditorWidget extends StatefulWidget {
   final List<Map<String, dynamic>> existingSchema;
   final ValueChanged<List<Map<String, dynamic>>> onSchemaChanged;
   final bool allowEditGlobal;
+  final String? dropdownCsvPath;
+  final List<String>? dropdownCsvHeaders;
+  final VoidCallback? onImportDropdownCsv;
+  final VoidCallback? onClearDropdownCsv;
   
   const SchemaEditorWidget({
     Key? key,
     required this.existingSchema,
     required this.onSchemaChanged,
     this.allowEditGlobal = false,
+    this.dropdownCsvPath,
+    this.dropdownCsvHeaders,
+    this.onImportDropdownCsv,
+    this.onClearDropdownCsv,
   }) : super(key: key);
 
   @override
@@ -21,6 +29,16 @@ class SchemaEditorWidget extends StatefulWidget {
 class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
   late List<Map<String, dynamic>> schemaList;
   final _uuid = Uuid();
+
+  bool _isGlobalField(Map<String, dynamic> field) => field['isGlobal'] == true;
+
+  List<int> _individualIndices() {
+    final indices = <int>[];
+    for (var i = 0; i < schemaList.length; i++) {
+      if (!_isGlobalField(schemaList[i])) indices.add(i);
+    }
+    return indices;
+  }
 
   @override
   void initState() {
@@ -45,7 +63,10 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => AddSchemaFieldDialog(uuid: _uuid),
+      builder: (_) => AddSchemaFieldDialog(
+        uuid: _uuid,
+        dropdownCsvHeaders: widget.dropdownCsvHeaders,
+      ),
     );
     if (newField != null) {
       setState(() {
@@ -64,6 +85,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
       builder: (_) => AddSchemaFieldDialog(
         uuid: _uuid,
         existingField: existingField,
+        dropdownCsvHeaders: widget.dropdownCsvHeaders,
       ),
     );
     if (editedField != null) {
@@ -76,120 +98,15 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleIndices = widget.allowEditGlobal
+        ? List<int>.generate(schemaList.length, (i) => i)
+        : _individualIndices();
+    final visibleCount = visibleIndices.length;
+
     return Column(
       children: [
-        // Header
-        Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.blue.withOpacity(0.12),
-                Colors.blue.withOpacity(0.06),
-              ],
-            ),
-            border: Border(
-              bottom: BorderSide(
-                color: Colors.grey.withOpacity(0.15),
-                width: 1,
-              ),
-            ),
-          ),
-          padding: const EdgeInsets.all(24),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.blue[400]!,
-                      Colors.blue[600]!,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.blue.withOpacity(0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.schema,
-                  color: Colors.white,
-                  size: 26,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Eingabefelder',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.grey[900],
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(
-                          '${schemaList.length} Feld${schemaList.length != 1 ? 'er' : ''} definiert',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey[600],
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (schemaList.length > 1)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.drag_handle,
-                                  size: 12,
-                                  color: Colors.blue[700],
-                                ),
-                                const SizedBox(width: 3),
-                                Text(
-                                  'Verschieben',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.blue[700],
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Content
         Expanded(
-          child: schemaList.isEmpty
+          child: visibleCount == 0
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
@@ -234,18 +151,30 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   onReorder: (oldIndex, newIndex) {
                     setState(() {
-                      if (newIndex > oldIndex) {
-                        newIndex -= 1;
+                      if (widget.allowEditGlobal) {
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        final item = schemaList.removeAt(oldIndex);
+                        schemaList.insert(newIndex, item);
+                      } else {
+                        final globals = schemaList.where(_isGlobalField).toList();
+                        final individuals = schemaList.where((f) => !_isGlobalField(f)).toList();
+                        if (newIndex > oldIndex) {
+                          newIndex -= 1;
+                        }
+                        final item = individuals.removeAt(oldIndex);
+                        individuals.insert(newIndex, item);
+                        schemaList = [...globals, ...individuals];
                       }
-                      final item = schemaList.removeAt(oldIndex);
-                      schemaList.insert(newIndex, item);
                       _notifyChange();
                     });
                   },
                   children: [
-                    ...schemaList.asMap().entries.map((e) {
-                      final index = e.key;
-                      final field = e.value;
+                    ...List.generate(visibleCount, (visibleIndex) {
+                      final index = visibleIndices[visibleIndex];
+                      final field = schemaList[index];
+                      final type = (field['type'] ?? 'string').toString();
                       return Container(
                         key: ValueKey('${field['key']}_$index'),
                         margin: const EdgeInsets.only(bottom: 12),
@@ -306,24 +235,6 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
-                                            if (field['isGlobal'] == true)
-                                              Container(
-                                                margin: const EdgeInsets.only(left: 8),
-                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.blue.withOpacity(0.1),
-                                                  borderRadius: BorderRadius.circular(4),
-                                                  border: Border.all(color: Colors.blue.withOpacity(0.2)),
-                                                ),
-                                                child: const Text(
-                                                  'GLOBAL',
-                                                  style: TextStyle(
-                                                    fontSize: 9,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.blue,
-                                                  ),
-                                                ),
-                                              ),
                                           ],
                                         ),
                                         const SizedBox(height: 8),
@@ -335,23 +246,41 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                 vertical: 4,
                                               ),
                                               decoration: BoxDecoration(
-                                                color: field['type'] == 'int'
+                                                color: (type == 'int' || type == 'number')
                                                     ? Colors.orange.withOpacity(0.15)
-                                                    : Colors.green.withOpacity(0.15),
+                                                    : type == 'date'
+                                                        ? Colors.purple.withOpacity(0.15)
+                                                        : type == 'dropdown'
+                                                            ? Colors.teal.withOpacity(0.15)
+                                                            : Colors.green.withOpacity(0.15),
                                                 borderRadius: BorderRadius.circular(8),
                                                 border: Border.all(
-                                                  color: field['type'] == 'int'
+                                                  color: (type == 'int' || type == 'number')
                                                       ? Colors.orange.withOpacity(0.3)
-                                                      : Colors.green.withOpacity(0.3),
+                                                      : type == 'date'
+                                                          ? Colors.purple.withOpacity(0.3)
+                                                          : type == 'dropdown'
+                                                              ? Colors.teal.withOpacity(0.3)
+                                                              : Colors.green.withOpacity(0.3),
                                                 ),
                                               ),
                                               child: Text(
-                                                field['type'] == 'int' ? 'Zahl' : 'Text',
+                                                (type == 'int' || type == 'number')
+                                                    ? 'Int'
+                                                    : type == 'date'
+                                                        ? 'Datum'
+                                                        : type == 'dropdown'
+                                                            ? 'Dropdown'
+                                                            : 'String',
                                                 style: TextStyle(
                                                   fontSize: 10,
-                                                  color: field['type'] == 'int'
+                                                  color: (type == 'int' || type == 'number')
                                                       ? Colors.orange[800]
-                                                      : Colors.green[800],
+                                                      : type == 'date'
+                                                          ? Colors.purple[800]
+                                                          : type == 'dropdown'
+                                                              ? Colors.teal[800]
+                                                              : Colors.green[800],
                                                   fontWeight: FontWeight.w600,
                                                 ),
                                               ),
@@ -390,24 +319,67 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                     ),
                                   ),
                                   if (widget.allowEditGlobal || field['isGlobal'] != true)
-                                    IconButton(
-                                      icon: const Icon(Icons.edit_outlined),
-                                      onPressed: () => _onEditField(index),
-                                    ),
-                                  if (widget.allowEditGlobal || field['isGlobal'] != true)
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                      onPressed: () {
-                                        setState(() {
-                                          schemaList.removeAt(index);
-                                          _notifyChange();
-                                        });
+                                    PopupMenuButton<String>(
+                                      icon: const Icon(Icons.more_vert),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(minWidth: 1),
+                                      onSelected: (value) {
+                                        if (value == 'edit') {
+                                          _onEditField(index);
+                                        } else if (value == 'delete') {
+                                          showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Feld löschen?'),
+                                              content: Text(
+                                                '„${field['label']}“ wirklich löschen?',
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                                  child: const Text('Abbrechen'),
+                                                ),
+                                                TextButton(
+                                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                  child: const Text('Löschen'),
+                                                ),
+                                              ],
+                                            ),
+                                          ).then((confirmed) {
+                                            if (confirmed == true && mounted) {
+                                              setState(() {
+                                                schemaList.removeAt(index);
+                                                _notifyChange();
+                                              });
+                                            }
+                                          });
+                                        }
                                       },
-                                    ),
-                                  if (!widget.allowEditGlobal && field['isGlobal'] == true)
-                                    const Padding(
-                                      padding: EdgeInsets.symmetric(horizontal: 12),
-                                      child: Icon(Icons.lock_outline, color: Colors.grey, size: 20),
+                                      itemBuilder: (context) => [
+                                        const PopupMenuItem(
+                                          value: 'edit',
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.edit_outlined, size: 20),
+                                              SizedBox(width: 12),
+                                              Text('Bearbeiten'),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                                              const SizedBox(width: 12),
+                                              Text('Löschen', style: TextStyle(color: Colors.red)),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                 ],
                               ),
@@ -571,10 +543,10 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                           Text(
                             'Schema bearbeiten',
                             style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.grey[900],
-                              letterSpacing: -0.3,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[800],
+                              letterSpacing: -0.2,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -684,6 +656,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                           ...schemaList.asMap().entries.map((e) {
                             final index = e.key;
                             final field = e.value;
+                            final type = (field['type'] ?? 'string').toString();
                             return Container(
                               key: ValueKey('${field['key']}_$index'),
                               margin: const EdgeInsets.only(bottom: 12),
@@ -752,23 +725,41 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                       vertical: 4,
                                                     ),
                                                     decoration: BoxDecoration(
-                                                      color: field['type'] == 'int'
+                                                      color: type == 'int'
                                                           ? Colors.orange.withOpacity(0.15)
-                                                          : Colors.green.withOpacity(0.15),
+                                                          : type == 'date'
+                                                              ? Colors.purple.withOpacity(0.15)
+                                                              : type == 'dropdown'
+                                                                  ? Colors.teal.withOpacity(0.15)
+                                                                  : Colors.green.withOpacity(0.15),
                                                       borderRadius: BorderRadius.circular(8),
                                                       border: Border.all(
-                                                        color: field['type'] == 'int'
+                                                        color: type == 'int'
                                                             ? Colors.orange.withOpacity(0.3)
-                                                            : Colors.green.withOpacity(0.3),
+                                                            : type == 'date'
+                                                                ? Colors.purple.withOpacity(0.3)
+                                                                : type == 'dropdown'
+                                                                    ? Colors.teal.withOpacity(0.3)
+                                                                    : Colors.green.withOpacity(0.3),
                                                       ),
                                                     ),
                                                     child: Text(
-                                                      field['type'] == 'int' ? 'Zahl' : 'Text',
+                                                      type == 'int'
+                                                          ? 'Int'
+                                                          : type == 'date'
+                                                              ? 'Datum'
+                                                              : type == 'dropdown'
+                                                                  ? 'Dropdown'
+                                                                  : 'String',
                                                       style: TextStyle(
                                                         fontSize: 10,
-                                                        color: field['type'] == 'int'
+                                                        color: type == 'int'
                                                             ? Colors.orange[800]
-                                                            : Colors.green[800],
+                                                            : type == 'date'
+                                                                ? Colors.purple[800]
+                                                                : type == 'dropdown'
+                                                                    ? Colors.teal[800]
+                                                                    : Colors.green[800],
                                                         fontWeight: FontWeight.w600,
                                                       ),
                                                     ),
@@ -806,13 +797,64 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                             ],
                                           ),
                                         ),
-                                        IconButton(
-                                          icon: const Icon(Icons.edit_outlined),
-                                          onPressed: () => _onEditField(index),
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                          onPressed: () => setState(() => schemaList.removeAt(index)),
+                                        PopupMenuButton<String>(
+                                          icon: const Icon(Icons.more_vert),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(minWidth: 1),
+                                          onSelected: (value) {
+                                            if (value == 'edit') {
+                                              _onEditField(index);
+                                            } else if (value == 'delete') {
+                                              showDialog<bool>(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  title: const Text('Feld löschen?'),
+                                                  content: Text(
+                                                    '„${field['label']}“ wirklich löschen?',
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () => Navigator.of(ctx).pop(false),
+                                                      child: const Text('Abbrechen'),
+                                                    ),
+                                                    TextButton(
+                                                      onPressed: () => Navigator.of(ctx).pop(true),
+                                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                      child: const Text('Löschen'),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ).then((confirmed) {
+                                                if (confirmed == true && mounted) {
+                                                  setState(() => schemaList.removeAt(index));
+                                                }
+                                              });
+                                            }
+                                          },
+                                          itemBuilder: (context) => [
+                                            const PopupMenuItem(
+                                              value: 'edit',
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(Icons.edit_outlined, size: 20),
+                                                  SizedBox(width: 12),
+                                                  Text('Bearbeiten'),
+                                                ],
+                                              ),
+                                            ),
+                                            PopupMenuItem(
+                                              value: 'delete',
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                                                  const SizedBox(width: 12),
+                                                  Text('Löschen', style: TextStyle(color: Colors.red)),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
@@ -909,7 +951,13 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
 class AddSchemaFieldDialog extends StatefulWidget {
   final Uuid uuid;
   final Map<String, dynamic>? existingField;
-  const AddSchemaFieldDialog({Key? key, required this.uuid, this.existingField}) : super(key: key);
+  final List<String>? dropdownCsvHeaders;
+  const AddSchemaFieldDialog({
+    Key? key,
+    required this.uuid,
+    this.existingField,
+    this.dropdownCsvHeaders,
+  }) : super(key: key);
 
   @override
   _AddSchemaFieldDialogState createState() => _AddSchemaFieldDialogState();
@@ -919,6 +967,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
   late final TextEditingController labelCtrl;
   late String selectedType;
   late bool isEditable;
+  String? selectedDropdownColumn;
 
   @override
   void initState() {
@@ -931,9 +980,21 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
     } else if (fieldType == 'number') {
       selectedType = 'int';
     } else {
-      selectedType = (fieldType == 'string' || fieldType == 'int') ? fieldType : 'string';
+      selectedType = (fieldType == 'string' ||
+              fieldType == 'int' ||
+              fieldType == 'date' ||
+              fieldType == 'dropdown')
+          ? fieldType
+          : 'string';
     }
     isEditable = widget.existingField?['editable'] ?? true;
+
+    final existingDropdownColumn = widget.existingField?['dropdownColumn']?.toString().trim();
+    if (existingDropdownColumn != null && existingDropdownColumn.isNotEmpty) {
+      selectedDropdownColumn = existingDropdownColumn;
+    } else if (widget.dropdownCsvHeaders != null && widget.dropdownCsvHeaders!.isNotEmpty) {
+      selectedDropdownColumn = widget.dropdownCsvHeaders!.first;
+    }
   }
 
   @override
@@ -1042,11 +1103,34 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       const SizedBox(height: 20),
                       DropdownButtonFormField<String>(
                         value: selectedType,
-                        items: const [
-                          DropdownMenuItem(value: 'string', child: Text('Text')),
-                          DropdownMenuItem(value: 'int', child: Text('Zahl')),
+                        dropdownColor: Colors.grey[50],
+                        items: [
+                          DropdownMenuItem(
+                            value: 'string',
+                            child: Text('String', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                          ),
+                          DropdownMenuItem(
+                            value: 'int',
+                            child: Text('Int', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                          ),
+                          DropdownMenuItem(
+                            value: 'date',
+                            child: Text('Datum', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                          ),
+                          DropdownMenuItem(
+                            value: 'dropdown',
+                            child: Text('Dropdown', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                          ),
                         ],
-                        onChanged: (v) => setState(() => selectedType = v!),
+                        onChanged: (v) => setState(() {
+                          selectedType = v!;
+                          if (selectedType != 'dropdown') return;
+                          if (selectedDropdownColumn == null &&
+                              widget.dropdownCsvHeaders != null &&
+                              widget.dropdownCsvHeaders!.isNotEmpty) {
+                            selectedDropdownColumn = widget.dropdownCsvHeaders!.first;
+                          }
+                        }),
                         decoration: InputDecoration(
                           labelText: 'Datentyp',
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
@@ -1054,8 +1138,63 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                           filled: true,
                           fillColor: Colors.grey[50],
                         ),
-                        style: const TextStyle(fontSize: 16),
+                        style: TextStyle(fontSize: 16, color: Colors.grey[900]),
                       ),
+                      if (selectedType == 'dropdown') ...[
+                        const SizedBox(height: 14),
+                        if (widget.dropdownCsvHeaders == null || widget.dropdownCsvHeaders!.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.orange.withOpacity(0.25)),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.info_outline, size: 18, color: Colors.orange),
+                                SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Für Dropdown-Felder bitte zuerst eine Dropdown-CSV importieren (Tab „Eingabefelder“).',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else
+                          DropdownButtonFormField<String>(
+                            value: (selectedDropdownColumn != null &&
+                                    widget.dropdownCsvHeaders!.contains(selectedDropdownColumn))
+                                ? selectedDropdownColumn
+                                : widget.dropdownCsvHeaders!.first,
+                            dropdownColor: Colors.grey[50],
+                            items: widget.dropdownCsvHeaders!
+                                .map(
+                                  (h) => DropdownMenuItem(
+                                    value: h,
+                                    child: Text(
+                                      h,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 16, color: Colors.grey[900]),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (v) => setState(() => selectedDropdownColumn = v),
+                            decoration: InputDecoration(
+                              labelText: 'Dropdown-Spalte (aus CSV)',
+                              contentPadding:
+                                  const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                              filled: true,
+                              fillColor: Colors.grey[50],
+                            ),
+                            style: TextStyle(fontSize: 16, color: Colors.grey[900]),
+                            isExpanded: true,
+                          ),
+                      ],
                       const SizedBox(height: 24),
                       Container(
                         padding: const EdgeInsets.all(16),
@@ -1138,11 +1277,42 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       child: ElevatedButton(
                         onPressed: () {
                           if (labelCtrl.text.isEmpty) return;
-                          Navigator.of(context).pop({
+                          if (selectedType == 'dropdown') {
+                            final headers = widget.dropdownCsvHeaders ?? const <String>[];
+                            if (headers.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Bitte zuerst eine Dropdown-CSV importieren.'),
+                                  backgroundColor: Colors.orange,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                              return;
+                            }
+                            final col = (selectedDropdownColumn ?? '').trim();
+                            if (col.isEmpty || !headers.contains(col)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Bitte eine gültige Dropdown-Spalte auswählen.'),
+                                  backgroundColor: Colors.orange,
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                              return;
+                            }
+                          }
+
+                          final result = <String, dynamic>{
                             'key': widget.existingField?['key'] ?? _generateKey(labelCtrl.text),
                             'label': labelCtrl.text,
                             'type': selectedType,
                             'editable': isEditable,
+                          };
+                          if (selectedType == 'dropdown') {
+                            result['dropdownColumn'] = selectedDropdownColumn;
+                          }
+                          Navigator.of(context).pop({
+                            ...result,
                           });
                         },
                         style: ElevatedButton.styleFrom(

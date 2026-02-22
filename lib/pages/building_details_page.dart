@@ -1,6 +1,5 @@
 // lib/pages/building_details_page.dart
 
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,11 +17,9 @@ import '../models/disziplin_schnittstelle.dart';
 import '../models/anlage.dart';
 import '../services/floor_plan_service.dart';
 import '../services/csv_service.dart';
-import '../services/anlage_validation_service.dart';
 import '../utils/delete_utils.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
-import 'widgets/validation_progress_widget.dart';
 import 'widgets/generic_anlage_dialog.dart';
 import 'widgets/template_anlage_dialog.dart';
 
@@ -30,8 +27,6 @@ import 'widgets/template_anlage_dialog.dart';
 import 'floor_plan_page.dart';
 
 // Tabs importieren
-import 'tabs/edit_tab.dart';
-import 'tabs/verbrauch_tab.dart';
 import 'tabs/floorplans_tab.dart';
 import 'tabs/technik_main_tab.dart';
 
@@ -80,9 +75,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   List<Disziplin> _disciplines = [];
   bool _disciplineSelectionMode = false;
   final Set<String> _selectedDisciplineLabels = {};
-  
-  // Fortschritts-Tracking für alle Anlagen
-  ValidationProgress? _validationProgress;
 
   @override
   void initState() {
@@ -134,10 +126,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
     }
 
-    _tabController = TabController(length: 4, vsync: this)
+    _tabController = TabController(length: 2, vsync: this)
       ..addListener(() {
-        if (_isSelectionMode && _tabController.index != 1) _exitFloorplansSelectionMode();
-        if (_systemsSelectionMode && _tabController.index != 2) {
+        if (_isSelectionMode && _tabController.index != 0) _exitFloorplansSelectionMode();
+        if (_systemsSelectionMode && _tabController.index != 1) {
           // Beende alle aktiven Selections in allen Gewerken
           final activeDisciplines = _activeSelections.keys.toList();
           for (final label in activeDisciplines) {
@@ -199,42 +191,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     _loadAllAnlagenForProgress();
   }
   
-  /// Lädt alle Anlagen für dieses Gebäude, um den Gesamtfortschritt zu berechnen
+  /// Lädt alle Anlagen für dieses Gebäude (für ggf. spätere Fortschrittsnutzung).
   Future<void> _loadAllAnlagenForProgress() async {
-    final dbService = ref.read(databaseServiceProvider);
-    try {
-      final allAnlagen = await dbService.getAnlagenByBuildingId(_building.id);
-      setState(() {
-        _validationProgress = AnlageValidationService.calculateProgress(allAnlagen);
-      });
-    } catch (e) {
-      debugPrint('Fehler beim Laden der Anlagen für Fortschritt: $e');
-      setState(() {
-        _validationProgress = null;
-      });
-    }
-  }
-  
-  /// Zeigt das große Fortschrittsinfofeld als Dialog
-  void _showProgressDialog() {
-    if (_validationProgress == null) return;
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        contentPadding: EdgeInsets.zero,
-        content: ValidationProgressWidget(
-          progress: _validationProgress!,
-          title: 'Gesamtfortschritt - ${_building.name}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Schließen'),
-          ),
-        ],
-      ),
-    );
+    // Fortschrittsanzeige entfernt – Methode bleibt für konsistente Aufrufstellen.
   }
 
   Future<void> _loadDisciplines({bool clearExpandedState = false}) async {
@@ -249,24 +208,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final dbService = ref.read(databaseServiceProvider);
     var disciplines = await dbService.getDisciplinesByBuildingId(_building.id);
     var initialized = await dbService.isDisciplinesInitialized(_building.id);
-
-    // Migration: alte SharedPreferences-Disziplinen einmalig nach Drift übernehmen
-    final legacyKey = 'disziplinen_${_building.id}';
-    final legacyJson = prefs.getString(legacyKey);
-    if (!initialized && legacyJson != null) {
-      try {
-        final data = json.decode(legacyJson) as List<dynamic>;
-        final migrated = data
-            .map((e) => Disziplin.fromJson(e as Map<String, dynamic>))
-            .toList();
-        await dbService.replaceDisciplines(_building.id, migrated);
-        await prefs.remove(legacyKey);
-        disciplines = await dbService.getDisciplinesByBuildingId(_building.id);
-        initialized = true;
-      } catch (e) {
-        debugPrint('Fehler bei Disziplinen-Migration aus SharedPreferences: $e');
-      }
-    }
 
     // Nur wenn Disziplinen noch nie initialisiert wurden, aus Anlagen extrahieren
     if (!initialized && disciplines.isEmpty) {
@@ -1838,10 +1779,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
     }
 
-    final isFloorplansTab = _tabController.index == 1;
+    final isFloorplansTab = _tabController.index == 0;
     final inFloorplansSelection = isFloorplansTab && _isSelectionMode;
 
-    final isTechnikTab = _tabController.index == 2;
+    final isTechnikTab = _tabController.index == 1;
     final inSystemsSelection = isTechnikTab && _systemsSelectionMode;
     final inDisciplineSelection = isTechnikTab && _disciplineSelectionMode;
 
@@ -1919,54 +1860,13 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           },
         ),
 
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                appBarTitle,
-                style: TextStyle(
-                  color: inSelectionMode ? Colors.white : Colors.black87,
-                  fontWeight: FontWeight.w600,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            // Kompakter Fortschrittsbalken (nur wenn nicht im Selection Mode)
-            if (!inSelectionMode && _validationProgress != null && _validationProgress!.total > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: GestureDetector(
-                  onTap: _showProgressDialog,
-                  child: Container(
-                    constraints: const BoxConstraints(
-                      minWidth: 60,
-                      maxWidth: 90,
-                      minHeight: 4,
-                      maxHeight: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
-                      child: LinearProgressIndicator(
-                        value: _validationProgress!.percentage / 100,
-                        minHeight: 4,
-                        backgroundColor: Colors.transparent,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          _validationProgress!.percentage >= 100
-                              ? Colors.green[400]!
-                              : _validationProgress!.percentage >= 80
-                                  ? Colors.orange[400]!
-                                  : Colors.blue[400]!,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
+        title: Text(
+          appBarTitle,
+          style: TextStyle(
+            color: inSelectionMode ? Colors.white : Colors.black87,
+            fontWeight: FontWeight.w600,
+          ),
+          overflow: TextOverflow.ellipsis,
         ),
         actions: inSelectionMode
             ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
@@ -1975,13 +1875,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       body: TabBarView(
         controller: _tabController,
         children: [
-          // 0. EDIT‐Tab
-          EditTab(
-            building: _building,
-            index: _currentBuildingIndex,
-          ),
-
-          // 1. FLOORPLANS‐Tab
+          // 0. FLOORPLANS‐Tab
           FloorPlansTab(
             building: _building,
             index: _currentBuildingIndex,
@@ -1993,7 +1887,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             onDeleteSingleFloor: _onDeleteSingleFloor,
           ),
 
-          // 2. TECHNIK‐Tab
+          // 1. TECHNIK‐Tab
           // neu: mit controller & keys
           TechnikMainTab(
             key: _technikTabKey,
@@ -2005,7 +1899,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             onDisciplineExpanded: _onDisciplineExpanded,
             onDisciplineLongPress: _enterDisciplineSelectionMode,
             onExitDisciplineSelectionMode: _exitDisciplineSelectionMode,
-            disciplineSelectionMode: _tabController.index == 2 && _disciplineSelectionMode,
+            disciplineSelectionMode: _tabController.index == 1 && _disciplineSelectionMode,
             selectedDisciplineLabels: _selectedDisciplineLabels,
             onDisciplineSelectionToggle: _toggleDisciplineSelection,
             onAnlageCreated: () {
@@ -2025,10 +1919,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             onImportCsv: _importCsv,
             isAnySelectionActive: () => _systemsSelectionMode,
           ),
-
-
-          // 3. VERBRAUCH‐Tab
-          VerbrauchTab(building: _building),
         ],
       ),
 
@@ -2064,24 +1954,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   tabAlignment: TabAlignment.fill,
                   tabs: [
                     _buildTabWithIconBackground(
-                      icon: Icons.edit,
-                      text: 'Bearbeiten',
-                      index: 0,
-                    ),
-                    _buildTabWithIconBackground(
                       icon: Icons.map,
                       text: 'Grundrisse',
-                      index: 1,
+                      index: 0,
                     ),
                     _buildTabWithIconBackground(
                       icon: Icons.settings,
                       text: 'Technik',
-                      index: 2,
-                    ),
-                    _buildTabWithIconBackground(
-                      icon: Icons.bar_chart,
-                      text: 'Verbrauch',
-                      index: 3,
+                      index: 1,
                     ),
                   ],
                 );
@@ -2097,12 +1977,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   /// Erstellt elegante Floating Action Buttons rechts unten basierend auf dem Selection-Mode
   Widget? _buildFloatingActionButtons() {
     final inSelectionMode = _isSelectionMode || _systemsSelectionMode || _disciplineSelectionMode;
-    final inFloorplansSelection = _isSelectionMode && _tabController.index == 1;
-    final inSystemsSelection = _systemsSelectionMode && _tabController.index == 2;
-    final inDisciplineSelection = _disciplineSelectionMode && _tabController.index == 2;
+    final inFloorplansSelection = _isSelectionMode && _tabController.index == 0;
+    final inSystemsSelection = _systemsSelectionMode && _tabController.index == 1;
+    final inDisciplineSelection = _disciplineSelectionMode && _tabController.index == 1;
 
     // Grundriss-Tab: Button zum Hochladen (wenn nicht im Selection Mode)
-    if (_tabController.index == 1 && !inSelectionMode) {
+    if (_tabController.index == 0 && !inSelectionMode) {
       return FloatingActionButton(
         onPressed: _addNewFloorAndUpload,
         tooltip: 'Grundriss hochladen',

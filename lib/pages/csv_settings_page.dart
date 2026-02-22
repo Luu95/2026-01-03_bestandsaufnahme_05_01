@@ -1,5 +1,6 @@
 // lib/pages/csv_settings_page.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
@@ -10,7 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
 import '../providers/database_provider.dart';
+import '../services/dropdown_csv_service.dart';
 import '../services/template_service.dart';
+import '../providers/projects_provider.dart';
 import 'widgets/schema_editor_dialog.dart';
 import 'widgets/settings_card.dart';
 
@@ -63,6 +66,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   List<String>? _mappingCsvHeaders;
   List<String>? _templateCsvHeaders;
   
+  // Dropdown-CSV (für Schema-Felder vom Typ "Dropdown")
+  String? _dropdownCsvPath;
+  List<String>? _dropdownCsvHeaders;
+  Map<String, List<String>> _dropdownValuesByHeader = {};
+  String? _dropdownCsvError;
+  bool _dropdownIsLoading = false;
+  
   // Template CSV Settings
   int _templateGewerkSpalte = 0;
   int _templateAnlageBauteilSpalte = 1;
@@ -71,10 +81,22 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   int _templateParameterSpalte = 4;
   int? _templateAuswahlAnlagentypSpalte;
 
+  // Auto-Save Timer
+  Timer? _autoSaveTimer;
+  bool _isSaving = false;
+
   @override
   void initState() {
     super.initState();
     _loadAllData();
+  }
+
+  @override
+  void dispose() {
+    _autoSaveTimer?.cancel();
+    // Speichere beim Verlassen der Seite, falls noch nicht gespeichert
+    _saveAllSettings();
+    super.dispose();
   }
 
   Future<void> _loadAllData() async {
@@ -84,6 +106,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _loadDisciplines(),
       _loadTemplateCsvSettings(),
       _loadGlobalSchema(),
+      _loadDropdownCsvSettings(),
     ]);
     _syncGlobalSchemaToDisciplines();
     if (mounted) {
@@ -209,36 +232,226 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   // Entferne die Hilfsfunktion für automatisches Schema aus Mapping
 
   Future<void> _saveCsvSettings() async {
-    final notifier = ref.read(csvSettingsProvider(widget.projectId).notifier);
-    final settings = CsvSettings(
-      lfdNummerSpalte: _lfdNummerSpalte,
-      nameSpalte: _nameSpalte,
-      gewerkSpalte: _gewerkSpalte,
-      etageSpalte: _etageSpalte,
-      anlageBauteilSpalte: _anlageBauteilSpalte,
-      parameterSpalte: _parameterSpalte,
-      delimiterMode: _delimiterMode,
-      anlageKuerzel: _anlageKuerzel,
-      bauteilKuerzel: _bauteilKuerzel,
-      useDisciplineGrouping: _useDisciplineGrouping,
-      labelGewerk: _labelGewerk,
-      labelAnlage: _labelAnlage,
-      labelBauteil: _labelBauteil,
-    );
-    await notifier.save(settings);
+    try {
+      final notifier = ref.read(csvSettingsProvider(widget.projectId).notifier);
+      final settings = CsvSettings(
+        lfdNummerSpalte: _lfdNummerSpalte,
+        nameSpalte: _nameSpalte,
+        gewerkSpalte: _gewerkSpalte,
+        etageSpalte: _etageSpalte,
+        anlageBauteilSpalte: _anlageBauteilSpalte,
+        parameterSpalte: _parameterSpalte,
+        delimiterMode: _delimiterMode,
+        anlageKuerzel: _anlageKuerzel,
+        bauteilKuerzel: _bauteilKuerzel,
+        useDisciplineGrouping: _useDisciplineGrouping,
+        labelGewerk: _labelGewerk,
+        labelAnlage: _labelAnlage,
+        labelBauteil: _labelBauteil,
+      );
+      await notifier.save(settings);
 
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'csv_settings_${widget.projectId}';
-    final flags = {
-      'lfdNummerBearbeitbar': _lfdNummerBearbeitbar,
-      'nameBearbeitbar': _nameBearbeitbar,
-      'gewerkBearbeitbar': _gewerkBearbeitbar,
-      'etageBearbeitbar': _etageBearbeitbar,
-      'anlageBauteilBearbeitbar': _anlageBauteilBearbeitbar,
-      'parameterBearbeitbar': _parameterBearbeitbar,
-    };
-    final existing = json.decode(prefs.getString(key) ?? '{}') as Map<String, dynamic>;
-    await prefs.setString(key, json.encode({...existing, ...flags}));
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'csv_settings_${widget.projectId}';
+      final flags = {
+        'lfdNummerBearbeitbar': _lfdNummerBearbeitbar,
+        'nameBearbeitbar': _nameBearbeitbar,
+        'gewerkBearbeitbar': _gewerkBearbeitbar,
+        'etageBearbeitbar': _etageBearbeitbar,
+        'anlageBauteilBearbeitbar': _anlageBauteilBearbeitbar,
+        'parameterBearbeitbar': _parameterBearbeitbar,
+      };
+      final existing = json.decode(prefs.getString(key) ?? '{}') as Map<String, dynamic>;
+      await prefs.setString(key, json.encode({...existing, ...flags}));
+    } catch (e) {
+      debugPrint('Fehler beim automatischen Speichern der CSV-Einstellungen: $e');
+    }
+  }
+
+  /// Speichert alle Einstellungen automatisch
+  Future<void> _saveAllSettings() async {
+    if (_isSaving) return; // Verhindere gleichzeitige Speichervorgänge
+    
+    _isSaving = true;
+    try {
+      await Future.wait([
+        _saveCsvSettings(),
+        _saveDisciplines(),
+        _saveTemplateCsvSettings(),
+        _saveGlobalSchema(),
+        _saveDropdownCsvSettings(),
+        _saveDropdownValues(),
+      ]);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Einstellungen gespeichert'),
+            duration: Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Fehler beim automatischen Speichern: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Speichern: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } finally {
+      _isSaving = false;
+    }
+  }
+
+  Future<void> _loadDropdownCsvSettings() async {
+    try {
+      if (mounted) setState(() => _dropdownIsLoading = true);
+      final data = await DropdownCsvService.loadForBuilding(widget.buildingId);
+      if (!mounted) return;
+      setState(() {
+        _dropdownCsvPath = data.path;
+        _dropdownCsvHeaders = data.headers.isEmpty ? null : data.headers;
+        _dropdownValuesByHeader = Map<String, List<String>>.from(data.valuesByHeader);
+        _dropdownCsvError = data.error;
+      });
+    } catch (e) {
+      debugPrint('Fehler beim Laden der Dropdown-CSV: $e');
+      if (!mounted) return;
+      setState(() => _dropdownCsvError = e.toString());
+    } finally {
+      if (mounted) setState(() => _dropdownIsLoading = false);
+    }
+  }
+
+  Future<void> _saveDropdownCsvSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = DropdownCsvService.prefsKeyForBuilding(widget.buildingId);
+      if (_dropdownCsvPath == null || _dropdownCsvPath!.trim().isEmpty) {
+        await prefs.remove(key);
+        return;
+      }
+      await prefs.setString(
+        key,
+        json.encode({
+          'path': _dropdownCsvPath,
+          'headers': _dropdownCsvHeaders ?? <String>[],
+        }),
+      );
+    } catch (e) {
+      debugPrint('Fehler beim Speichern der Dropdown-CSV: $e');
+    }
+  }
+
+  Future<void> _saveDropdownValues() async {
+    await DropdownCsvService.saveValuesForBuilding(widget.buildingId, _dropdownValuesByHeader);
+  }
+
+  Future<void> _persistDropdownEdits() async {
+    // Stelle sicher, dass alle Dropdown-Namen auch in der Header-Liste liegen
+    final headers = <String>[
+      ...?_dropdownCsvHeaders,
+    ];
+    for (final k in _dropdownValuesByHeader.keys) {
+      if (!headers.contains(k)) headers.add(k);
+    }
+    setState(() => _dropdownCsvHeaders = headers);
+    await _saveDropdownCsvSettings();
+    await _saveDropdownValues();
+  }
+
+  Future<void> _importDropdownCsv() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+      if (result == null || result.files.single.path == null) return;
+
+      final filePath = result.files.single.path!;
+      final file = File(filePath);
+      final bytes = await file.readAsBytes();
+
+      String csvString;
+      try {
+        csvString = utf8.decode(bytes);
+      } catch (_) {
+        csvString = latin1.decode(bytes);
+      }
+
+      final eolIndex = csvString.indexOf('\n');
+      final headerLine = eolIndex != -1 ? csvString.substring(0, eolIndex) : csvString;
+      final delimiter = headerLine.contains('\t')
+          ? '\t'
+          : (headerLine.contains(',') && !headerLine.contains(';'))
+              ? ','
+              : ';';
+
+      final List<List<dynamic>> rows = CsvToListConverter(
+        fieldDelimiter: delimiter,
+        shouldParseNumbers: false,
+      ).convert(headerLine);
+
+      if (rows.isEmpty || rows.first.isEmpty) {
+        throw Exception('Keine Header-Zeile in der CSV erkannt');
+      }
+
+      final headers =
+          rows.first.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+      if (headers.isEmpty) {
+        throw Exception('Header-Zeile ist leer');
+      }
+
+      setState(() {
+        _dropdownCsvPath = filePath;
+        _dropdownCsvHeaders = headers;
+      });
+      await _saveDropdownCsvSettings();
+      await _loadDropdownCsvSettings();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '${headers.length} Spalten erkannt. Dropdown-Felder können jetzt Spalten auswählen.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fehler beim Import der Dropdown-CSV: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _clearDropdownCsv() async {
+    setState(() {
+      _dropdownCsvPath = null;
+      _dropdownCsvHeaders = null;
+      _dropdownValuesByHeader = {};
+      _dropdownCsvError = null;
+    });
+    await DropdownCsvService.clearValuesForBuilding(widget.buildingId);
+    await _saveDropdownCsvSettings();
+  }
+
+  /// Plant automatisches Speichern nach einer kurzen Verzögerung
+  void _scheduleAutoSave() {
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(seconds: 1), () {
+      _saveAllSettings();
+    });
   }
 
   Future<void> _saveDisciplines() async {
@@ -278,7 +491,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: const Color(0xFFF5F7FA),
         appBar: AppBar(
@@ -297,29 +510,20 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             tabs: [
               Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
               Tab(icon: Icon(Icons.schema), text: 'Eingabefelder'),
+              Tab(icon: Icon(Icons.arrow_drop_down_circle_outlined), text: 'Dropdown'),
               Tab(icon: Icon(Icons.table_view), text: 'Gewerkevorlagen'),
             ],
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.save),
-              onPressed: () async {
-                setState(() => _isLoading = true);
-                await Future.wait([
-                  _saveCsvSettings(),
-                  _saveDisciplines(),
-                  _saveTemplateCsvSettings(),
-                  _saveGlobalSchema(),
-                ]);
-                if (mounted) {
-                  setState(() => _isLoading = false);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Alle Einstellungen gespeichert')),
-                  );
-                  Navigator.of(context).pop();
-                }
-              },
-            ),
+            if (_isSaving)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
           ],
         ),
         body: _isLoading
@@ -328,6 +532,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 children: [
                   _buildMappingTab(),
                   _buildSchemaTab(),
+                  _buildDropdownTab(),
                   _buildTemplateTab(),
                 ],
               ),
@@ -371,6 +576,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             onChanged: (val) {
               if (val != null) {
                 setState(() => _delimiterMode = val);
+                _scheduleAutoSave();
               }
             },
           ),
@@ -386,12 +592,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             icon: Icons.folder_open,
             iconColor: Colors.blueGrey,
             title: "Ebene 1: $_labelGewerk",
-            description: "In welcher Spalte steht $_labelGewerk?",
+            description: "",
             child: _useDisciplineGrouping
                 ? _buildColumnSelector(
                     label: 'Spalte für $_labelGewerk',
                     value: _gewerkSpalte,
-                    onChanged: (v) => setState(() => _gewerkSpalte = v),
+                    onChanged: (v) {
+                      setState(() => _gewerkSpalte = v);
+                      _scheduleAutoSave();
+                    },
                     csvHeaders: _mappingCsvHeaders,
                   )
                 : const Text(
@@ -409,48 +618,52 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             description: "Welche Spalten definieren $_labelAnlage?",
             child: Column(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildColumnSelector(
-                        label: 'Spalte für Name ($_labelAnlage)',
-                        value: _nameSpalte,
-                        onChanged: (v) => setState(() => _nameSpalte = v),
-                        csvHeaders: _mappingCsvHeaders,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildColumnSelector(
-                        label: 'Spalte ID (lfd Nr.)',
-                        value: _lfdNummerSpalte,
-                        onChanged: (v) => setState(() => _lfdNummerSpalte = v),
-                        csvHeaders: _mappingCsvHeaders,
-                      ),
-                    ),
-                  ],
+                _buildColumnSelector(
+                  label: 'Spalte für Name ($_labelAnlage)',
+                  value: _nameSpalte,
+                  onChanged: (v) {
+                    setState(() => _nameSpalte = v);
+                    _scheduleAutoSave();
+                  },
+                  csvHeaders: _mappingCsvHeaders,
+                ),
+                const SizedBox(height: 12),
+                _buildColumnSelector(
+                  label: 'Spalte ID (lfd Nr.)',
+                  value: _lfdNummerSpalte,
+                  onChanged: (v) {
+                    setState(() => _lfdNummerSpalte = v);
+                    _scheduleAutoSave();
+                  },
+                  csvHeaders: _mappingCsvHeaders,
                 ),
                 const SizedBox(height: 12),
                 _buildToggleRow(
                   icon: Icons.layers,
                   label: 'Spalte für Etage?',
                   isActive: _etageSpalte != null,
-                  onToggle: (val) => setState(() {
-                    _etageSpalte = val
-                        ? _nextFreeIndex([
-                            _lfdNummerSpalte,
-                            _nameSpalte,
-                            if (_useDisciplineGrouping) _gewerkSpalte,
-                            _parameterSpalte,
-                            _anlageBauteilSpalte,
-                          ])
-                        : null;
-                  }),
+                  onToggle: (val) {
+                    setState(() {
+                      _etageSpalte = val
+                          ? _nextFreeIndex([
+                              _lfdNummerSpalte,
+                              _nameSpalte,
+                              if (_useDisciplineGrouping) _gewerkSpalte,
+                              _parameterSpalte,
+                              _anlageBauteilSpalte,
+                            ])
+                          : null;
+                    });
+                    _scheduleAutoSave();
+                  },
                   child: _etageSpalte != null 
                     ? _buildColumnSelector(
                         label: 'Spalte Etage', 
                         value: _etageSpalte!, 
-                        onChanged: (v) => setState(() => _etageSpalte = v),
+                        onChanged: (v) {
+                          setState(() => _etageSpalte = v);
+                          _scheduleAutoSave();
+                        },
                         csvHeaders: _mappingCsvHeaders,
                       )
                     : null,
@@ -460,22 +673,28 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   icon: Icons.settings_input_component,
                   label: 'Spalte für Leistungsparameter?',
                   isActive: _parameterSpalte != null,
-                  onToggle: (val) => setState(() {
-                    _parameterSpalte = val
-                        ? _nextFreeIndex([
-                            _lfdNummerSpalte,
-                            _nameSpalte,
-                            if (_useDisciplineGrouping) _gewerkSpalte,
-                            _etageSpalte,
-                            _anlageBauteilSpalte,
-                          ])
-                        : null;
-                  }),
+                  onToggle: (val) {
+                    setState(() {
+                      _parameterSpalte = val
+                          ? _nextFreeIndex([
+                              _lfdNummerSpalte,
+                              _nameSpalte,
+                              if (_useDisciplineGrouping) _gewerkSpalte,
+                              _etageSpalte,
+                              _anlageBauteilSpalte,
+                            ])
+                          : null;
+                    });
+                    _scheduleAutoSave();
+                  },
                   child: _parameterSpalte != null 
                     ? _buildColumnSelector(
                         label: 'Spalte Parameter', 
                         value: _parameterSpalte!, 
-                        onChanged: (v) => setState(() => _parameterSpalte = v),
+                        onChanged: (v) {
+                          setState(() => _parameterSpalte = v);
+                          _scheduleAutoSave();
+                        },
                         csvHeaders: _mappingCsvHeaders,
                       )
                     : null,
@@ -495,22 +714,28 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               icon: Icons.account_tree,
               label: 'Unterscheidung A/B nutzen?',
               isActive: _anlageBauteilSpalte != null,
-              onToggle: (val) => setState(() {
-                _anlageBauteilSpalte = val
-                    ? _nextFreeIndex([
-                        _lfdNummerSpalte,
-                        _nameSpalte,
-                        if (_useDisciplineGrouping) _gewerkSpalte,
-                        _etageSpalte,
-                        _parameterSpalte,
-                      ])
-                    : null;
-              }),
+              onToggle: (val) {
+                setState(() {
+                  _anlageBauteilSpalte = val
+                      ? _nextFreeIndex([
+                          _lfdNummerSpalte,
+                          _nameSpalte,
+                          if (_useDisciplineGrouping) _gewerkSpalte,
+                          _etageSpalte,
+                          _parameterSpalte,
+                        ])
+                      : null;
+                });
+                _scheduleAutoSave();
+              },
               child: _anlageBauteilSpalte != null 
                 ? _buildColumnSelector(
                     label: 'Spalte A/B', 
                     value: _anlageBauteilSpalte!, 
-                    onChanged: (v) => setState(() => _anlageBauteilSpalte = v),
+                    onChanged: (v) {
+                      setState(() => _anlageBauteilSpalte = v);
+                      _scheduleAutoSave();
+                    },
                     csvHeaders: _mappingCsvHeaders,
                   )
                 : null,
@@ -521,27 +746,33 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             TextField(
               controller: TextEditingController(text: _anlageKuerzel),
               decoration: InputDecoration(
-                labelText: 'Kürzel für Anlage',
-                helperText: 'Mehrere Kürzel mit Komma trennen (z.B. A,Anlage,MA)',
+                labelText: 'Kürzel für $_labelAnlage',
+                helperText: 'Mehrere Kürzel mit Komma trennen (z.B. A,$_labelAnlage,MA)',
                 isDense: true,
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onChanged: (val) => setState(() => _anlageKuerzel = val),
+              onChanged: (val) {
+                setState(() => _anlageKuerzel = val);
+                _scheduleAutoSave();
+              },
             ),
             const SizedBox(height: 12),
             TextField(
               controller: TextEditingController(text: _bauteilKuerzel),
               decoration: InputDecoration(
-                labelText: 'Kürzel für Bauteil',
-                helperText: 'Mehrere Kürzel mit Komma trennen (z.B. B,Bauteil,SL)',
+                labelText: 'Kürzel für $_labelBauteil',
+                helperText: 'Mehrere Kürzel mit Komma trennen (z.B. B,$_labelBauteil,SL)',
                 isDense: true,
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onChanged: (val) => setState(() => _bauteilKuerzel = val),
+              onChanged: (val) {
+                setState(() => _bauteilKuerzel = val);
+                _scheduleAutoSave();
+              },
             ),
           ],
           const SizedBox(height: 24),
@@ -554,7 +785,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             icon: Icons.group_work,
             label: 'Nach Gewerk gruppieren?',
             isActive: _useDisciplineGrouping,
-            onToggle: (val) => setState(() => _useDisciplineGrouping = val),
+            onToggle: (val) {
+              setState(() => _useDisciplineGrouping = val);
+              _scheduleAutoSave();
+            },
           ),
           const SizedBox(height: 12),
           ExpansionTile(
@@ -571,7 +805,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   fillColor: Colors.white,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onChanged: (val) => setState(() => _labelGewerk = val),
+                onChanged: (val) {
+                  setState(() => _labelGewerk = val);
+                  _scheduleAutoSave();
+                },
               ),
               const SizedBox(height: 12),
               TextField(
@@ -584,7 +821,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   fillColor: Colors.white,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onChanged: (val) => setState(() => _labelAnlage = val),
+                onChanged: (val) {
+                  setState(() => _labelAnlage = val);
+                  _scheduleAutoSave();
+                },
               ),
               const SizedBox(height: 12),
               TextField(
@@ -597,7 +837,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   fillColor: Colors.white,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onChanged: (val) => setState(() => _labelBauteil = val),
+                onChanged: (val) {
+                  setState(() => _labelBauteil = val);
+                  _scheduleAutoSave();
+                },
               ),
             ],
           ),
@@ -607,10 +850,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
           _buildBetaCsvLoader(forTemplate: false),
           const SizedBox(height: 24),
-          // Diskret: Alle Gewerke und Anlagen löschen
+          // Diskret: Alle Gewerke, Anlagen und Grundrisse löschen
           _buildBottomDeleteButton(
             title: 'Alle Daten löschen',
-            description: 'Löscht alle Gewerke und Anlagen für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
+            description: 'Löscht alle Gewerke, Anlagen und Grundrisse (Ebenen) für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
             buttonText: 'Alle löschen',
             onPressed: () => _confirmAndDeleteAll(),
           ),
@@ -636,11 +879,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               child: SchemaEditorWidget(
                 existingSchema: _globalSchema,
                 allowEditGlobal: true,
+                dropdownCsvPath: _dropdownCsvPath,
+                dropdownCsvHeaders: _dropdownCsvHeaders,
                 onSchemaChanged: (newSchema) {
                   setState(() {
                     _globalSchema = newSchema.map((f) => {...f, 'isGlobal': true}).toList();
                     _syncGlobalSchemaToDisciplines();
                   });
+                  _scheduleAutoSave();
                 },
               ),
             ),
@@ -654,6 +900,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             Expanded(
               child: SchemaEditorWidget(
                 existingSchema: d.schema,
+                dropdownCsvPath: _dropdownCsvPath,
+                dropdownCsvHeaders: _dropdownCsvHeaders,
                 onSchemaChanged: (newSchema) {
                   setState(() {
                     _disciplines[_editingDisciplineIndex!] = Disziplin(
@@ -664,6 +912,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       groupingKey: d.groupingKey,
                     );
                   });
+                  _scheduleAutoSave();
                 },
               ),
             ),
@@ -704,21 +953,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Konfigurations-Modus wählen',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Wählen Sie, ob Sie das globale Standard-Schema für neue Gewerke oder ein spezifisches Gewerk bearbeiten möchten.',
-            style: TextStyle(color: Colors.grey),
-          ),
-          const SizedBox(height: 24),
           
           // GLOBAL CARD
           _buildSelectionCard(
             title: 'Globales Standard-Schema',
-            subtitle: 'Definiert, wie neue Gewerke standardmäßig aussehen',
             icon: Icons.public,
             color: Colors.blue,
             onTap: () => setState(() {
@@ -743,7 +981,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _buildSelectionCard(
                   title: d.label,
-                  subtitle: '${d.schema.length} Felder definiert',
                   icon: d.icon,
                   color: d.color,
                   onTap: () => setState(() {
@@ -758,9 +995,270 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
+  Widget _buildDropdownTab() {
+    final headers = _dropdownCsvHeaders ?? const <String>[];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildInfoCard(
+            'Hier importieren und verwalten Sie Dropdown-Werte. Diese Werte stehen anschließend in Eingabefeldern vom Typ „Dropdown“ zur Auswahl.',
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _importDropdownCsv,
+                icon: Icon(
+                  (headers.isNotEmpty) ? Icons.refresh : Icons.upload_file,
+                  size: 16,
+                ),
+                label: Text(
+                  (headers.isNotEmpty) ? 'Dropdown-CSV neu laden' : 'Dropdown-CSV importieren',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  side: BorderSide(color: Colors.grey.withOpacity(0.35)),
+                  foregroundColor: Colors.grey[800],
+                ),
+              ),
+              const SizedBox(width: 10),
+              if (_dropdownCsvPath != null && _dropdownCsvPath!.isNotEmpty)
+                Expanded(
+                  child: Text(
+                    '${headers.length} Dropdowns',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: Colors.green[800]),
+                  ),
+                ),
+              if (_dropdownCsvPath != null && _dropdownCsvPath!.isNotEmpty)
+                IconButton(
+                  tooltip: 'Dropdown-CSV entfernen',
+                  onPressed: _clearDropdownCsv,
+                  icon: const Icon(Icons.close, size: 18),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          if (_dropdownIsLoading) ...[
+            const SizedBox(height: 16),
+            const LinearProgressIndicator(),
+          ],
+          if (_dropdownCsvError != null && _dropdownCsvError!.trim().isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _buildInfoCard('Fehler: $_dropdownCsvError'),
+          ],
+          const SizedBox(height: 20),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _buildHeaderAction(
+              icon: Icons.add,
+              label: 'Neues Dropdown',
+              onPressed: () async {
+                final name = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) {
+                    final ctrl = TextEditingController();
+                    return AlertDialog(
+                      title: const Text('Neues Dropdown'),
+                      content: TextField(
+                        controller: ctrl,
+                        autofocus: true,
+                        decoration: const InputDecoration(labelText: 'Name'),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('Abbrechen'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+                          child: const Text('Erstellen'),
+                        ),
+                      ],
+                    );
+                  },
+                );
+                final cleaned = name?.trim();
+                if (cleaned == null || cleaned.isEmpty) return;
+                setState(() {
+                  _dropdownValuesByHeader.putIfAbsent(cleaned, () => <String>[]);
+                  _dropdownCsvHeaders = [...headers, if (!headers.contains(cleaned)) cleaned];
+                });
+                await _persistDropdownEdits();
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (headers.isEmpty)
+            const Center(child: Text('Noch keine Dropdowns vorhanden.'))
+          else
+            ...headers.map((h) {
+              final values = _dropdownValuesByHeader[h] ?? const <String>[];
+              return Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+                ),
+                child: ListTile(
+                  title: Text(h, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('${values.length} Wert${values.length == 1 ? '' : 'e'}'),
+                  trailing: PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: (value) async {
+                      if (value == 'edit') {
+                        final updated = await showDialog<List<String>>(
+                          context: context,
+                          builder: (ctx) {
+                            var local = [...values];
+                            local.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+                            return StatefulBuilder(
+                              builder: (ctx, setLocal) {
+                                Future<void> promptAddValue() async {
+                                  final newValue = await showDialog<String>(
+                                    context: ctx,
+                                    builder: (ctx2) {
+                                      final ctrl = TextEditingController();
+                                      return AlertDialog(
+                                        title: const Text('Neuer Wert'),
+                                        content: TextField(
+                                          controller: ctrl,
+                                          autofocus: true,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Wert',
+                                          ),
+                                          onSubmitted: (_) => Navigator.of(ctx2).pop(ctrl.text.trim()),
+                                        ),
+                                        actions: [
+                                          IconButton(
+                                            tooltip: 'Abbrechen',
+                                            onPressed: () => Navigator.of(ctx2).pop(),
+                                            icon: const Icon(Icons.close),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Bestätigen',
+                                            onPressed: () => Navigator.of(ctx2).pop(ctrl.text.trim()),
+                                            icon: const Icon(Icons.check),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+
+                                  final t = newValue?.trim();
+                                  if (t == null || t.isEmpty) return;
+                                  setLocal(() {
+                                    if (!local.contains(t)) local.add(t);
+                                    local.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+                                  });
+                                }
+
+                                return AlertDialog(
+                                title: Text('Dropdown: $h'),
+                                content: SizedBox(
+                                  width: 420,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: IconButton(
+                                          tooltip: 'Neuen Wert hinzufügen',
+                                          onPressed: promptAddValue,
+                                          icon: const Icon(Icons.add),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Flexible(
+                                        child: ListView.builder(
+                                          shrinkWrap: true,
+                                          itemCount: local.length,
+                                          itemBuilder: (ctx, i) {
+                                            final v = local[i];
+                                            return ListTile(
+                                              dense: true,
+                                              title: Text(v),
+                                              trailing: IconButton(
+                                                tooltip: 'Entfernen',
+                                                icon: const Icon(Icons.close, size: 18),
+                                                onPressed: () => setLocal(() => local.removeAt(i)),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                    child: const Text('Abbrechen'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.of(ctx).pop(local),
+                                    child: const Text('Speichern'),
+                                  ),
+                                ],
+                              );
+                              },
+                            );
+                          },
+                        );
+                        if (updated != null) {
+                          setState(() {
+                            _dropdownValuesByHeader[h] = updated;
+                          });
+                          await _persistDropdownEdits();
+                        }
+                      } else if (value == 'delete') {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Dropdown löschen?'),
+                            content: Text('„$h“ wirklich löschen?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(false),
+                                child: const Text('Abbrechen'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(true),
+                                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                child: const Text('Löschen'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          setState(() {
+                            _dropdownValuesByHeader.remove(h);
+                            _dropdownCsvHeaders = headers.where((x) => x != h).toList();
+                          });
+                          await _persistDropdownEdits();
+                        }
+                      }
+                    },
+                    itemBuilder: (ctx) => const [
+                      PopupMenuItem(value: 'edit', child: Text('Bearbeiten')),
+                      PopupMenuItem(value: 'delete', child: Text('Löschen')),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSelectionCard({
     required String title,
-    required String subtitle,
+    String? subtitle,
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
@@ -782,7 +1280,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           child: Icon(icon, color: color),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(subtitle),
+        subtitle: (subtitle != null && subtitle.isNotEmpty) ? Text(subtitle) : null,
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),
@@ -828,7 +1326,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             child: _buildTemplateColumnSelector(
               label: 'Spalte für Gewerk',
               value: _templateGewerkSpalte,
-              onChanged: (v) => setState(() => _templateGewerkSpalte = v),
+              onChanged: (v) {
+                setState(() => _templateGewerkSpalte = v);
+                _scheduleAutoSave();
+              },
             ),
           ),
 
@@ -844,58 +1345,59 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             description: "Welche Spalten definieren die Vorlagendetails?",
             child: Column(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildTemplateColumnSelector(
-                        label: 'Spalte Anlagentyp',
-                        value: _templateAnlagentypSpalte,
-                        onChanged: (v) => setState(() => _templateAnlagentypSpalte = v),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildTemplateColumnSelector(
-                        label: 'Spalte Bezeichnung',
-                        value: _templateBezeichnungSpalte,
-                        onChanged: (v) => setState(() => _templateBezeichnungSpalte = v),
-                      ),
-                    ),
-                  ],
+                _buildTemplateColumnSelector(
+                  label: 'Spalte Anlagentyp',
+                  value: _templateAnlagentypSpalte,
+                  onChanged: (v) {
+                    setState(() => _templateAnlagentypSpalte = v);
+                    _scheduleAutoSave();
+                  },
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildTemplateColumnSelector(
-                        label: 'Spalte Parameter',
-                        value: _templateParameterSpalte,
-                        onChanged: (v) => setState(() => _templateParameterSpalte = v),
-                      ),
-                    ),
-                  ],
+                _buildTemplateColumnSelector(
+                  label: 'Spalte Bezeichnung',
+                  value: _templateBezeichnungSpalte,
+                  onChanged: (v) {
+                    setState(() => _templateBezeichnungSpalte = v);
+                    _scheduleAutoSave();
+                  },
+                ),
+                const SizedBox(height: 12),
+                _buildTemplateColumnSelector(
+                  label: 'Spalte Parameter',
+                  value: _templateParameterSpalte,
+                  onChanged: (v) {
+                    setState(() => _templateParameterSpalte = v);
+                    _scheduleAutoSave();
+                  },
                 ),
                 const SizedBox(height: 12),
                 _buildToggleRow(
                   icon: Icons.checklist,
                   label: 'Gibt es eine Spalte für Auswahl-Typ?',
                   isActive: _templateAuswahlAnlagentypSpalte != null,
-                  onToggle: (val) => setState(() {
-                    _templateAuswahlAnlagentypSpalte = val
-                        ? _nextFreeIndex([
-                            _templateGewerkSpalte,
-                            _templateAnlageBauteilSpalte,
-                            _templateAnlagentypSpalte,
-                            _templateBezeichnungSpalte,
-                            _templateParameterSpalte,
-                          ])
-                        : null;
-                  }),
+                  onToggle: (val) {
+                    setState(() {
+                      _templateAuswahlAnlagentypSpalte = val
+                          ? _nextFreeIndex([
+                              _templateGewerkSpalte,
+                              _templateAnlageBauteilSpalte,
+                              _templateAnlagentypSpalte,
+                              _templateBezeichnungSpalte,
+                              _templateParameterSpalte,
+                            ])
+                          : null;
+                    });
+                    _scheduleAutoSave();
+                  },
                   child: _templateAuswahlAnlagentypSpalte != null 
                     ? _buildTemplateColumnSelector(
                         label: 'Spalte Auswahl-Typ', 
                         value: _templateAuswahlAnlagentypSpalte!, 
-                        onChanged: (v) => setState(() => _templateAuswahlAnlagentypSpalte = v)
+                        onChanged: (v) {
+                          setState(() => _templateAuswahlAnlagentypSpalte = v);
+                          _scheduleAutoSave();
+                        }
                       )
                     : null,
                 ),
@@ -923,7 +1425,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 _buildTemplateColumnSelector(
                   label: 'Spalte A/B Kennung',
                   value: _templateAnlageBauteilSpalte,
-                  onChanged: (v) => setState(() => _templateAnlageBauteilSpalte = v),
+                  onChanged: (v) {
+                    setState(() => _templateAnlageBauteilSpalte = v);
+                    _scheduleAutoSave();
+                  },
                 ),
               ],
             ),
@@ -997,7 +1502,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         filled: true,
         fillColor: Colors.white,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        helperText: 'Spaltennummer (Start bei 1)',
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
       onChanged: (text) {
@@ -1356,7 +1860,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         filled: true,
         fillColor: Colors.white,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        helperText: 'Spaltennummer (Start bei 1)',
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
       onChanged: (text) {
@@ -1693,7 +2196,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ],
         ),
         content: const Text(
-          'Möchten Sie wirklich ALLE Gewerke und Anlagen für dieses Gebäude löschen?\n\n'
+          'Möchten Sie wirklich ALLE Gewerke, Anlagen und Grundrisse (Ebenen) für dieses Gebäude löschen?\n\n'
           'Diese Aktion kann nicht rückgängig gemacht werden!',
         ),
         actions: [
@@ -1728,20 +2231,49 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     try {
       final dbService = ref.read(databaseServiceProvider);
       
+      // Lade das Gebäude, um die Grundrisse zu erhalten
+      final building = await dbService.getBuildingById(widget.buildingId);
+      if (building == null) throw Exception('Gebäude nicht gefunden');
+
       // Anzahl vor dem Löschen speichern für die Meldung
       final anlagen = await dbService.getAnlagenByBuildingId(widget.buildingId);
       final disciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+      final floorsCount = building.floors.length;
       final anlagenCount = anlagen.length;
       final disciplinesCount = disciplines.length;
       
-      debugPrint('Lösche $anlagenCount Anlagen und $disciplinesCount Gewerke für Gebäude ${widget.buildingId}');
+      debugPrint('Lösche $anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse für Gebäude ${widget.buildingId}');
       
-      // Alle Anlagen für dieses Gebäude löschen
+      // 1. Alle Grundrisse löschen (Dateisystem + Liste im Building)
+      // Wir löschen die Dateien physisch vom Gerät
+      for (final floor in building.floors) {
+        if (floor.pdfPath != null) {
+          final file = File(floor.pdfPath!);
+          if (await file.exists()) {
+            try {
+              await file.delete();
+              debugPrint('Datei gelöscht: ${floor.pdfPath}');
+            } catch (e) {
+              debugPrint('Fehler beim Löschen der Datei ${floor.pdfPath}: $e');
+            }
+          }
+        }
+      }
+      
+      // Liste der Grundrisse im Building-Objekt leeren
+      building.floors.clear();
+      
+      // 2. Gebäude in DB und Provider aktualisieren
+      // Dies löscht die Einträge aus der floorPlans-Tabelle in der DB
+      // und informiert alle Listener (wie BuildingDetailsPage), dass sich das Gebäude geändert hat
+      await ref.read(projectsProvider.notifier).updateBuilding(building);
+
+      // 3. Alle Anlagen für dieses Gebäude löschen
       for (final anlage in anlagen) {
         await dbService.deleteAnlage(anlage.id);
       }
 
-      // Alle Disziplinen für dieses Gebäude löschen (mit replaceDisciplines mit leerer Liste)
+      // 4. Alle Disziplinen für dieses Gebäude löschen (mit replaceDisciplines mit leerer Liste)
       await dbService.replaceDisciplines(widget.buildingId, []);
       
       // Cache explizit leeren (wird zwar schon in replaceDisciplines gemacht, aber zur Sicherheit)
@@ -1779,6 +2311,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       // Disziplinen-Initialisierungs-Flag löschen
       final disciplinesInitializedKey = 'disciplines_initialized_${widget.buildingId}';
       await prefs.remove(disciplinesInitializedKey);
+
+      // Dropdown-CSV entfernen (für Dropdown-Felder)
+      if (mounted) {
+        setState(() {
+          _dropdownCsvPath = null;
+          _dropdownCsvHeaders = null;
+        });
+      }
+      await prefs.remove(DropdownCsvService.prefsKeyForBuilding(widget.buildingId));
       
       // Alle expanded_groups für alle Disziplinen dieses Gebäudes löschen
       // Da wir die Disziplinen bereits gelöscht haben, müssen wir alle möglichen Keys durchgehen
@@ -1832,8 +2373,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           SnackBar(
             content: Text(
               remainingDisciplines.isEmpty && remainingAnlagen.isEmpty
-                  ? '$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht'
-                  : '$anlagenCount Anlagen und $disciplinesCount Gewerke gelöscht. Bitte App neu starten, um Änderungen zu sehen.',
+                  ? '$anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse gelöscht'
+                  : '$anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse gelöscht. Bitte App neu starten, um Änderungen zu sehen.',
             ),
             backgroundColor: remainingDisciplines.isEmpty && remainingAnlagen.isEmpty ? Colors.green : Colors.orange,
             duration: const Duration(seconds: 5),

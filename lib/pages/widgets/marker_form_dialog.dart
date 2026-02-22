@@ -1,12 +1,12 @@
 import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../models/anlage.dart';
 import '../../models/marker.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../database/database_service.dart';
+import '../../services/dropdown_csv_service.dart';
 import 'photo_manager.dart';
 
 /// Bottom-Sheet zum Hinzufügen oder Bearbeiten eines Markers auf dem PDF-Grundriss.
@@ -18,6 +18,12 @@ class MarkerFormDialog extends StatefulWidget {
   final String buildingId;
   final Future<void> Function(Marker) onSave;
   final Future<void> Function(Marker)? onDelete;
+  final Future<void> Function()? onRemoveFromFloorPlan;
+
+  /// Optional: bestehende Anlagen auswählen (statt neu anlegen).
+  /// Wenn gesetzt, wird im "Neu"-Dialog ein zusätzlicher Tab "Bestehend" angezeigt.
+  final List<Anlage>? selectableExistingAnlagen;
+  final Future<void> Function(Anlage)? onSelectExistingAnlage;
 
   const MarkerFormDialog({
     Key? key,
@@ -27,14 +33,18 @@ class MarkerFormDialog extends StatefulWidget {
     required this.buildingId,
     required this.onSave,
     this.onDelete,
+    this.onRemoveFromFloorPlan,
     this.existing,
+    this.selectableExistingAnlagen,
+    this.onSelectExistingAnlage,
   }) : super(key: key);
 
   @override
   State<MarkerFormDialog> createState() => _MarkerFormDialogState();
 }
 
-class _MarkerFormDialogState extends State<MarkerFormDialog> {
+class _MarkerFormDialogState extends State<MarkerFormDialog>
+    with SingleTickerProviderStateMixin {
   late TextEditingController _titleController;
   final PhotoManager _photoManager = PhotoManager();
 
@@ -44,11 +54,50 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
 
+  DropdownCsvData? _dropdownCsvData;
+  bool _isLoadingDropdownCsv = false;
+
+  TabController? _tabController;
+  final TextEditingController _existingSearchController = TextEditingController();
+  String _existingQuery = '';
+  final Set<String> _expandedExistingDisciplines = <String>{};
+  bool _isSelectingExisting = false;
+
+  bool get _supportsExistingSelection =>
+      widget.existing == null && widget.onSelectExistingAnlage != null;
+
   @override
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.existing?.title ?? '');
     _loadAvailableDisciplines();
+    _loadDropdownCsv();
+
+    if (_supportsExistingSelection) {
+      _tabController = TabController(length: 2, vsync: this, initialIndex: 0)
+        ..addListener(() {
+          if (!mounted) return;
+          setState(() {});
+        });
+
+      _existingSearchController.addListener(() {
+        final next = _existingSearchController.text.trim();
+        if (next == _existingQuery) return;
+        setState(() => _existingQuery = next);
+      });
+
+      // Erste Disziplin (falls vorhanden) initial aufklappen, um Scroll zu sparen.
+      final candidates = widget.selectableExistingAnlagen ?? const <Anlage>[];
+      final labels = candidates
+          .map((a) => a.discipline.label)
+          .where((s) => s.trim().isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      if (labels.isNotEmpty) {
+        _expandedExistingDisciplines.add(labels.first);
+      }
+    }
 
     // vorhandene Fotos laden
     if (widget.existing?.params?['photoPaths'] is List) {
@@ -63,22 +112,30 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
     }
   }
 
+  Future<void> _loadDropdownCsv() async {
+    setState(() => _isLoadingDropdownCsv = true);
+    final data = await DropdownCsvService.loadForBuilding(widget.buildingId);
+    if (!mounted) return;
+    setState(() {
+      _dropdownCsvData = data;
+      _isLoadingDropdownCsv = false;
+    });
+  }
+
   Future<void> _loadAvailableDisciplines() async {
     setState(() => _isLoadingDisciplines = true);
 
-    List<Disziplin> list = [];
     final dbService = DatabaseService.instance;
-    if (dbService != null) {
-      list = await dbService.getDisciplinesByBuildingId(widget.buildingId);
-    } else {
-      // Fallback (z.B. wenn DatabaseService noch nicht initialisiert ist)
-      final prefs = await SharedPreferences.getInstance();
-      final jsonStr = prefs.getString('disziplinen_${widget.buildingId}') ?? '[]';
-      final data = json.decode(jsonStr) as List<dynamic>;
-      list = data
-          .map((e) => Disziplin.fromJson(e as Map<String, dynamic>))
-          .toList();
+    if (dbService == null) {
+      debugPrint('Fehler: DatabaseService ist nicht initialisiert');
+      setState(() {
+        _isLoadingDisciplines = false;
+        _availableDisciplines = [];
+      });
+      return;
     }
+    
+    final list = await dbService.getDisciplinesByBuildingId(widget.buildingId);
 
     setState(() {
       _availableDisciplines = list;
@@ -101,6 +158,8 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
   @override
   void dispose() {
     _titleController.dispose();
+    _existingSearchController.dispose();
+    _tabController?.dispose();
     for (var c in _controllers.values) {
       c.dispose();
     }
@@ -394,13 +453,193 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
     for (var fieldDef in schema) {
       final key = fieldDef['key'] as String;
       final label = fieldDef['label'] as String;
-      final type = fieldDef['type'] as String;
+      final type = (fieldDef['type'] ?? 'string').toString();
+      final editable = (fieldDef['editable'] ?? true) == true;
+      final dropdownColumn = (fieldDef['dropdownColumn'] ?? '').toString().trim();
 
       if (!_controllers.containsKey(key)) {
         final initial = widget.existing?.params?[key]?.toString() ?? '';
         _controllers[key] = TextEditingController(text: initial);
       }
       final controller = _controllers[key]!;
+
+      Future<void> pickDate() async {
+        if (!editable) return;
+        DateTime initialDate = DateTime.now();
+        final current = controller.text.trim();
+        if (current.isNotEmpty) {
+          final parsed = DateTime.tryParse(current);
+          if (parsed != null) initialDate = parsed;
+        }
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: initialDate,
+          firstDate: DateTime(1900),
+          lastDate: DateTime(2100),
+        );
+        if (picked == null) return;
+        final iso = '${picked.year.toString().padLeft(4, '0')}-'
+            '${picked.month.toString().padLeft(2, '0')}-'
+            '${picked.day.toString().padLeft(2, '0')}';
+        controller.text = iso;
+        _params[key] = iso;
+        setState(() {});
+      }
+
+      Widget input;
+      if (type == 'int' || type == 'number') {
+        input = TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          style: TextStyle(
+            fontSize: 15,
+            color: Colors.grey[900],
+            fontWeight: FontWeight.w400,
+          ),
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: TextStyle(
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 10,
+              horizontal: 4,
+            ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+          ),
+          onChanged: (val) => _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val,
+        );
+      } else if (type == 'date') {
+        input = TextField(
+          controller: controller,
+          readOnly: true,
+          onTap: editable ? pickDate : null,
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: TextStyle(
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 10,
+              horizontal: 4,
+            ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            suffixIcon: const Icon(Icons.calendar_today, size: 18),
+          ),
+        );
+      } else if (type == 'dropdown') {
+        final data = _dropdownCsvData;
+        final options = (data != null && dropdownColumn.isNotEmpty)
+            ? (data.valuesByHeader[dropdownColumn] ?? const <String>[])
+            : const <String>[];
+
+        String? currentValue;
+        if (_params.containsKey(key)) {
+          currentValue = _params[key]?.toString();
+        } else {
+          final v = widget.existing?.params?[key]?.toString();
+          currentValue = v;
+        }
+        if (currentValue != null && options.isNotEmpty && !options.contains(currentValue)) {
+          currentValue = null;
+        }
+
+        input = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String>(
+              value: currentValue,
+              isExpanded: true,
+              items: options
+                  .map((v) => DropdownMenuItem<String>(value: v, child: Text(v)))
+                  .toList(),
+              onChanged: (!editable || options.isEmpty) ? null : (v) {
+                setState(() {
+                  _params[key] = v;
+                  controller.text = v ?? '';
+                });
+              },
+              decoration: InputDecoration(
+                labelText: label,
+                labelStyle: TextStyle(
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+              ),
+            ),
+            if (_isLoadingDropdownCsv)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Dropdown-Werte werden geladen …',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              )
+            else if (data == null || (data.error != null))
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  data?.error ?? 'Keine Dropdown-CSV importiert',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              )
+            else if (dropdownColumn.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Keine Dropdown-Spalte konfiguriert (im Feld bearbeiten).',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              )
+            else if (options.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Keine Werte in Spalte „$dropdownColumn“ gefunden.',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              ),
+          ],
+        );
+      } else {
+        input = TextField(
+          controller: controller,
+          style: TextStyle(
+            fontSize: 15,
+            color: Colors.grey[900],
+            fontWeight: FontWeight.w400,
+          ),
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: TextStyle(
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 10,
+              horizontal: 4,
+            ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+          ),
+          onChanged: (val) => _params[key] = val,
+        );
+      }
 
       fields.add(
         Container(
@@ -415,56 +654,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
           ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
-            child: type == 'int'
-                ? TextField(
-                    controller: controller,
-                    keyboardType: TextInputType.number,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.grey[900],
-                      fontWeight: FontWeight.w400,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: label,
-                      labelStyle: TextStyle(
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                    ),
-                    onChanged: (val) => _params[key] = int.tryParse(val) ?? double.tryParse(val) ?? val,
-                  )
-                : TextField(
-                    controller: controller,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.grey[900],
-                      fontWeight: FontWeight.w400,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: label,
-                      labelStyle: TextStyle(
-                        color: Colors.grey[600],
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 4,
-                      ),
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                    ),
-                    onChanged: (val) => _params[key] = val,
-                  ),
+            child: input,
           ),
         ),
       );
@@ -473,25 +663,213 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
     return fields;
   }
 
+  String _existingSubtitle(Anlage a) {
+    final lfd = a.params['lfdNummer']?.toString().trim() ?? '';
+    final hersteller = a.params.entries
+        .where((e) => e.key.toLowerCase() == 'hersteller')
+        .map((e) => e.value?.toString().trim() ?? '')
+        .firstWhere((v) => v.isNotEmpty, orElse: () => '');
+
+    final parts = <String>[
+      a.discipline.label.trim(),
+      if (lfd.isNotEmpty) 'lfd: $lfd',
+      if (hersteller.isNotEmpty) hersteller,
+    ].where((s) => s.isNotEmpty).toList();
+
+    return parts.join(' · ');
+  }
+
+  List<Anlage> _filteredExisting() {
+    final list = widget.selectableExistingAnlagen ?? const <Anlage>[];
+    if (_existingQuery.isEmpty) return list;
+    final q = _existingQuery.toLowerCase();
+    return list.where((a) {
+      final name = a.name.toLowerCase();
+      final lfd = (a.params['lfdNummer']?.toString() ?? '').toLowerCase();
+      final hersteller = a.params.entries
+          .where((e) => e.key.toLowerCase() == 'hersteller')
+          .map((e) => e.value?.toString() ?? '')
+          .join(' ')
+          .toLowerCase();
+      return name.contains(q) || lfd.contains(q) || hersteller.contains(q);
+    }).toList();
+  }
+
+  Map<String, List<Anlage>> _groupByDiscipline(List<Anlage> list) {
+    final grouped = <String, List<Anlage>>{};
+    for (final a in list) {
+      grouped.putIfAbsent(a.discipline.label, () => <Anlage>[]).add(a);
+    }
+    for (final entry in grouped.entries) {
+      entry.value.sort((x, y) => x.name.toLowerCase().compareTo(y.name.toLowerCase()));
+    }
+    return grouped;
+  }
+
+  Widget _buildExistingSelector() {
+    final filtered = _filteredExisting();
+
+    if ((widget.selectableExistingAnlagen ?? const <Anlage>[]).isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(20),
+        child: Text('Keine bestehenden Anlagen für diesen Grundriss verfügbar.'),
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.withOpacity(0.2), width: 1),
+            ),
+            child: TextField(
+              controller: _existingSearchController,
+              decoration: InputDecoration(
+                hintText: 'Suche (Name, lfdNummer, Hersteller)',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _existingQuery.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _existingSearchController.clear(),
+                      ),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _existingQuery.isNotEmpty
+              ? ListView.builder(
+                  padding: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
+                  itemCount: filtered.length,
+                  itemBuilder: (ctx, i) {
+                    final a = filtered[i];
+                    return ListTile(
+                      enabled: !_isSelectingExisting,
+                      leading: Icon(a.discipline.icon, color: a.discipline.color),
+                      title: Text(a.name),
+                      subtitle: Text(_existingSubtitle(a)),
+                      onTap: _isSelectingExisting
+                          ? null
+                          : () async {
+                              setState(() => _isSelectingExisting = true);
+                              try {
+                                await widget.onSelectExistingAnlage?.call(a);
+                                if (mounted) Navigator.of(context).pop();
+                              } finally {
+                                if (mounted) setState(() => _isSelectingExisting = false);
+                              }
+                            },
+                    );
+                  },
+                )
+              : _buildExistingGroupedList(filtered),
+        ),
+        if (_isSelectingExisting)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildExistingGroupedList(List<Anlage> list) {
+    final grouped = _groupByDiscipline(list);
+    final keys = grouped.keys.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    return ListView(
+      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
+      children: [
+        for (final label in keys)
+          Card(
+            elevation: 0,
+            margin: const EdgeInsets.only(bottom: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ExpansionTile(
+              initiallyExpanded: _expandedExistingDisciplines.contains(label),
+              onExpansionChanged: (expanded) {
+                setState(() {
+                  if (expanded) {
+                    _expandedExistingDisciplines.add(label);
+                  } else {
+                    _expandedExistingDisciplines.remove(label);
+                  }
+                });
+              },
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${grouped[label]!.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              children: [
+                for (final a in grouped[label]!)
+                  ListTile(
+                    enabled: !_isSelectingExisting,
+                    leading: Icon(a.discipline.icon, color: a.discipline.color),
+                    title: Text(a.name),
+                    subtitle: Text(_existingSubtitle(a)),
+                    onTap: _isSelectingExisting
+                        ? null
+                        : () async {
+                            setState(() => _isSelectingExisting = true);
+                            try {
+                              await widget.onSelectExistingAnlage?.call(a);
+                              if (mounted) Navigator.of(context).pop();
+                            } finally {
+                              if (mounted) setState(() => _isSelectingExisting = false);
+                            }
+                          },
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
 
-    // 1) Lade-Zustand abfangen
-    if (_isLoadingDisciplines) {
-      return ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        child: Material(
-          color: Colors.white,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: const Center(child: CircularProgressIndicator()),
-          ),
-        ),
-      );
-    }
-
     final isEdit = widget.existing != null;
+    final showTabs = _supportsExistingSelection;
+    final tabIndex = _tabController?.index ?? 1;
+    final isExistingTab = showTabs && tabIndex == 0;
+
+    final headerAccent = isExistingTab
+        ? Colors.blueGrey
+        : (_isLoadingDisciplines ? Theme.of(context).primaryColor : _discipline.color);
+    final headerIcon = isExistingTab
+        ? Icons.playlist_add
+        : (_isLoadingDisciplines ? Icons.build : _discipline.icon);
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
@@ -509,8 +887,8 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      _discipline.color.withOpacity(0.1),
-                      _discipline.color.withOpacity(0.05),
+                      headerAccent.withOpacity(0.10),
+                      headerAccent.withOpacity(0.05),
                     ],
                   ),
                   border: Border(
@@ -520,149 +898,302 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
                     ),
                   ),
                 ),
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-                child: Row(
+                padding: const EdgeInsets.only(top: 16, left: 20, right: 20, bottom: 8),
+                child: Column(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: _discipline.color.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(
-                        _discipline.icon,
-                        color: _discipline.color,
-                        size: 24,
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: headerAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            headerIcon,
+                            color: headerAccent,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                isEdit
+                                    ? 'Marker bearbeiten'
+                                    : (showTabs && tabIndex == 0
+                                        ? 'Bestehende Anlage wählen'
+                                        : 'Neuen Marker hinzufügen'),
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey[900],
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              if (!isExistingTab && !_isLoadingDisciplines)
+                                Text(
+                                  _discipline.label,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
+                                  ),
+                                )
+                              else if (isExistingTab)
+                                Text(
+                                  'Alle Gewerke',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
+                                  ),
+                                )
+                              else
+                                Text(
+                                  'Gewerke werden geladen…',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            isEdit ? 'Marker bearbeiten' : 'Neuen Marker hinzufügen',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey[900],
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _discipline.label,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: Colors.grey[600],
-                            ),
-                          ),
+                    if (showTabs) ...[
+                      const SizedBox(height: 12),
+                      TabBar(
+                        controller: _tabController,
+                        labelColor: Theme.of(context).primaryColor,
+                        unselectedLabelColor: Colors.grey[600],
+                        indicatorColor: Theme.of(context).primaryColor,
+                        tabs: const [
+                          Tab(text: 'Bestehend'),
+                          Tab(text: 'Neu'),
                         ],
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
 
               Flexible(
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Titel
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.grey[50],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.grey.withOpacity(0.2),
-                              width: 1,
-                            ),
-                          ),
-                          child: TextField(
-                            controller: _titleController,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            decoration: InputDecoration(
-                              labelText: 'Titel des Markers',
-                              labelStyle: TextStyle(
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                              errorText: _titleController.text.trim().isEmpty ? 'Titel darf nicht leer sein' : null,
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Disziplin-Auswahl
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.grey[50],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.grey.withOpacity(0.2),
-                              width: 1,
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            child: DropdownButtonFormField<Disziplin>(
-                              value: _discipline,
-                              decoration: InputDecoration(
-                                labelText: 'Gewerk auswählen',
-                                labelStyle: TextStyle(
-                                  color: Colors.grey[600],
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 14,
+                child: showTabs
+                    ? TabBarView(
+                        controller: _tabController,
+                        children: [
+                          _buildExistingSelector(),
+                          SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_isLoadingDisciplines)
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 28),
+                                    child: Center(child: CircularProgressIndicator()),
+                                  ),
+                                // Titel
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[50],
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.grey.withOpacity(0.2),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: TextField(
+                                      controller: _titleController,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      decoration: InputDecoration(
+                                        labelText: 'Titel des Markers',
+                                        labelStyle: TextStyle(
+                                          color: Colors.grey[600],
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        errorText: _titleController.text.trim().isEmpty
+                                            ? 'Titel darf nicht leer sein'
+                                            : null,
+                                        border: InputBorder.none,
+                                        contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                              ),
-                              isExpanded: true,
-                              items: _availableDisciplines
-                                  .map((d) => DropdownMenuItem(value: d, child: Text(d.label)))
-                                  .toList(),
-                              onChanged: (d) {
-                                if (d == null) return;
-                                setState(() {
-                                  _discipline = d;
-                                  _params.clear(); // Parameter zurücksetzen
-                                  _controllers.clear();
-                                });
-                              },
+
+                                // Disziplin-Auswahl
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[50],
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.grey.withOpacity(0.2),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                      child: DropdownButtonFormField<Disziplin>(
+                                        value: _isLoadingDisciplines ? null : _discipline,
+                                        decoration: InputDecoration(
+                                          labelText: 'Gewerk auswählen',
+                                          labelStyle: TextStyle(
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                            fontSize: 14,
+                                          ),
+                                          border: InputBorder.none,
+                                          enabledBorder: InputBorder.none,
+                                          focusedBorder: InputBorder.none,
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                        ),
+                                        isExpanded: true,
+                                        items: _availableDisciplines
+                                            .map((d) =>
+                                                DropdownMenuItem(value: d, child: Text(d.label)))
+                                            .toList(),
+                                        onChanged: (d) {
+                                          if (d == null) return;
+                                          setState(() {
+                                            _discipline = d;
+                                            _params.clear(); // Parameter zurücksetzen
+                                            _controllers.clear();
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // Schema-Felder
+                                const SizedBox(height: 8),
+                                ..._buildSchemaFields(),
+
+                                // Fotos
+                                const SizedBox(height: 8),
+                                _buildPhotoSection(),
+                              ],
                             ),
                           ),
+                        ],
+                      )
+                    : SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Titel
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[50],
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.grey.withOpacity(0.2),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: TextField(
+                                  controller: _titleController,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  decoration: InputDecoration(
+                                    labelText: 'Titel des Markers',
+                                    labelStyle: TextStyle(
+                                      color: Colors.grey[600],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    errorText: _titleController.text.trim().isEmpty
+                                        ? 'Titel darf nicht leer sein'
+                                        : null,
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 10,
+                                    ),
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // Disziplin-Auswahl
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.grey[50],
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.grey.withOpacity(0.2),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                  child: DropdownButtonFormField<Disziplin>(
+                                    value: _discipline,
+                                    decoration: InputDecoration(
+                                      labelText: 'Gewerk auswählen',
+                                      labelStyle: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 14,
+                                      ),
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                    ),
+                                    isExpanded: true,
+                                    items: _availableDisciplines
+                                        .map((d) => DropdownMenuItem(value: d, child: Text(d.label)))
+                                        .toList(),
+                                    onChanged: (d) {
+                                      if (d == null) return;
+                                      setState(() {
+                                        _discipline = d;
+                                        _params.clear(); // Parameter zurücksetzen
+                                        _controllers.clear();
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // Schema-Felder
+                            const SizedBox(height: 8),
+                            ..._buildSchemaFields(),
+
+                            // Fotos
+                            const SizedBox(height: 8),
+                            _buildPhotoSection(),
+                          ],
                         ),
                       ),
-
-                      // Schema-Felder
-                      const SizedBox(height: 8),
-                      ..._buildSchemaFields(),
-
-                      // Fotos
-                      const SizedBox(height: 8),
-                      _buildPhotoSection(),
-                    ],
-                  ),
-                ),
               ),
 
               // Aktion-Buttons
@@ -687,137 +1218,137 @@ class _MarkerFormDialogState extends State<MarkerFormDialog> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (isEdit && widget.onDelete != null)
-                      OutlinedButton(
-                        onPressed: () async {
-                          await widget.onDelete!(widget.existing!);
-                          Navigator.of(context).pop();
-                        },
+                      Tooltip(
+                        message: 'Löschen',
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            await widget.onDelete!(widget.existing!);
+                            Navigator.of(context).pop();
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            side: BorderSide(
+                              color: Colors.red[300]!,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.delete,
+                            size: 24,
+                            color: Colors.red[600],
+                          ),
+                        ),
+                      ),
+                    if (isEdit && widget.onDelete != null) const SizedBox(width: 12),
+                    if (isEdit && widget.onRemoveFromFloorPlan != null)
+                      Tooltip(
+                        message: 'Vom Grundriss entfernen',
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            await widget.onRemoveFromFloorPlan!();
+                            if (mounted) Navigator.of(context).pop();
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            side: BorderSide(
+                              color: Colors.blueGrey.withOpacity(0.35),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.remove_circle_outline,
+                            size: 24,
+                            color: Colors.blueGrey[700],
+                          ),
+                        ),
+                      ),
+                    if (isEdit && widget.onRemoveFromFloorPlan != null)
+                      const SizedBox(width: 12),
+                    Tooltip(
+                      message: 'Abbrechen',
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).pop(),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
+                            horizontal: 16,
                             vertical: 14,
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
                           side: BorderSide(
-                            color: Colors.red[300]!,
+                            color: Colors.grey[300]!,
                             width: 1.5,
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.delete,
-                              size: 20,
-                              color: Colors.red[600],
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Löschen',
-                              style: TextStyle(
-                                color: Colors.red[600],
-                                fontWeight: FontWeight.w600,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ],
+                        child: Icon(
+                          Icons.close,
+                          size: 24,
+                          color: Colors.grey[700],
                         ),
-                      ),
-                    if (isEdit && widget.onDelete != null) const SizedBox(width: 12),
-                    OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        side: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.close,
-                            size: 20,
-                            color: Colors.grey[700],
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Abbrechen',
-                            style: TextStyle(
-                              color: Colors.grey[700],
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ],
                       ),
                     ),
                     const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: () {
-                        final name = _titleController.text.trim();
-                        if (name.isEmpty) {
-                          setState(() {}); // um ErrorText zu aktualisieren
-                          return;
-                        }
-                        // Pfade und Schema-Parameter zusammenführen
-                        final params = widget.existing?.params != null
-                            ? Map<String, dynamic>.from(widget.existing!.params!)
-                            : <String, dynamic>{};
-                        params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
-                        params.addAll(_params);
+                    if (!showTabs || (_tabController?.index ?? 1) == 1)
+                      Tooltip(
+                        message: 'Speichern',
+                        child: ElevatedButton(
+                          onPressed: () {
+                            if (_isLoadingDisciplines) return;
+                            final name = _titleController.text.trim();
+                            if (name.isEmpty) {
+                              setState(() {}); // um ErrorText zu aktualisieren
+                              return;
+                            }
+                            // Pfade und Schema-Parameter zusammenführen
+                            final params = widget.existing?.params != null
+                                ? Map<String, dynamic>.from(widget.existing!.params!)
+                                : <String, dynamic>{};
+                            params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
+                            params.addAll(_params);
 
-                        final marker = Marker(
-                          id: widget.existing?.id ?? const Uuid().v4(),
-                          discipline: _discipline,
-                          title: name,
-                          x: widget.x,
-                          y: widget.y,
-                          pageNumber: widget.pageNumber,
-                          params: params,
-                        );
-                        widget.onSave(marker);
-                        Navigator.of(context).pop();
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(context).primaryColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 2,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.check,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Speichern',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
+                            final marker = Marker(
+                              id: widget.existing?.id ?? const Uuid().v4(),
+                              discipline: _discipline,
+                              title: name,
+                              x: widget.x,
+                              y: widget.y,
+                              pageNumber: widget.pageNumber,
+                              params: params,
+                            );
+                            widget.onSave(marker);
+                            Navigator.of(context).pop();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
                             ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 2,
                           ),
-                        ],
+                          child: const Icon(
+                            Icons.check,
+                            size: 24,
+                          ),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),

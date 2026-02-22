@@ -13,6 +13,7 @@ dependencies:
   fluttertoast: ^8.0.9  # Stelle sicher, dass dies die neueste Null-sichere Version ist
   cupertino_icons: ^1.0.8
   pdfx: ^2.9.1  # Überprüfe, ob diese Version Null-Sicherheit unterstützt
+  pdf: ^3.11.3
   file_picker: ^10.1.2  # Überprüfe auf Null-Sicherheit
   image_picker: ^0.8.7+4  # Überprüfe auf Null-Sicherheit
   path_provider: ^2.0.15  # Diese Version sollte Null-Sicherheit unterstützen

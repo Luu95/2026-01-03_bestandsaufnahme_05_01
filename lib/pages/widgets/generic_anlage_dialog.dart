@@ -11,6 +11,7 @@ import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/database_provider.dart';
 import '../../services/anlage_validation_service.dart';
+import '../../services/dropdown_csv_service.dart';
 import '../../services/ocr_service.dart';
 import 'photo_manager.dart';
 import 'ocr_camera_page.dart';
@@ -112,6 +113,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
   late PhotoManager _photoManager;
+  DropdownCsvData? _dropdownCsvData;
+  bool _isLoadingDropdownCsv = false;
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
   bool _isNameEditable = true;
@@ -129,6 +132,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
     _currentDiscipline = widget.discipline;
     _initData();
+    _loadDropdownCsv();
+  }
+
+  Future<void> _loadDropdownCsv() async {
+    setState(() => _isLoadingDropdownCsv = true);
+    final data = await DropdownCsvService.loadForBuilding(widget.buildingId);
+    if (!mounted) return;
+    setState(() {
+      _dropdownCsvData = data;
+      _isLoadingDropdownCsv = false;
+    });
   }
 
   Future<void> _initData() async {
@@ -983,8 +997,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       if (key == 'Leistungsparameter' || (parameterKeyFromCsv != null && key == parameterKeyFromCsv)) continue;
 
       final label = fieldDef['label'] as String;
-      final type = fieldDef['type'] ?? 'text';
+      final type = (fieldDef['type'] ?? 'string').toString();
       final isEditable = fieldDef['editable'] ?? true;
+      final dropdownColumn = (fieldDef['dropdownColumn'] ?? '').toString().trim();
       
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
@@ -1032,6 +1047,159 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         );
       }
 
+      Future<void> pickDate() async {
+        if (isEditable != true) return;
+        DateTime initialDate = DateTime.now();
+        final current = controller.text.trim();
+        if (current.isNotEmpty) {
+          final parsed = DateTime.tryParse(current);
+          if (parsed != null) initialDate = parsed;
+        }
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: initialDate,
+          firstDate: DateTime(1900),
+          lastDate: DateTime(2100),
+        );
+        if (picked == null) return;
+        final iso = '${picked.year.toString().padLeft(4, '0')}-'
+            '${picked.month.toString().padLeft(2, '0')}-'
+            '${picked.day.toString().padLeft(2, '0')}';
+
+        final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+        controller.text = iso;
+        _params[key] = iso;
+        if (wasEmpty && iso.trim().isNotEmpty) {
+          _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
+        }
+        _updateValidationStatus();
+      }
+
+      void applyTextValue(String val) {
+        final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+        _params[key] = val;
+        if (wasEmpty && val.trim().isNotEmpty) {
+          _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
+        }
+        _updateValidationStatus();
+      }
+
+      void applyNumericValue(String val) {
+        final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+        _params[key] = (num.tryParse(val) ?? val);
+        if (wasEmpty && val.trim().isNotEmpty) {
+          _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
+        }
+        _updateValidationStatus();
+      }
+
+      Widget inputWidget;
+      if (type == 'dropdown') {
+        final data = _dropdownCsvData;
+        final options = (data != null && dropdownColumn.isNotEmpty)
+            ? (data.valuesByHeader[dropdownColumn] ?? const <String>[])
+            : const <String>[];
+
+        String? currentValue = controller.text.trim().isEmpty ? null : controller.text.trim();
+        if (currentValue != null && options.isNotEmpty && !options.contains(currentValue)) {
+          currentValue = null;
+        }
+
+        inputWidget = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String>(
+              value: currentValue,
+              isExpanded: true,
+              items: options
+                  .map((v) => DropdownMenuItem<String>(value: v, child: Text(v)))
+                  .toList(),
+              onChanged: (isEditable == true && options.isNotEmpty)
+                  ? (v) {
+                      controller.text = v ?? '';
+                      applyTextValue(v ?? '');
+                    }
+                  : null,
+              decoration: InputDecoration(
+                labelText: label,
+                labelStyle: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                border: InputBorder.none,
+                suffixIcon: isEditable == true
+                    ? null
+                    : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
+              ),
+            ),
+            if (_isLoadingDropdownCsv)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Dropdown-Werte werden geladen …',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              )
+            else if (data == null || data.error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  data?.error ?? 'Keine Dropdown-CSV importiert',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              )
+            else if (dropdownColumn.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Keine Dropdown-Spalte konfiguriert (im Feld bearbeiten).',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              )
+            else if (options.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Keine Werte in Spalte „$dropdownColumn“ gefunden.',
+                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                ),
+              ),
+          ],
+        );
+      } else {
+        inputWidget = TextField(
+          controller: controller,
+          readOnly: isEditable != true || type == 'date',
+          onTap: (isEditable == true && type == 'date') ? pickDate : null,
+          keyboardType:
+              (type == 'number' || type == 'int') ? TextInputType.number : TextInputType.text,
+          style: TextStyle(
+            fontSize: 15,
+            color: isEditable == true ? Colors.grey[900] : Colors.grey[600],
+          ),
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle:
+                TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
+            border: InputBorder.none,
+            suffixIcon: isEditable == true
+                ? (type == 'date'
+                    ? const Icon(Icons.calendar_today, size: 16)
+                    : null)
+                : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
+          ),
+          onChanged: (val) {
+            if (isEditable != true) return;
+            if (type == 'number' || type == 'int') {
+              applyNumericValue(val);
+            } else {
+              applyTextValue(val);
+            }
+          },
+        );
+      }
+
       fields.add(
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -1048,29 +1216,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             child: Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: controller,
-                    readOnly: !isEditable,
-                    keyboardType: type == 'number' || type == 'int' ? TextInputType.number : TextInputType.text,
-                    style: TextStyle(
-                      fontSize: 15, 
-                      color: isEditable ? Colors.grey[900] : Colors.grey[600],
-                    ),
-                    decoration: InputDecoration(
-                      labelText: label,
-                      labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
-                      border: InputBorder.none,
-                      suffixIcon: !isEditable ? Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]) : null,
-                    ),
-                    onChanged: (val) {
-                      final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
-                      _params[key] = (type == 'number' || type == 'int') ? (num.tryParse(val) ?? val) : val;
-                      if (wasEmpty && val.trim().isNotEmpty) {
-                        _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
-                      }
-                      _updateValidationStatus();
-                    },
-                  ),
+                  child: inputWidget,
                 ),
                 actionButton,
               ],
@@ -1079,6 +1225,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         ),
       );
     }
+
     return fields;
   }
 
@@ -1384,12 +1531,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       ),
 
                       // Normale Schema-Felder (aus CSV-Spalten)
-                      const SizedBox(height: 8),
-                      ..._buildSchemaFields(),
-
                       // Spezielle Leistungsparameter (aus der Parameter-Zelle)
                       const SizedBox(height: 8),
                       _buildLeistungsparameterSection(),
+
+                      const SizedBox(height: 8),
+                      ..._buildSchemaFields(),
 
                       // Fotos
                       const SizedBox(height: 8),

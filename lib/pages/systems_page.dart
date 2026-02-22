@@ -1,10 +1,8 @@
 /// lib/pages/systems_page.dart
 
-// lib/pages/systems_page.dart
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/anlage.dart';
@@ -19,6 +17,9 @@ import '../services/anlage_validation_service.dart';
 import 'widgets/generic_anlage_dialog.dart';
 import 'widgets/move_anlagen_dialog.dart';
 import 'widgets/template_anlage_dialog.dart';
+import 'widgets/anlage_hierarchical_item.dart';
+import 'widgets/systems_anlage_list.dart';
+import 'systems_ui_store.dart';
 
 
 
@@ -96,118 +97,91 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   Future<void> _loadExpandedGroups() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'expanded_groups_${widget.building.id}_${widget.discipline.label}';
-      final list = prefs.getStringList(key);
-      if (list != null) {
-        setState(() {
-          _expandedGroups.addAll(list);
-        });
-      }
-    } catch (e) {
-      debugPrint('Fehler beim Laden der Gruppen-Expansion: $e');
-    }
+    // UI-State nur in-memory (keine SharedPreferences / keine DB)
+    final loaded = SystemsUiStore.getExpandedGroups(
+      widget.building.id,
+      widget.discipline.label,
+    );
+    if (!mounted) return;
+    setState(() {
+      _expandedGroups
+        ..clear()
+        ..addAll(loaded);
+    });
   }
 
   Future<void> _saveExpandedGroups() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'expanded_groups_${widget.building.id}_${widget.discipline.label}';
-      await prefs.setStringList(key, _expandedGroups.toList());
-    } catch (e) {
-      debugPrint('Fehler beim Speichern der Gruppen-Expansion: $e');
-    }
+    // UI-State nur in-memory (keine SharedPreferences / keine DB)
+    SystemsUiStore.setExpandedGroups(
+      widget.building.id,
+      widget.discipline.label,
+      _expandedGroups,
+    );
   }
 
-  /// Lädt die ID der zuletzt geöffneten Anlage aus SharedPreferences (gewerkübergreifend)
+  /// Lädt die ID der zuletzt geöffneten Anlage (gewerkübergreifend, in-memory)
   Future<void> _loadLastOpenedAnlage() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // Gewerkübergreifender Key (ohne discipline.label)
-      final key = 'last_opened_anlage_${widget.building.id}_${widget.floor.id}';
-      final lastOpenedId = prefs.getString(key);
-      if (mounted) {
-        setState(() {
-          // Prüfe, ob die Anlage in der aktuellen Liste existiert
-          if (lastOpenedId != null && _alleAnlagen.any((a) => a.id == lastOpenedId)) {
-            _lastOpenedAnlageId = lastOpenedId;
-          } else {
-            // Wenn die Anlage nicht in der aktuellen Liste existiert, entferne die Markierung
-            // (z.B. weil sie zu einem anderen Gewerk gehört oder gelöscht wurde)
-            _lastOpenedAnlageId = null;
-          }
-        });
+    final lastOpenedId = SystemsUiStore.getLastOpenedAnlageId(
+      widget.building.id,
+      widget.floor.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      // Prüfe, ob die Anlage in der aktuellen Liste existiert
+      if (lastOpenedId != null && _alleAnlagen.any((a) => a.id == lastOpenedId)) {
+        _lastOpenedAnlageId = lastOpenedId;
+      } else {
+        // Wenn die Anlage nicht in der aktuellen Liste existiert, entferne die Markierung
+        // (z.B. weil sie zu einem anderen Gewerk gehört oder gelöscht wurde)
+        _lastOpenedAnlageId = null;
       }
-    } catch (e) {
-      debugPrint('Fehler beim Laden der zuletzt geöffneten Anlage: $e');
-    }
+    });
   }
 
-  /// Speichert die ID der zuletzt geöffneten Anlage in SharedPreferences (gewerkübergreifend)
+  /// Speichert die ID der zuletzt geöffneten Anlage (gewerkübergreifend, in-memory)
   Future<void> _saveLastOpenedAnlage(String anlageId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // Gewerkübergreifender Key (ohne discipline.label)
-      final key = 'last_opened_anlage_${widget.building.id}_${widget.floor.id}';
-      await prefs.setString(key, anlageId);
-      
-      // Setze den Scroll-Flag für alle Gewerke zurück, wenn eine neue Anlage geöffnet wird
-      await _resetHasScrolledFlagForAllDisciplines();
-      
-      setState(() {
-        _lastOpenedAnlageId = anlageId;
-        _hasScrolledToLastOpened = false;
-      });
-    } catch (e) {
-      debugPrint('Fehler beim Speichern der zuletzt geöffneten Anlage: $e');
-    }
+    SystemsUiStore.setLastOpenedAnlageId(widget.building.id, widget.floor.id, anlageId);
+
+    // Setze den Scroll-Flag für alle Gewerke zurück, wenn eine neue Anlage geöffnet wird
+    await _resetHasScrolledFlagForAllDisciplines();
+
+    if (!mounted) return;
+    setState(() {
+      _lastOpenedAnlageId = anlageId;
+      _hasScrolledToLastOpened = false;
+    });
   }
 
   /// Lädt den Flag, ob bereits zur zuletzt angesehenen Anlage gescrollt wurde
   Future<void> _loadHasScrolledFlag() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'has_scrolled_to_last_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
-      final hasScrolled = prefs.getBool(key) ?? false;
-      setState(() {
-        _hasScrolledToLastOpened = hasScrolled;
-      });
-    } catch (e) {
-      debugPrint('Fehler beim Laden des Scroll-Flags: $e');
-    }
+    final hasScrolled = SystemsUiStore.getHasScrolledToLast(
+      widget.building.id,
+      widget.discipline.label,
+      widget.floor.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      _hasScrolledToLastOpened = hasScrolled;
+    });
   }
 
   /// Speichert den Flag, ob bereits zur zuletzt angesehenen Anlage gescrollt wurde
   Future<void> _saveHasScrolledFlag() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'has_scrolled_to_last_${widget.building.id}_${widget.discipline.label}_${widget.floor.id}';
-      await prefs.setBool(key, true);
-      setState(() {
-        _hasScrolledToLastOpened = true;
-      });
-    } catch (e) {
-      debugPrint('Fehler beim Speichern des Scroll-Flags: $e');
-    }
+    SystemsUiStore.setHasScrolledToLast(
+      widget.building.id,
+      widget.discipline.label,
+      widget.floor.id,
+      true,
+    );
+    if (!mounted) return;
+    setState(() {
+      _hasScrolledToLastOpened = true;
+    });
   }
 
   /// Setzt den Scroll-Flag für alle Gewerke zurück (wird aufgerufen, wenn eine neue Anlage geöffnet wird)
   Future<void> _resetHasScrolledFlagForAllDisciplines() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // Lade alle Keys, die mit 'has_scrolled_to_last_' beginnen und zum gleichen Building/Floor gehören
-      final keys = prefs.getKeys().where((k) => 
-        k.startsWith('has_scrolled_to_last_${widget.building.id}_') && 
-        k.endsWith('_${widget.floor.id}')
-      ).toList();
-      
-      for (final key in keys) {
-        await prefs.setBool(key, false);
-      }
-    } catch (e) {
-      debugPrint('Fehler beim Zurücksetzen der Scroll-Flags: $e');
-    }
+    SystemsUiStore.resetHasScrolledForBuildingFloor(widget.building.id, widget.floor.id);
   }
 
   /// Scrollt zur zuletzt geöffneten Anlage nach dem Build (nur beim ersten Öffnen)
@@ -791,347 +765,36 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   Widget _buildList(Disziplin disc) {
-    if (_isLoading) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(
-                strokeWidth: 3,
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  Theme.of(context).primaryColor,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Anlagen werden geladen...',
-                style: TextStyle(
-                  color: Colors.grey[600],
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+    final parents = _anzeigeAnlagen.where((a) => a.discipline.label == disc.label).toList();
 
-    final liste = _anzeigeAnlagen
-        .where((a) => a.discipline.label == disc.label)
-        .toList();
-
-    // Zeige Platzhalter nur an, wenn Daten bereits geladen wurden und Liste wirklich leer ist
-    if (liste.isEmpty && _hasLoadedOnce) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  disc.icon,
-                  size: 48,
-                  color: Colors.grey[400],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Keine ${disc.label} Anlagen vorhanden',
-                style: TextStyle(
-                  color: Colors.grey[700],
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Tippen Sie oben auf das + Symbol, um eine neue Anlage hinzuzufügen',
-                style: TextStyle(
-                  color: Colors.grey[500],
-                  fontSize: 13,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Gruppierung: Wenn groupingKey gesetzt ist, nach diesem Key gruppieren
-    if (disc.groupingKey != null && disc.groupingKey!.isNotEmpty) {
-      // Gruppiere Anlagen nach dem Wert des groupingKey Parameters
-      final Map<String, List<Anlage>> grouped = {};
-      for (final anlage in liste) {
-        final groupValue = anlage.params[disc.groupingKey]?.toString() ?? '';
-        if (!grouped.containsKey(groupValue)) {
-          grouped[groupValue] = [];
-        }
-        grouped[groupValue]!.add(anlage);
-      }
-
-      // Sortiere Gruppen nach Key (leerer String kommt zuletzt)
-      final sortedGroupKeys = grouped.keys.toList()..sort((a, b) {
-        if (a.isEmpty) return 1;
-        if (b.isEmpty) return -1;
-        return a.compareTo(b);
-      });
-
-      final List<Widget> items = [];
-      for (final groupKey in sortedGroupKeys) {
-        final groupAnlagen = grouped[groupKey]!;
-        final groupDisplayName = groupKey.isEmpty ? '(Ohne ${disc.groupingKey})' : groupKey;
-        final isGroupExpanded = _expandedGroups.contains(groupKey);
-
-        items.add(
-          Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            decoration: BoxDecoration(
-              // Feine Nuance für Gruppierung: sehr subtiler lila/grauer Ton
-              color: Color.lerp(
-                Colors.white,
-                Color.lerp(disc.color, Colors.purple.shade50, 0.25) ?? Colors.white,
-                0.12,
-              ),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isGroupExpanded
-                    ? disc.color.withOpacity(0.3)
-                    : Colors.grey.withOpacity(0.15),
-                width: isGroupExpanded ? 1.5 : 1,
-              ),
-              boxShadow: isGroupExpanded
-                  ? [
-                      BoxShadow(
-                        color: disc.color.withOpacity(0.1),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                        spreadRadius: 0,
-                      ),
-                    ]
-                  : [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.03),
-                        blurRadius: 3,
-                        offset: const Offset(0, 1),
-                        spreadRadius: 0,
-                      ),
-                    ],
-            ),
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-              ),
-              child: ExpansionTile(
-                key: ValueKey('group_$groupKey'),
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                childrenPadding: EdgeInsets.zero,
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: isGroupExpanded
-                          ? [
-                              disc.color.withOpacity(0.2),
-                              disc.color.withOpacity(0.1),
-                            ]
-                          : [
-                              disc.color.withOpacity(0.15),
-                              disc.color.withOpacity(0.08),
-                            ],
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.folder,
-                    color: disc.color,
-                    size: 20,
-                  ),
-                ),
-                title: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        groupDisplayName,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: isGroupExpanded
-                              ? disc.color
-                              : Colors.grey[900],
-                          letterSpacing: -0.2,
-                        ),
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: disc.color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '${groupAnlagen.length}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: disc.color,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                trailing: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: isGroupExpanded
-                        ? disc.color.withOpacity(0.1)
-                        : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    isGroupExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    color: isGroupExpanded ? disc.color : Colors.grey[600],
-                    size: 22,
-                  ),
-                ),
-                initiallyExpanded: isGroupExpanded,
-                onExpansionChanged: (expanded) {
-                  setState(() {
-                    if (expanded) {
-                      _expandedGroups.add(groupKey);
-                    } else {
-                      _expandedGroups.remove(groupKey);
-                    }
-                  });
-                  _saveExpandedGroups();
-                },
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      // Feine Nuance für Anlagen in Gruppierung: sehr subtiler grünlicher Ton
-                      color: Color.lerp(
-                        Colors.grey[50]!,
-                        Color.lerp(disc.color, Colors.green.shade50, 0.2) ?? Colors.grey[50]!,
-                        0.08,
-                      ),
-                      borderRadius: const BorderRadius.only(
-                        bottomLeft: Radius.circular(14),
-                        bottomRight: Radius.circular(14),
-                      ),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                    child: Column(
-                      children: groupAnlagen.expand((parent) {
-                        final children = _getChildren(parent);
-                        final hasChildren = children.isNotEmpty;
-                        final isExpanded = _expandedAnlagenIds.contains(parent.id);
-
-                        final widgets = <Widget>[
-                          _buildHierarchicalAnlageItem(
-                            parent,
-                            disc,
-                            isChild: false,
-                            hasChildren: hasChildren,
-                            isExpanded: isExpanded,
-                            onToggleExpanded: hasChildren
-                                ? () {
-                                    setState(() {
-                                      if (isExpanded) {
-                                        _expandedAnlagenIds.remove(parent.id);
-                                      } else {
-                                        _expandedAnlagenIds.add(parent.id);
-                                      }
-                                    });
-                                  }
-                                : null,
-                          ),
-                        ];
-
-                        if (hasChildren && isExpanded) {
-                          widgets.addAll(
-                            children.map((child) => Padding(
-                              padding: const EdgeInsets.only(left: 32),
-                              child: _buildHierarchicalAnlageItem(child, disc, isChild: true),
-                            )),
-                          );
-                        }
-
-                        return widgets;
-                      }).toList(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      }
-
-      return ListView(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(top: 4, bottom: 8),
-        children: items,
-      );
-    }
-
-    // Aufklappbare Darstellung: Eltern-Anlage + Bauteile erst bei Expand anzeigen (ohne Gruppierung)
-    final List<Widget> items = [];
-    for (final parent in liste) {
-      final children = _getChildren(parent);
-      final hasChildren = children.isNotEmpty;
-      final isExpanded = _expandedAnlagenIds.contains(parent.id);
-
-      items.add(
-        _buildHierarchicalAnlageItem(
-          parent,
-          disc,
-          isChild: false,
-          hasChildren: hasChildren,
-          isExpanded: isExpanded,
-          onToggleExpanded: hasChildren
-              ? () {
-                  setState(() {
-                    if (isExpanded) {
-                      _expandedAnlagenIds.remove(parent.id);
-                    } else {
-                      _expandedAnlagenIds.add(parent.id);
-                    }
-                  });
-                }
-              : null,
-        ),
-      );
-
-      if (hasChildren && isExpanded) {
-        for (final child in children) {
-          items.add(
-            Padding(
-              padding: const EdgeInsets.only(left: 32),
-              child: _buildHierarchicalAnlageItem(child, disc, isChild: true),
-            ),
-          );
-        }
-      }
-    }
-
-    return ListView(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(top: 4, bottom: 8),
-      children: items,
+    return SystemsAnlageList(
+      isLoading: _isLoading,
+      hasLoadedOnce: _hasLoadedOnce,
+      disc: disc,
+      parents: parents,
+      getChildren: _getChildren,
+      expandedGroups: _expandedGroups,
+      expandedAnlagenIds: _expandedAnlagenIds,
+      onGroupExpansionChanged: (groupKey, expanded) {
+        setState(() {
+          if (expanded) {
+            _expandedGroups.add(groupKey);
+          } else {
+            _expandedGroups.remove(groupKey);
+          }
+        });
+        _saveExpandedGroups();
+      },
+      onToggleAnlageExpanded: (anlageId) {
+        setState(() {
+          if (_expandedAnlagenIds.contains(anlageId)) {
+            _expandedAnlagenIds.remove(anlageId);
+          } else {
+            _expandedAnlagenIds.add(anlageId);
+          }
+        });
+      },
+      itemBuilder: _buildHierarchicalAnlageItem,
     );
   }
 
@@ -1148,423 +811,62 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final isLastOpened = _lastOpenedAnlageId == a.id;
 
     // Stelle sicher, dass ein GlobalKey für diese Anlage existiert
-    if (!_anlageKeys.containsKey(a.id)) {
-      _anlageKeys[a.id] = GlobalKey();
-    }
+    _anlageKeys.putIfAbsent(a.id, () => GlobalKey());
     final itemKey = _anlageKeys[a.id]!;
 
-    final anlageBautel = a.params['Anlage/Bautel']?.toString() ?? '';
-    
     // Prüfe, ob irgendwo ein Selection-Mode aktiv ist (gewerkeübergreifend)
     final anySelectionActive = widget.isAnySelectionActive?.call() ?? false;
     final showSelectionCircles = _isSelectionMode || anySelectionActive;
 
-    final baseTrailing = showSelectionCircles
-        ? (isSelected
-            ? Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).primaryColor.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.check_circle,
-                  color: Theme.of(context).primaryColor,
-                  size: 24,
-                ),
-              )
-            : Container(
-                padding: const EdgeInsets.all(4),
-                child: Icon(
-                  Icons.radio_button_unchecked,
-                  color: Colors.grey[400],
-                  size: 24,
-                ),
-              ))
-        : null;
-
-    Widget? trailing;
-    if (showSelectionCircles) {
-      trailing = baseTrailing;
-    } else {
-      final actions = <Widget>[];
-
-      // Expand-Arrow nur wenn Kinder vorhanden
-      if (!isChild && hasChildren) {
-        actions.add(
-          Container(
-            margin: const EdgeInsets.only(right: 4),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: onToggleExpanded,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(
-                    isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    color: isExpanded ? Theme.of(context).primaryColor : Colors.grey[600],
-                    size: 24,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-
-      if (actions.isNotEmpty) {
-        trailing = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: actions,
-        );
-      }
-    }
-
-    // Bestimme die Hintergrundfarbe basierend auf dem Status und Typ
-    Color? cardBackgroundColor;
-    if (isSelected) {
-      cardBackgroundColor = Theme.of(context).primaryColor.withOpacity(0.05);
-    } else if (isLastOpened && !isChild) {
-      // Zuletzt geöffnete Anlage: subtiler blauer Ton (hat Vorrang vor Validierung)
-      cardBackgroundColor = Colors.blue.withOpacity(0.04);
-    } else if (isValidated) {
-      // Vollständige Anlage: keine grüne Färbung, nur Haken
-      cardBackgroundColor = isChild
-          ? Color.lerp(
-              Colors.white,
-              Color.lerp(disc.color, Colors.orange.shade50, 0.3) ?? Colors.white,
-              0.1,
-            )
-          : Color.lerp(
-              Colors.white,
-              Color.lerp(disc.color, Colors.green.shade50, 0.25) ?? Colors.white,
-              0.08,
-            );
-    } else {
-      // Feine Nuancen für visuelle Unterscheidung:
-      // Anlagen: sehr subtiler grünlicher Ton
-      // Bauteile: sehr subtiler orange/beige Ton
-      if (isChild) {
-        // Bauteil: sehr subtiler orange/beige Ton
-        cardBackgroundColor = Color.lerp(
-          Colors.white,
-          Color.lerp(disc.color, Colors.orange.shade50, 0.3) ?? Colors.white,
-          0.1,
-        );
-      } else {
-        // Anlage: sehr subtiler grünlicher Ton
-        cardBackgroundColor = Color.lerp(
-          Colors.white,
-          Color.lerp(disc.color, Colors.green.shade50, 0.25) ?? Colors.white,
-          0.08,
-        );
-      }
-    }
-
-    return Container(
-      key: itemKey, // GlobalKey für Auto-Scrolling
-      margin: EdgeInsets.only(
-        bottom: 4,
-        top: 1,
-        left: isChild ? 12 : 0,
-        right: isChild ? 12 : 0,
-      ),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: isSelected
-                ? Theme.of(context).primaryColor.withOpacity(0.15)
-                : (isLastOpened && !isChild
-                    ? Colors.blue.withOpacity(0.12)
-                    : (isValidated
-                        ? Colors.black.withOpacity(0.05)
-                        : Colors.black.withOpacity(0.05))),
-            blurRadius: isValidated || (isLastOpened && !isChild) ? 8 : 4,
-            offset: const Offset(0, 2),
-            spreadRadius: 0,
-          ),
-        ],
-      ),
-      child: Card(
-        elevation: 0,
-        margin: EdgeInsets.zero,
-        color: cardBackgroundColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(
-            color: isChild
-                // Bauteil: subtiler orange/beige Border
-                ? Color.lerp(
-                    Colors.blue.withOpacity(0.2),
-                    Colors.orange.withOpacity(0.25),
-                    0.4,
-                  ) ?? Colors.blue.withOpacity(0.2)
-                : (isSelected
-                    ? Theme.of(context).primaryColor.withOpacity(0.4)
-                    : (isLastOpened && !isChild
-                        // Zuletzt geöffnete Anlage: blauer Border (hat Vorrang vor Validierung)
-                        ? Colors.blue.withOpacity(0.5)
-                        : (isValidated
-                            // Vollständige Anlage: keine grüne Border-Farbe
-                            ? Color.lerp(
-                                Colors.grey.withOpacity(0.15),
-                                Colors.green.withOpacity(0.1),
-                                0.3,
-                              ) ?? Colors.grey.withOpacity(0.15)
-                            // Anlage: subtiler grünlicher Border
-                            : Color.lerp(
-                                Colors.grey.withOpacity(0.15),
-                                Colors.green.withOpacity(0.1),
-                                0.3,
-                              ) ?? Colors.grey.withOpacity(0.15)))),
-            width: isSelected || isValidated || (isLastOpened && !isChild) ? 1.5 : 1,
-          ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () {
-            if (showSelectionCircles) {
-              // Wenn Selection-Mode aktiv ist (eigener oder gewerkeübergreifend)
-              if (!_isSelectionMode) {
-                // Aktiviere Selection-Mode für diese SystemsPage
-                _enterSelectionMode(a.id);
+    return AnlageHierarchicalItem(
+      anlage: a,
+      discipline: disc,
+      isChild: isChild,
+      hasChildren: hasChildren,
+      isExpanded: isExpanded,
+      onToggleExpanded: onToggleExpanded,
+      isSelected: isSelected,
+      showSelectionCircles: showSelectionCircles,
+      isValidated: isValidated,
+      isLastOpened: isLastOpened,
+      scrollKey: itemKey,
+      onTap: () {
+        if (showSelectionCircles) {
+          // Wenn Selection-Mode aktiv ist (eigener oder gewerkeübergreifend)
+          if (!_isSelectionMode) {
+            // Aktiviere Selection-Mode für diese SystemsPage
+            _enterSelectionMode(a.id);
+          } else {
+            // Toggle Selection
+            setState(() {
+              if (isSelected) {
+                _selectedAnlagenIds.remove(a.id);
+                if (_selectedAnlagenIds.isEmpty) {
+                  _exitSelectionMode();
+                } else {
+                  // Aktualisiere die Anzahl auch beim Abwählen
+                  widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
+                }
               } else {
-                // Toggle Selection
-                setState(() {
-                  if (isSelected) {
-                    _selectedAnlagenIds.remove(a.id);
-                    if (_selectedAnlagenIds.isEmpty) {
-                      _exitSelectionMode();
-                    } else {
-                      // Aktualisiere die Anzahl auch beim Abwählen
-                      widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
-                    }
-                  } else {
-                    _selectedAnlagenIds.add(a.id);
-                    widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
-                  }
-                });
+                _selectedAnlagenIds.add(a.id);
+                widget.onSelectionChanged?.call(true, _selectedAnlagenIds.length);
               }
-            } else {
-              // Hier öffnet sich wieder Dein GenericAnlageDialog:
-              _showEditDialog(a);
-            }
-          },
-          onLongPress: () {
-            if (!_isSelectionMode) {
-              // Wenn eine Gewerk-Auswahl aktiv ist, beende diese zuerst
-              if (widget.onExitDisciplineSelectionMode != null) {
-                widget.onExitDisciplineSelectionMode!();
-              }
-              _enterSelectionMode(a.id);
-            }
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Row(
-              children: [
-                // Leading Icon mit verbessertem Design
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: isSelected
-                              ? [
-                                  Theme.of(context).primaryColor.withOpacity(0.2),
-                                  Theme.of(context).primaryColor.withOpacity(0.1),
-                                ]
-                              : (isValidated
-                                  // Vollständige Anlage: keine grüne Färbung im Icon-Container
-                                  ? (isChild
-                                      // Bauteil: subtiler orange/beige Gradient
-                                      ? [
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.15),
-                                            Colors.orange.withOpacity(0.2),
-                                            0.4,
-                                          ) ?? disc.color.withOpacity(0.15),
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.08),
-                                            Colors.orange.withOpacity(0.1),
-                                            0.4,
-                                          ) ?? disc.color.withOpacity(0.08),
-                                        ]
-                                      // Anlage: subtiler grünlicher Gradient
-                                      : [
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.15),
-                                            Colors.green.withOpacity(0.15),
-                                            0.2,
-                                          ) ?? disc.color.withOpacity(0.15),
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.08),
-                                            Colors.green.withOpacity(0.08),
-                                            0.2,
-                                          ) ?? disc.color.withOpacity(0.08),
-                                        ])
-                                  : isChild
-                                      // Bauteil: subtiler orange/beige Gradient
-                                      ? [
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.15),
-                                            Colors.orange.withOpacity(0.2),
-                                            0.4,
-                                          ) ?? disc.color.withOpacity(0.15),
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.08),
-                                            Colors.orange.withOpacity(0.1),
-                                            0.4,
-                                          ) ?? disc.color.withOpacity(0.08),
-                                        ]
-                                      // Anlage: subtiler grünlicher Gradient
-                                      : [
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.15),
-                                            Colors.green.withOpacity(0.15),
-                                            0.2,
-                                          ) ?? disc.color.withOpacity(0.15),
-                                          Color.lerp(
-                                            disc.color.withOpacity(0.08),
-                                            Colors.green.withOpacity(0.08),
-                                            0.2,
-                                          ) ?? disc.color.withOpacity(0.08),
-                                        ]),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: isChild
-                                ? Colors.orange.withOpacity(0.15)
-                                : Colors.green.withOpacity(0.15),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        isChild ? Icons.build : disc.icon,
-                        color: isChild
-                            ? Color.lerp(disc.color, Colors.orange.shade700, 0.3) ?? disc.color
-                            : disc.color,
-                        size: isChild ? 20 : 24,
-                      ),
-                    ),
-                    if (isValidated)
-                      Positioned(
-                        bottom: -2,
-                        right: -2,
-                        child: Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            color: Colors.green,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2.5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.green.withOpacity(0.4),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.check,
-                            color: Colors.white,
-                            size: 12,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 16),
-                // Titel und Subtitle
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    a.name,
-                                    style: TextStyle(
-                                      fontWeight: isChild ? FontWeight.w500 : FontWeight.w600,
-                                      color: isSelected
-                                          ? Theme.of(context).primaryColor
-                                          : Colors.grey[900],
-                                      fontSize: isChild ? 15 : 16,
-                                      letterSpacing: -0.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (isLastOpened && !isChild) ...[
-                                  const SizedBox(width: 6),
-                                  Tooltip(
-                                    message: 'Zuletzt angesehen',
-                                    child: Icon(
-                                      Icons.visibility,
-                                      size: 16,
-                                      color: Colors.blue[600],
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              () {
-                                final herstellerEntries = a.params.entries
-                                    .where((e) => e.key.toLowerCase() == 'hersteller')
-                                    .toList();
-                                return herstellerEntries.isEmpty
-                                    ? (anlageBautel.isNotEmpty ? 'Typ: $anlageBautel' : '')
-                                    : herstellerEntries.first.value.toString();
-                              }(),
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontSize: 13,
-                                fontWeight: FontWeight.w400,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                // Trailing
-                if (trailing != null) ...[
-                  const SizedBox(width: 8),
-                  trailing,
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+            });
+          }
+        } else {
+          // Hier öffnet sich wieder Dein GenericAnlageDialog:
+          _showEditDialog(a);
+        }
+      },
+      onLongPress: () {
+        if (!_isSelectionMode) {
+          // Wenn eine Gewerk-Auswahl aktiv ist, beende diese zuerst
+          if (widget.onExitDisciplineSelectionMode != null) {
+            widget.onExitDisciplineSelectionMode!();
+          }
+          _enterSelectionMode(a.id);
+        }
+      },
     );
   }
 
