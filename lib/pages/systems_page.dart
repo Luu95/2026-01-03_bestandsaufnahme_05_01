@@ -20,12 +20,11 @@ import 'widgets/template_anlage_dialog.dart';
 import 'widgets/anlage_hierarchical_item.dart';
 import 'widgets/systems_anlage_list.dart';
 import 'systems_ui_store.dart';
+import '../utils/app_log.dart';
+import '../navigation/route_observer.dart';
 
-
-
-/// Vollständige RouteObserver-Instanz, in main.dart einbinden:
-final RouteObserver<ModalRoute<void>> routeObserver =
-RouteObserver<ModalRoute<void>>();
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class SystemsPage extends ConsumerStatefulWidget {
   final Building building; // Das Gebäude, für das die Anlagen angezeigt werden sollen
@@ -650,6 +649,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => TemplateAnlageDialog(
+        dbService: ref.read(databaseServiceProvider),
         projectId: projectId,
         discipline: widget.discipline,
         buildingId: widget.building.id,

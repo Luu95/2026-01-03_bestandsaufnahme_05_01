@@ -4,11 +4,15 @@ import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../database/database_service.dart';
 import '../models/disziplin_schnittstelle.dart';
+import '../utils/app_log.dart';
+import '../utils/csv_utils.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 /// Repräsentiert eine Vorlage aus der Gewerkevorlagen.csv
 class Template {
@@ -46,34 +50,6 @@ class Template {
 /// Service zum Laden und Verwalten von Vorlagen aus CSV-Dateien
 class TemplateService {
   static const String _delimiter = ';';
-
-  static String _normalizeCsvStringFromFileBytes(List<int> bytes) {
-    // BOM entfernen falls vorhanden (UTF-8 BOM: EF BB BF)
-    var cleanBytes = bytes;
-    if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-      cleanBytes = bytes.sublist(3);
-    }
-
-    // Encodings versuchen (UTF-8 bevorzugt, Latin1 als Fallback)
-    String csvString;
-    try {
-      csvString = utf8.decode(cleanBytes, allowMalformed: false);
-    } catch (_) {
-      csvString = latin1.decode(cleanBytes);
-    }
-    
-    // WICHTIG: Zeilenenden normalisieren!
-    // Windows: \r\n -> \n
-    // Mac (alt): \r -> \n
-    csvString = csvString.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-    
-    return csvString.trim();
-  }
-
-  static String _detectDelimiter(String csvString) {
-    // Fallback (wird i.d.R. über die intelligentere Variante unten überschrieben)
-    return _delimiter;
-  }
 
   static String _detectDelimiterWithSettings(String csvString, int requiredMaxIndex) {
     // WICHTIG: In der Parameter-Spalte kommen oft Kommata vor ("Brennstoff, Leistung..."),
@@ -163,12 +139,11 @@ class TemplateService {
   }
 
   /// Lädt Vorlagen aus der Datenbank (projektbezogen)
-  static Future<List<Template>> loadTemplatesFromDatabase(String projectId, {String? gewerk}) async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      throw Exception('DatabaseService nicht initialisiert');
-    }
-
+  static Future<List<Template>> loadTemplatesFromDatabase(
+    DatabaseService dbService,
+    String projectId, {
+    String? gewerk,
+  }) async {
     final templateRows = gewerk != null
         ? await dbService.getTemplatesByProjectIdAndGewerk(projectId, gewerk)
         : await dbService.getTemplatesByProjectId(projectId);
@@ -184,12 +159,12 @@ class TemplateService {
 
   /// Importiert Vorlagen aus einer CSV-Datei und speichert sie in der Datenbank
   /// Erstellt automatisch Disziplinen aus den Gewerken für alle Gebäude im Projekt
-  static Future<int> importTemplatesFromCsv(String projectId, String? filePath, {String? buildingId}) async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      throw Exception('DatabaseService nicht initialisiert');
-    }
-
+  static Future<int> importTemplatesFromCsv(
+    DatabaseService dbService,
+    String projectId,
+    String? filePath, {
+    String? buildingId,
+  }) async {
     // Wenn kein filePath angegeben, öffne FilePicker
     if (filePath == null || filePath.isEmpty) {
       final result = await FilePicker.platform.pickFiles(
@@ -211,9 +186,9 @@ class TemplateService {
       throw Exception('CSV-Datei nicht gefunden: $filePath');
     }
 
-    // CSV robust lesen (Encoding + Delimiter erkennen)
+    // CSV robust lesen (BOM/Encoding/EOL)
     final bytes = await file.readAsBytes();
-    final csvString = _normalizeCsvStringFromFileBytes(bytes);
+    final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
 
     // Lade CSV-Einstellungen (für Delimiter-Sniffing brauchen wir den maxIndex)
     final settings = await _loadTemplateCsvSettings(projectId);
@@ -364,8 +339,8 @@ class TemplateService {
     }
 
     final bytes = await file.readAsBytes();
-    final csvString = _normalizeCsvStringFromFileBytes(bytes);
-    final delimiter = _detectDelimiter(csvString);
+    final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
+    final delimiter = CsvUtils.detectDelimiterFromLine(csvString.split('\n').first);
     final csvData = CsvToListConverter(
       fieldDelimiter: delimiter,
       eol: '\n',

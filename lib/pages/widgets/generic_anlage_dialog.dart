@@ -13,8 +13,12 @@ import '../../providers/database_provider.dart';
 import '../../services/anlage_validation_service.dart';
 import '../../services/dropdown_csv_service.dart';
 import '../../services/ocr_service.dart';
+import '../../utils/app_log.dart';
 import 'photo_manager.dart';
 import 'ocr_camera_page.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 /// Custom InputBorder, der die untere Linie rechts kürzer macht (für grobmotorische Bedienung)
 class ShortenedUnderlineInputBorder extends InputBorder {

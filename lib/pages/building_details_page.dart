@@ -18,6 +18,8 @@ import '../models/anlage.dart';
 import '../services/floor_plan_service.dart';
 import '../services/csv_service.dart';
 import '../utils/delete_utils.dart';
+import '../utils/app_log.dart';
+import '../navigation/route_observer.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import 'widgets/generic_anlage_dialog.dart';
@@ -34,6 +36,9 @@ import 'tabs/technik_main_tab.dart';
 // SystemsPage importieren
 import 'systems_page.dart';
 import 'csv_settings_page.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -270,6 +275,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       // CSV importieren
       debugPrint('Starte CSV-Import für Building: ${_building.id}');
       final anlagen = await CsvService.importAnlagenCsvForDisciplines(
+        dbService: ref.read(databaseServiceProvider),
         buildingId: _building.id,
         projectId: _currentProject.id,
       );
@@ -725,6 +731,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           pageBuilder: (_, __, ___) => FloorPlanFullScreen(
             building: _building,
             floor: floor,
+            dbService: ref.read(databaseServiceProvider),
           ),
           transitionsBuilder: (_, animation, __, child) {
             final tween = Tween(begin: const Offset(0, 1), end: Offset.zero);
@@ -832,150 +839,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       if (projectsState.projects.length == 1) {
         ref.read(projectsProvider.notifier).selectProject(0);
       }
-    }
-  }
-
-  // ignore: unused_element
-  Future<void> _deleteSelectedProjects() async {
-    final count = _selectedProjectIndexes.length;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.grey[300]!,
-                    width: 1,
-                  ),
-                ),
-                child: Icon(
-                  Icons.delete_outline,
-                  size: 28,
-                  color: Colors.grey[700],
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Projekte löschen?',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[900],
-                  letterSpacing: -0.2,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Möchtest du $count ausgewählte Projekt${count > 1 ? 'e' : ''} wirklich löschen?',
-                style: TextStyle(
-                  fontSize: 15,
-                  color: Colors.grey[700],
-                  height: 1.5,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Diese Aktion kann nicht rückgängig gemacht werden',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                  fontStyle: FontStyle.italic,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        side: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Text(
-                        'Abbrechen',
-                        style: TextStyle(
-                          color: Colors.grey[700],
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey[800],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'Löschen',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (confirmed == true) {
-      final toDeleteProjects = _selectedProjectIndexes.toList()..sort((a, b) => b.compareTo(a));
-      
-      // Lösche zuerst alle Gebäude in den Projekten
-      final projectsState = ref.read(projectsProvider);
-      for (var projIdx in toDeleteProjects) {
-        if (projIdx >= 0 && projIdx < projectsState.projects.length) {
-          final project = projectsState.projects[projIdx];
-          if (project.buildings.isNotEmpty) {
-            final buildingIndexes = List<int>.generate(project.buildings.length, (i) => i);
-            await ref.read(projectsProvider.notifier).deleteBuildings(buildingIndexes);
-          }
-        }
-      }
-      
-      await ref.read(projectsProvider.notifier).deleteProjects(toDeleteProjects);
-      
-      setState(() {
-        _projectSelectionMode = false;
-        _selectedProjectIndexes.clear();
-      });
-      
-      Navigator.of(context).pop();
     }
   }
 
@@ -1351,6 +1214,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => TemplateAnlageDialog(
+        dbService: ref.read(databaseServiceProvider),
         projectId: _currentProject.id,
         discipline: discipline,
         buildingId: _building.id,
@@ -1466,6 +1330,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
     final success = await updateDiscipline(
       context,
+      ref.read(databaseServiceProvider),
       d,
       edited,
       _building.id,
@@ -1891,6 +1756,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           // neu: mit controller & keys
           TechnikMainTab(
             key: _technikTabKey,
+            dbService: ref.read(databaseServiceProvider),
             building: _building,
             index: _currentBuildingIndex,
             tabController: _technikTabController,
@@ -2376,6 +2242,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         pageBuilder: (_, __, ___) => FloorPlanFullScreen(
           building: _building,
           floor: newFloor,
+          dbService: ref.read(databaseServiceProvider),
         ),
         transitionsBuilder: (_, animation, __, child) {
           final tween = Tween(begin: const Offset(0, 1), end: Offset.zero);

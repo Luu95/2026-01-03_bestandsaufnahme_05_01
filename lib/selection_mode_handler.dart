@@ -84,4 +84,3 @@ class _SelectionModeHandlerState extends State<SelectionModeHandler>
     );
   }
 }
-// TODO Implement this library.

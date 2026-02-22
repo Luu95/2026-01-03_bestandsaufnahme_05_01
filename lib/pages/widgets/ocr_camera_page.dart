@@ -5,6 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
+import '../../utils/app_log.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
+
 class OcrCameraPage extends StatefulWidget {
   const OcrCameraPage({
     Key? key,

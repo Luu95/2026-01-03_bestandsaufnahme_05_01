@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/csv_utils.dart';
 
 class DropdownCsvData {
   final String? path;
@@ -121,13 +122,7 @@ class DropdownCsvService {
       }
 
       final bytes = await file.readAsBytes();
-      String csvString;
-      try {
-        csvString = utf8.decode(bytes);
-      } catch (_) {
-        csvString = latin1.decode(bytes);
-      }
-      csvString = csvString.trim();
+      final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
       if (csvString.isEmpty) {
         return DropdownCsvData(
           path: pathValue,
@@ -138,9 +133,10 @@ class DropdownCsvService {
       }
 
       final firstLine = csvString.split('\n').first;
-      final delimiter = _detectDelimiter(firstLine);
+      final delimiter = CsvUtils.detectDelimiterFromLine(firstLine);
       final rows = CsvToListConverter(
         fieldDelimiter: delimiter,
+        eol: '\n',
         shouldParseNumbers: false,
       ).convert(csvString);
 
@@ -202,9 +198,5 @@ class DropdownCsvService {
     }
   }
 
-  static String _detectDelimiter(String line) {
-    if (line.contains('\t')) return '\t';
-    if (line.contains(',') && !line.contains(';')) return ',';
-    return ';';
-  }
+  // (Delimiter-Erkennung zentral in CsvUtils)
 }

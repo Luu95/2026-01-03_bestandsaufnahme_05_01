@@ -9,6 +9,10 @@ import '../utils/delete_utils.dart'; // Für Bestätigungsdialog
 import '../providers/database_provider.dart';
 import '../providers/projects_provider.dart';
 import '../pages/widgets/schema_editor_dialog.dart';
+import '../utils/app_log.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 /// Widget zum Verwalten (Anzeigen, Hinzufügen, Bearbeiten, Löschen) von Disziplinen.
 /// Disziplinen werden gebäudespezifisch gespeichert.

@@ -16,6 +16,11 @@ import '../services/template_service.dart';
 import '../providers/projects_provider.dart';
 import 'widgets/schema_editor_dialog.dart';
 import 'widgets/settings_card.dart';
+import '../utils/app_log.dart';
+import '../utils/csv_utils.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class CsvSettingsPage extends ConsumerStatefulWidget {
   final String projectId;
@@ -376,24 +381,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       final filePath = result.files.single.path!;
       final file = File(filePath);
       final bytes = await file.readAsBytes();
-
-      String csvString;
-      try {
-        csvString = utf8.decode(bytes);
-      } catch (_) {
-        csvString = latin1.decode(bytes);
-      }
-
-      final eolIndex = csvString.indexOf('\n');
-      final headerLine = eolIndex != -1 ? csvString.substring(0, eolIndex) : csvString;
-      final delimiter = headerLine.contains('\t')
-          ? '\t'
-          : (headerLine.contains(',') && !headerLine.contains(';'))
-              ? ','
-              : ';';
+      final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
+      final headerLine = csvString.split('\n').first;
+      final delimiter = CsvUtils.detectDelimiterFromLine(headerLine);
 
       final List<List<dynamic>> rows = CsvToListConverter(
         fieldDelimiter: delimiter,
+        eol: '\n',
         shouldParseNumbers: false,
       ).convert(headerLine);
 
@@ -548,10 +542,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildInfoCard(
-            'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
-                'Geben Sie die Spaltennummern manuell ein (Start bei 1).',
-          ),
           const SizedBox(height: 20),
           _buildSectionHeader(
             title: 'CSV-Format',
@@ -1601,6 +1591,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
     try {
       final count = await TemplateService.importTemplatesFromCsv(
+        ref.read(databaseServiceProvider),
         widget.projectId,
         null,
         buildingId: widget.buildingId,

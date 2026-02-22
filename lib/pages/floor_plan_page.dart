@@ -13,6 +13,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:path/path.dart' as path;
 import 'package:share_plus/share_plus.dart';
 import '../database/database_service.dart';
+import '../utils/app_log.dart';
 
 import '../models/anlage.dart';
 import '../models/marker.dart';
@@ -24,11 +25,13 @@ import '../pages/widgets/marker_form_dialog.dart';
 class FloorPlanFullScreen extends StatefulWidget {
   final Building building;
   final FloorPlan floor;
+  final DatabaseService dbService;
 
   const FloorPlanFullScreen({
     Key? key,
     required this.building,
     required this.floor,
+    required this.dbService,
   }) : super(key: key);
 
   @override
@@ -53,6 +56,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   TransformationController();
   String? _draggingCalloutAnlageId;
   String? _draggingAnchorAnlageId;
+  bool _matrixRebuildScheduled = false;
 
   static const double _defaultLabelDx = 90.0;
   static const double _defaultLabelDy = -70.0;
@@ -73,16 +77,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   }
 
   Future<void> _loadDisziplinen() async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      debugPrint('Fehler: DatabaseService ist nicht initialisiert');
-      if (!mounted) return;
-      setState(() {
-        _disziplinen = [];
-      });
-      return;
-    }
-    final list = await dbService.getDisciplinesByBuildingId(widget.building.id);
+    final list = await widget.dbService.getDisciplinesByBuildingId(widget.building.id);
     if (!mounted) return;
     setState(() {
       _disziplinen = list;
@@ -108,7 +103,13 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   }
 
   void _onMatrixChanged() {
-    setState(() {});
+    if (_matrixRebuildScheduled) return;
+    _matrixRebuildScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _matrixRebuildScheduled = false;
+      setState(() {});
+    });
   }
 
   Future<void> _loadFloorPlanData() async {
@@ -154,7 +155,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
         // Marker-Anlagen nachladen
         await _loadAllAnlagen();
       } catch (e) {
-        debugPrint('Fehler beim Laden/Rendern der PDF: \$e');
+        appLog('Fehler beim Laden/Rendern der PDF', error: e);
       }
     }
 
@@ -166,25 +167,25 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
   /// Dynamisch: alle Anlagen beliebiger Disziplin laden
   Future<void> _loadAllAnlagen() async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      setState(() {
-        _allAnlagen = [];
-      });
-      return;
-    }
-
     final buildingId = widget.building.id;
-    final List<Anlage> alle = [];
-
-    for (final disziplin in _disziplinen) {
+    final futures = _disziplinen.map((disziplin) async {
       try {
-        final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(buildingId, disziplin.label);
-        alle.addAll(anlagen);
-      } catch (e) {
-        debugPrint('Fehler beim Laden für Disziplin ${disziplin.label}: $e');
+        return await widget.dbService.getAnlagenByBuildingIdAndDiscipline(
+          buildingId,
+          disziplin.label,
+        );
+      } catch (e, st) {
+        appLog(
+          'Fehler beim Laden für Disziplin "${disziplin.label}"',
+          error: e,
+          stackTrace: st,
+        );
+        return <Anlage>[];
       }
-    }
+    }).toList();
+
+    final lists = await Future.wait(futures);
+    final alle = lists.expand((e) => e).toList();
 
     setState(() {
       _allAnlagen = alle.where((a) => a.floorId == widget.floor.id).toList();
@@ -193,9 +194,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
   /// Speichert alle Anlagen einer Disziplin in Drift.
   Future<void> _saveAnlagenForDisziplin(Disziplin disziplin) async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) return;
-
     final buildingId = widget.building.id;
     // Nicht über Objekt-Identität filtern, sondern stabil über das Label.
     // Disziplinen können aus DB/Fallback neu instanziiert werden.
@@ -206,14 +204,18 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     // Speichere jede Anlage einzeln
     for (final anlage in filtered) {
       try {
-        final existing = await dbService.getAnlageById(anlage.id);
+        final existing = await widget.dbService.getAnlageById(anlage.id);
         if (existing != null) {
-          await dbService.updateAnlage(anlage);
+          await widget.dbService.updateAnlage(anlage);
         } else {
-          await dbService.insertAnlage(anlage);
+          await widget.dbService.insertAnlage(anlage);
         }
-      } catch (e) {
-        debugPrint('Fehler beim Speichern der Anlage ${anlage.id}: $e');
+      } catch (e, st) {
+        appLog(
+          'Fehler beim Speichern der Anlage ${anlage.id}',
+          error: e,
+          stackTrace: st,
+        );
       }
     }
   }
@@ -582,8 +584,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
         subject: 'Grundriss-Export',
       );
     } catch (e, stackTrace) {
-      debugPrint('Fehler beim Grundriss-PDF-Export: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('Fehler beim Grundriss-PDF-Export', error: e, stackTrace: stackTrace);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -646,32 +647,30 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   }
 
   Future<void> _showAddMarkerDialog(double x, double y, int pageNumber) async {
-    final dbService = DatabaseService.instance;
     final selectableExisting = <Anlage>[];
-    if (dbService != null) {
-      try {
-        final all = await dbService.getAnlagenByBuildingId(widget.building.id);
-        selectableExisting.addAll(
-          all
-              .where((a) => a.parentId == null)
-              // Nur "normale" Anlagen (noch kein Marker irgendwo).
-              .where((a) => !a.isMarker)
-              .toList()
-            ..sort((a, b) {
-              final dl = a.discipline.label.toLowerCase().compareTo(b.discipline.label.toLowerCase());
-              if (dl != 0) return dl;
-              return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-            }),
-        );
-      } catch (e) {
-        debugPrint('Fehler beim Laden bestehender Anlagen: $e');
-      }
+    try {
+      final all = await widget.dbService.getAnlagenByBuildingId(widget.building.id);
+      selectableExisting.addAll(
+        all
+            .where((a) => a.parentId == null)
+            // Nur "normale" Anlagen (noch kein Marker irgendwo).
+            .where((a) => !a.isMarker)
+            .toList()
+          ..sort((a, b) {
+            final dl = a.discipline.label.toLowerCase().compareTo(b.discipline.label.toLowerCase());
+            if (dl != 0) return dl;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          }),
+      );
+    } catch (e, st) {
+      appLog('Fehler beim Laden bestehender Anlagen', error: e, stackTrace: st);
     }
 
     showDialog(
       context: context,
       builder: (ctx) {
         return MarkerFormDialog(
+          dbService: widget.dbService,
           pageNumber: pageNumber,
           x: x,
           y: y,
@@ -713,7 +712,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
               id: newId,
               name: newMarker.title.isNotEmpty
                   ? newMarker.title
-                  : 'Anlage \$newId',
+                  : 'Anlage $newId',
               params: params,
               floorId: widget.floor.id,
               buildingId: widget.building.id,
@@ -780,10 +779,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     }
 
     // Speichere in der Datenbank
-    final dbService = DatabaseService.instance;
-    if (dbService != null) {
-      await dbService.updateAnlage(updatedAnlage);
-    }
+    await widget.dbService.updateAnlage(updatedAnlage);
 
     // Aktualisiere lokale Liste
     setState(() {
@@ -822,23 +818,20 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
       context: context,
       builder: (ctx) {
         return MarkerFormDialog(
+          dbService: widget.dbService,
           pageNumber: existingMarker.pageNumber,
           x: existingMarker.x,
           y: existingMarker.y,
           buildingId: widget.building.id,
           existing: existingMarker,
           onRemoveFromFloorPlan: () async {
-            final dbService = DatabaseService.instance;
-
             setState(() {
               a.isMarker = false;
               a.markerInfo = null;
             });
 
             // Direkt persistieren, ohne die Anlage zu löschen.
-            if (dbService != null) {
-              await dbService.updateAnlage(a);
-            }
+            await widget.dbService.updateAnlage(a);
 
             await _saveAnlagenForDisziplin(a.discipline);
             await _loadAllAnlagen();
@@ -886,10 +879,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             await _loadAllAnlagen();
           },
           onDelete: (Marker toDelete) async {
-            final dbService = DatabaseService.instance;
-            if (dbService != null) {
-              await dbService.deleteAnlage(a.id);
-            }
+            await widget.dbService.deleteAnlage(a.id);
             setState(() {
               _allAnlagen.removeWhere((e) => e.id == a.id);
             });

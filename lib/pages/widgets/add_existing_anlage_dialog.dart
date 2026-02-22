@@ -7,12 +7,14 @@ import '../../models/anlage.dart';
 /// Bottom-Sheet-Dialog: Liste aller Anlagen des Gebäudes/Flurs, die noch nicht
 /// als Marker auf dem Grundriss liegen. Auswahl einer Anlage gibt sie zurück.
 class AddExistingAnlageDialog extends StatefulWidget {
+  final DatabaseService dbService;
   final String buildingId;
   final String floorId;
   final List<Anlage> existingMarkerAnlagen;
 
   const AddExistingAnlageDialog({
     Key? key,
+    required this.dbService,
     required this.buildingId,
     required this.floorId,
     required this.existingMarkerAnlagen,
@@ -34,16 +36,8 @@ class _AddExistingAnlageDialogState extends State<AddExistingAnlageDialog> {
   }
 
   Future<void> _loadAnlagen() async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      setState(() {
-        _error = 'Datenbank nicht verfügbar';
-        _isLoading = false;
-      });
-      return;
-    }
     try {
-      final all = await dbService.getAnlagenByBuildingId(widget.buildingId);
+      final all = await widget.dbService.getAnlagenByBuildingId(widget.buildingId);
       final existingIds = widget.existingMarkerAnlagen.map((a) => a.id).toSet();
       final available = all
           .where((a) =>

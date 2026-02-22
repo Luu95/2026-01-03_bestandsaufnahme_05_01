@@ -6,8 +6,13 @@ import '../systems_page.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../models/disziplin_manager.dart';
 import '../../database/database_service.dart';
+import '../../utils/app_log.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class TechnikMainTab extends StatefulWidget {
+  final DatabaseService dbService;
   final Building building;
   final int index;
   final TabController tabController; // Wird noch für Kompatibilität benötigt, aber nicht mehr verwendet
@@ -28,6 +33,7 @@ class TechnikMainTab extends StatefulWidget {
 
   const TechnikMainTab({
     Key? key,
+    required this.dbService,
     required this.building,
     required this.index,
     required this.tabController,
@@ -96,11 +102,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
 
     if (newDisziplin != null) {
       try {
-        final dbService = DatabaseService.instance;
-        if (dbService == null) {
-          throw Exception('DatabaseService nicht initialisiert');
-        }
-        await dbService.upsertDiscipline(widget.building.id, newDisziplin);
+        await widget.dbService.upsertDiscipline(widget.building.id, newDisziplin);
         
         // Callback aufrufen, um Disziplinen neu zu laden
         widget.onSchemaUpdated?.call();

@@ -18,6 +18,11 @@ import '../models/disziplin_schnittstelle.dart';
 import '../database/database.dart' as db;
 import '../database/database_service.dart';
 import '../providers/csv_settings_provider.dart';
+import '../utils/app_log.dart';
+import '../utils/csv_utils.dart';
+
+// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
+void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 /// Enum für die Ordnerstruktur beim Foto-Export
 enum PhotoExportStructure {
@@ -90,7 +95,10 @@ class CsvService {
   ///                Wenn mehrere angegeben sind, werden die Anlagen allen zugewiesen.
   /// - Neue Gewerke erzeugen automatisch ein Disziplin-Objekt.
   /// Die laufende Nummer wird in den Params als "lfdNummer" gespeichert.
-  static Future<List<db.AnlagenCompanion>> importAnlagenCsv({List<String>? buildingIds}) async {
+  static Future<List<db.AnlagenCompanion>> importAnlagenCsv({
+    required DatabaseService dbService,
+    List<String>? buildingIds,
+  }) async {
     try {
       // Datei auswählen (alle Dateien anzeigen, Filter später validieren)
       final result = await FilePicker.platform.pickFiles(
@@ -112,27 +120,9 @@ class CsvService {
         throw Exception('Datei existiert nicht');
       }
 
-      // CSV-Datei lesen - verschiedene Encodings versuchen
+      // CSV robust lesen (BOM/Encoding/EOL)
       final bytes = await file.readAsBytes();
-      
-      // BOM entfernen falls vorhanden (UTF-8 BOM: EF BB BF)
-      List<int> cleanBytes = bytes;
-      if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-        cleanBytes = bytes.sublist(3);
-      }
-      
-      // Encodings in Prioritätsreihenfolge versuchen
-      String csvString = latin1.decode(cleanBytes); // Fallback: Latin1 (funktioniert immer)
-      
-      try {
-        // Zuerst UTF-8 versuchen (Standard)
-        csvString = utf8.decode(cleanBytes, allowMalformed: false);
-      } catch (_) {
-        // UTF-8 fehlgeschlagen, Latin1 wird als Fallback verwendet (bereits gesetzt)
-      }
-      
-      // Leerzeichen am Anfang/Ende entfernen
-      csvString = csvString.trim();
+      String csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
       
       // CSV parsen
       final csvData = const CsvToListConverter(
@@ -207,7 +197,7 @@ class CsvService {
         throw Exception('Keine BuildingIds angegeben. Disziplinen müssen einem Gebäude zugeordnet werden.');
       }
       
-      final disciplineCache = await _loadPersistedDisciplines(primaryBuildingId);
+      final disciplineCache = await _loadPersistedDisciplines(dbService, primaryBuildingId);
 
       // Zuerst: Alle Disziplinen mit Schema aktualisieren
       final uniqueDisciplines = <String>{};
@@ -291,7 +281,7 @@ class CsvService {
       // Disziplinen für alle angegebenen Gebäude persistieren
       // (gleiche Disziplinen für alle Gebäude)
       for (final bid in targetBuildingIds) {
-        await _persistDisciplines(bid, disciplineCache.values.toList());
+        await _persistDisciplines(dbService, bid, disciplineCache.values.toList());
       }
 
       return companions;
@@ -361,11 +351,10 @@ class CsvService {
     return value;
   }
 
-  static Future<Map<String, Disziplin>> _loadPersistedDisciplines(String buildingId) async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      throw StateError('DatabaseService ist nicht initialisiert');
-    }
+  static Future<Map<String, Disziplin>> _loadPersistedDisciplines(
+    DatabaseService dbService,
+    String buildingId,
+  ) async {
     final list = await dbService.getDisciplinesByBuildingId(buildingId);
     final map = <String, Disziplin>{};
     for (final disc in list) {
@@ -374,11 +363,11 @@ class CsvService {
     return map;
   }
 
-  static Future<void> _persistDisciplines(String buildingId, List<Disziplin> disciplines) async {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      throw StateError('DatabaseService ist nicht initialisiert');
-    }
+  static Future<void> _persistDisciplines(
+    DatabaseService dbService,
+    String buildingId,
+    List<Disziplin> disciplines,
+  ) async {
     await dbService.replaceDisciplines(buildingId, disciplines);
   }
 
@@ -480,6 +469,7 @@ class CsvService {
   /// Gibt eine Liste von Anlagen zurück, die dann in der Datenbank gespeichert werden können.
   /// Die laufende Nummer wird in den Params als "lfdNummer" gespeichert.
   static Future<List<Anlage>> importAnlagenCsvForDisciplines({
+    required DatabaseService dbService,
     required String buildingId,
     required String projectId,
     String floorId = 'global',
@@ -505,27 +495,9 @@ class CsvService {
         throw Exception('Datei existiert nicht');
       }
 
-      // CSV-Datei lesen - verschiedene Encodings versuchen
+      // CSV robust lesen (BOM/Encoding/EOL)
       final bytes = await file.readAsBytes();
-      
-      // BOM entfernen falls vorhanden (UTF-8 BOM: EF BB BF)
-      List<int> cleanBytes = bytes;
-      if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-        cleanBytes = bytes.sublist(3);
-      }
-      
-      // Encodings in Prioritätsreihenfolge versuchen
-      String csvString = latin1.decode(cleanBytes); // Fallback: Latin1
-      
-      try {
-        // Zuerst UTF-8 versuchen (Standard)
-        csvString = utf8.decode(cleanBytes, allowMalformed: false);
-      } catch (_) {
-        // UTF-8 fehlgeschlagen, Latin1 wird als Fallback verwendet
-      }
-      
-      // Leerzeichen am Anfang/Ende entfernen
-      csvString = csvString.trim();
+      String csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
       
       // CSV-Einstellungen für dieses Projekt laden
       final csvSettings = await _loadCsvSettings(projectId);
@@ -542,13 +514,8 @@ class CsvService {
       // Trennzeichen: Auto oder explizit
       String delimiter = _delimiter;
       if (delimiterMode == 'auto') {
-        if (csvString.contains(',') && !csvString.contains(';')) {
-          delimiter = ',';
-        } else if (csvString.contains(';')) {
-          delimiter = ';';
-        } else if (csvString.contains('\t')) {
-          delimiter = '\t';
-        }
+        final firstLine = csvString.split('\n').first;
+        delimiter = CsvUtils.detectDelimiterFromLine(firstLine);
       } else {
         delimiter = delimiterMode;
       }
@@ -636,7 +603,7 @@ class CsvService {
       debugPrint('Erstelltes Schema: $schemaFromCsv');
 
       // Bestehende Disziplinen für dieses Gebäude laden
-      final disciplineCache = await _loadPersistedDisciplines(buildingId);
+      final disciplineCache = await _loadPersistedDisciplines(dbService, buildingId);
       debugPrint('Bestehende Disziplinen für Gebäude $buildingId: ${disciplineCache.keys.toList()}');
 
       // Alle eindeutigen Disziplinen aus CSV sammeln
@@ -713,7 +680,7 @@ class CsvService {
       }
 
       // Disziplinen für dieses Gebäude persistieren
-      await _persistDisciplines(buildingId, disciplineCache.values.toList());
+      await _persistDisciplines(dbService, buildingId, disciplineCache.values.toList());
       debugPrint('Disziplinen für Gebäude $buildingId gespeichert (global gesynct): ${disciplineCache.length}');
 
       // Anlagen aus CSV erstellen

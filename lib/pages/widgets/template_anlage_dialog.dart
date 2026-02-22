@@ -3,9 +3,11 @@ import 'package:uuid/uuid.dart';
 
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
+import '../../database/database_service.dart';
 import '../../services/template_service.dart';
 
 class TemplateAnlageDialog extends StatefulWidget {
+  final DatabaseService dbService;
   final String projectId;
   final Disziplin discipline;
   final String buildingId;
@@ -15,6 +17,7 @@ class TemplateAnlageDialog extends StatefulWidget {
 
   const TemplateAnlageDialog({
     Key? key,
+    required this.dbService,
     required this.projectId,
     required this.discipline,
     required this.buildingId,
@@ -45,7 +48,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
     try {
       // Lade ALLE Vorlagen für das Projekt
       final allTemplates =
-          await TemplateService.loadTemplatesFromDatabase(widget.projectId);
+          await TemplateService.loadTemplatesFromDatabase(widget.dbService, widget.projectId);
       // Filtere nur nach dem aktuellen Gewerk (Disziplin = Gewerk)
       final templates = allTemplates
           .where((t) => t.gewerk == widget.discipline.label)

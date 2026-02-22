@@ -11,6 +11,7 @@ import '../../models/building.dart';
 import '../../models/floor_plan.dart';
 import '../floor_plan_page.dart';
 import '../../providers/projects_provider.dart';
+import '../../providers/database_provider.dart';
 
 class FloorPlansTab extends ConsumerStatefulWidget {
   final Building building;
@@ -66,6 +67,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
           pageBuilder: (_, __, ___) => FloorPlanFullScreen(
             building: widget.building,
             floor: floor,
+            dbService: ref.read(databaseServiceProvider),
           ),
           transitionsBuilder: (_, animation, __, child) {
             final tween = Tween(begin: const Offset(0, 1), end: Offset.zero);
@@ -106,6 +108,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
         pageBuilder: (_, __, ___) => FloorPlanFullScreen(
           building: widget.building,
           floor: floor,
+          dbService: ref.read(databaseServiceProvider),
         ),
         transitionsBuilder: (_, animation, __, child) {
           final tween = Tween(begin: const Offset(0, 1), end: Offset.zero);

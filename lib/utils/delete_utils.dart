@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../database/database_service.dart';
+import 'app_log.dart';
 
 /// Zeigt den Bestätigungsdialog für das Löschen eines Elements an.
 Future<bool> showDeleteConfirmationDialog(BuildContext context, String itemType, String itemName) async {
@@ -131,14 +132,12 @@ Future<bool> showDeleteConfirmationDialog(BuildContext context, String itemType,
 /// Gibt true zurück, wenn das Update erfolgreich war.
 Future<bool> updateDiscipline(
   BuildContext context,
+  DatabaseService dbService,
   Disziplin oldDiscipline,
   Disziplin newDiscipline,
   String buildingId,
 ) async {
   try {
-    final dbService = DatabaseService.instance;
-    if (dbService == null) return false;
-
     // Disziplin in Drift speichern (Upsert)
     await dbService.upsertDiscipline(buildingId, newDiscipline);
 
@@ -155,7 +154,7 @@ Future<bool> updateDiscipline(
         newDiscipline.label,
         newDiscipline,
       );
-      debugPrint('Anlagen für Disziplin "${oldDiscipline.label}" auf "${newDiscipline.label}" aktualisiert.');
+      appLog('Anlagen für Disziplin "${oldDiscipline.label}" auf "${newDiscipline.label}" aktualisiert.');
     }
 
     if (context.mounted) {
@@ -168,7 +167,7 @@ Future<bool> updateDiscipline(
     }
     return true;
   } catch (e) {
-    debugPrint('Fehler beim Aktualisieren der Disziplin: $e');
+    appLog('Fehler beim Aktualisieren der Disziplin', error: e);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

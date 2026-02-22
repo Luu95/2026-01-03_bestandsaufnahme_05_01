@@ -11,6 +11,7 @@ import 'photo_manager.dart';
 
 /// Bottom-Sheet zum Hinzufügen oder Bearbeiten eines Markers auf dem PDF-Grundriss.
 class MarkerFormDialog extends StatefulWidget {
+  final DatabaseService dbService;
   final Marker? existing;
   final int pageNumber;
   final double x;
@@ -27,6 +28,7 @@ class MarkerFormDialog extends StatefulWidget {
 
   const MarkerFormDialog({
     Key? key,
+    required this.dbService,
     required this.pageNumber,
     required this.x,
     required this.y,
@@ -125,17 +127,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
   Future<void> _loadAvailableDisciplines() async {
     setState(() => _isLoadingDisciplines = true);
 
-    final dbService = DatabaseService.instance;
-    if (dbService == null) {
-      debugPrint('Fehler: DatabaseService ist nicht initialisiert');
-      setState(() {
-        _isLoadingDisciplines = false;
-        _availableDisciplines = [];
-      });
-      return;
-    }
-    
-    final list = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+    final list = await widget.dbService.getDisciplinesByBuildingId(widget.buildingId);
 
     setState(() {
       _availableDisciplines = list;
