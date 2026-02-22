@@ -52,6 +52,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _labelAnlage = 'Anlage';
   String _labelBauteil = 'Bauteil';
 
+  // TextEditingController müssen über Rebuilds stabil bleiben,
+  // sonst springen Cursor/Selection/Fokus beim Tippen zurück.
+  late final TextEditingController _anlageKuerzelCtrl;
+  late final TextEditingController _bauteilKuerzelCtrl;
+  late final TextEditingController _labelGewerkCtrl;
+  late final TextEditingController _labelAnlageCtrl;
+  late final TextEditingController _labelBauteilCtrl;
+
   // Bearbeitbar-Flags (für Kompatibilität)
   bool _lfdNummerBearbeitbar = true;
   bool _nameBearbeitbar = true;
@@ -93,15 +101,59 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   @override
   void initState() {
     super.initState();
+    _anlageKuerzelCtrl = TextEditingController(text: _anlageKuerzel);
+    _bauteilKuerzelCtrl = TextEditingController(text: _bauteilKuerzel);
+    _labelGewerkCtrl = TextEditingController(text: _labelGewerk);
+    _labelAnlageCtrl = TextEditingController(text: _labelAnlage);
+    _labelBauteilCtrl = TextEditingController(text: _labelBauteil);
     _loadAllData();
   }
 
   @override
   void dispose() {
     _autoSaveTimer?.cancel();
+    _anlageKuerzelCtrl.dispose();
+    _bauteilKuerzelCtrl.dispose();
+    _labelGewerkCtrl.dispose();
+    _labelAnlageCtrl.dispose();
+    _labelBauteilCtrl.dispose();
     // Speichere beim Verlassen der Seite, falls noch nicht gespeichert
     _saveAllSettings();
     super.dispose();
+  }
+
+  void _syncTextControllersFromState() {
+    // Nur außerhalb von build() setzen, damit die Selection nicht beim Tippen resettet wird.
+    if (_anlageKuerzelCtrl.text != _anlageKuerzel) {
+      _anlageKuerzelCtrl.value = TextEditingValue(
+        text: _anlageKuerzel,
+        selection: TextSelection.collapsed(offset: _anlageKuerzel.length),
+      );
+    }
+    if (_bauteilKuerzelCtrl.text != _bauteilKuerzel) {
+      _bauteilKuerzelCtrl.value = TextEditingValue(
+        text: _bauteilKuerzel,
+        selection: TextSelection.collapsed(offset: _bauteilKuerzel.length),
+      );
+    }
+    if (_labelGewerkCtrl.text != _labelGewerk) {
+      _labelGewerkCtrl.value = TextEditingValue(
+        text: _labelGewerk,
+        selection: TextSelection.collapsed(offset: _labelGewerk.length),
+      );
+    }
+    if (_labelAnlageCtrl.text != _labelAnlage) {
+      _labelAnlageCtrl.value = TextEditingValue(
+        text: _labelAnlage,
+        selection: TextSelection.collapsed(offset: _labelAnlage.length),
+      );
+    }
+    if (_labelBauteilCtrl.text != _labelBauteil) {
+      _labelBauteilCtrl.value = TextEditingValue(
+        text: _labelBauteil,
+        selection: TextSelection.collapsed(offset: _labelBauteil.length),
+      );
+    }
   }
 
   Future<void> _loadAllData() async {
@@ -202,6 +254,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _labelAnlage = settings.labelAnlage;
         _labelBauteil = settings.labelBauteil;
       });
+      _syncTextControllersFromState();
 
       final prefs = await SharedPreferences.getInstance();
       final key = 'csv_settings_${widget.projectId}';
@@ -734,7 +787,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           if (_anlageBauteilSpalte != null) ...[
             const SizedBox(height: 12),
             TextField(
-              controller: TextEditingController(text: _anlageKuerzel),
+              controller: _anlageKuerzelCtrl,
               decoration: InputDecoration(
                 labelText: 'Kürzel für $_labelAnlage',
                 helperText: 'Mehrere Kürzel mit Komma trennen (z.B. A,$_labelAnlage,MA)',
@@ -750,7 +803,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             ),
             const SizedBox(height: 12),
             TextField(
-              controller: TextEditingController(text: _bauteilKuerzel),
+              controller: _bauteilKuerzelCtrl,
               decoration: InputDecoration(
                 labelText: 'Kürzel für $_labelBauteil',
                 helperText: 'Mehrere Kürzel mit Komma trennen (z.B. B,$_labelBauteil,SL)',
@@ -786,7 +839,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             childrenPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             children: [
               TextField(
-                controller: TextEditingController(text: _labelGewerk),
+                controller: _labelGewerkCtrl,
                 decoration: InputDecoration(
                   labelText: 'Bezeichnung Ebene 1',
                   helperText: 'Standard: Gewerk',
@@ -802,7 +855,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: TextEditingController(text: _labelAnlage),
+                controller: _labelAnlageCtrl,
                 decoration: InputDecoration(
                   labelText: 'Bezeichnung Ebene 2',
                   helperText: 'Standard: Anlage',
@@ -818,7 +871,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: TextEditingController(text: _labelBauteil),
+                controller: _labelBauteilCtrl,
                 decoration: InputDecoration(
                   labelText: 'Bezeichnung Ebene 3',
                   helperText: 'Standard: Bauteil',
@@ -1482,9 +1535,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       );
     }
 
-    return TextField(
-      controller: TextEditingController(text: (value + 1).toString())
-        ..selection = TextSelection.fromPosition(TextPosition(offset: (value + 1).toString().length)),
+    return TextFormField(
+      key: ValueKey('template_col_input_$label'),
+      initialValue: (value + 1).toString(),
       keyboardType: TextInputType.number,
       decoration: InputDecoration(
         labelText: label,
@@ -1494,7 +1547,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
-      onChanged: (text) {
+      onFieldSubmitted: (text) {
         final userInput = int.tryParse(text);
         if (userInput != null && userInput > 0) {
           onChanged(userInput - 1);
@@ -1841,9 +1894,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     }
 
     // 2. Modus: Keine Header -> TEXTFELD (1-basiert für den User!)
-    return TextField(
-      controller: TextEditingController(text: (value + 1).toString())
-        ..selection = TextSelection.fromPosition(TextPosition(offset: (value + 1).toString().length)),
+    return TextFormField(
+      key: ValueKey('mapping_col_input_$label'),
+      initialValue: (value + 1).toString(),
       keyboardType: TextInputType.number,
       decoration: InputDecoration(
         labelText: label,
@@ -1853,7 +1906,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
-      onChanged: (text) {
+      onFieldSubmitted: (text) {
         final userInput = int.tryParse(text);
         if (userInput != null && userInput > 0) {
           // User gibt 1 ein -> wir speichern 0
