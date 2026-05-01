@@ -13,7 +13,6 @@ class ProjectsState {
   final int? selectedProjectIndex;
   final int? selectedBuildingIndex;
 
-//hhhnnn
   ProjectsState({
     required this.projects,
     this.isLoading = false,
