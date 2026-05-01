@@ -12,7 +12,6 @@ class ProjectsState {
   final bool isLoading;
   final int? selectedProjectIndex;
   final int? selectedBuildingIndex;
-  ///////jetzt teste ich WIRKLICH?N nein
 
   ProjectsState({
     required this.projects,
