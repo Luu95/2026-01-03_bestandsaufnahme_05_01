@@ -43,14 +43,21 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   int _gewerkSpalte = 2;
   int? _etageSpalte;
   int? _anlageBauteilSpalte;
-  int? _parameterSpalte;
-  String _delimiterMode = 'auto';
   String _anlageKuerzel = 'A,Anlage';
   String _bauteilKuerzel = 'B,Bauteil';
   bool _useDisciplineGrouping = true;
   String _labelGewerk = 'Gewerk';
   String _labelAnlage = 'Anlage';
   String _labelBauteil = 'Bauteil';
+
+  /// Explizite Spaltenpaare: welche Spalte = Attributname, welche = Attributwert (pro Zeile variabel).
+  List<AttributeColumnPair> _attributeColumnPairs = [];
+
+  /// Spalten-Labels für Fotonummern beim CSV-Export (1–4). Leer = Spalte nicht verwendet.
+  String? _foto1SpalteLabel;
+  String? _foto2SpalteLabel;
+  String? _foto3SpalteLabel;
+  String? _foto4SpalteLabel;
 
   // TextEditingController müssen über Rebuilds stabil bleiben,
   // sonst springen Cursor/Selection/Fokus beim Tippen zurück.
@@ -59,6 +66,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _labelGewerkCtrl;
   late final TextEditingController _labelAnlageCtrl;
   late final TextEditingController _labelBauteilCtrl;
+  late final TextEditingController _foto1SpalteLabelCtrl;
+  late final TextEditingController _foto2SpalteLabelCtrl;
+  late final TextEditingController _foto3SpalteLabelCtrl;
+  late final TextEditingController _foto4SpalteLabelCtrl;
+  late final TextEditingController _attrPairGenStartCtrl;
+  late final TextEditingController _attrPairGenEndCtrl;
 
   // Bearbeitbar-Flags (für Kompatibilität)
   bool _lfdNummerBearbeitbar = true;
@@ -91,7 +104,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   int _templateAnlageBauteilSpalte = 1;
   int _templateAnlagentypSpalte = 2;
   int _templateBezeichnungSpalte = 3;
-  int _templateParameterSpalte = 4;
+  int _templateErsteSpalteAttributDefinitionen = 4; // Ab hier Dreiergruppen: Attributname, Typ, Optionen
   int? _templateAuswahlAnlagentypSpalte;
 
   // Auto-Save Timer
@@ -106,6 +119,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelGewerkCtrl = TextEditingController(text: _labelGewerk);
     _labelAnlageCtrl = TextEditingController(text: _labelAnlage);
     _labelBauteilCtrl = TextEditingController(text: _labelBauteil);
+    _foto1SpalteLabelCtrl = TextEditingController(text: _foto1SpalteLabel ?? '');
+    _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
+    _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
+    _foto4SpalteLabelCtrl = TextEditingController(text: _foto4SpalteLabel ?? '');
+    _attrPairGenStartCtrl = TextEditingController(text: '24');
+    _attrPairGenEndCtrl = TextEditingController(text: '63');
     _loadAllData();
   }
 
@@ -117,6 +136,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelGewerkCtrl.dispose();
     _labelAnlageCtrl.dispose();
     _labelBauteilCtrl.dispose();
+    _foto1SpalteLabelCtrl.dispose();
+    _foto2SpalteLabelCtrl.dispose();
+    _foto3SpalteLabelCtrl.dispose();
+    _foto4SpalteLabelCtrl.dispose();
+    _attrPairGenStartCtrl.dispose();
+    _attrPairGenEndCtrl.dispose();
     // Speichere beim Verlassen der Seite, falls noch nicht gespeichert
     _saveAllSettings();
     super.dispose();
@@ -153,6 +178,22 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         text: _labelBauteil,
         selection: TextSelection.collapsed(offset: _labelBauteil.length),
       );
+    }
+    final f1 = _foto1SpalteLabel ?? '';
+    if (_foto1SpalteLabelCtrl.text != f1) {
+      _foto1SpalteLabelCtrl.value = TextEditingValue(text: f1, selection: TextSelection.collapsed(offset: f1.length));
+    }
+    final f2 = _foto2SpalteLabel ?? '';
+    if (_foto2SpalteLabelCtrl.text != f2) {
+      _foto2SpalteLabelCtrl.value = TextEditingValue(text: f2, selection: TextSelection.collapsed(offset: f2.length));
+    }
+    final f3 = _foto3SpalteLabel ?? '';
+    if (_foto3SpalteLabelCtrl.text != f3) {
+      _foto3SpalteLabelCtrl.value = TextEditingValue(text: f3, selection: TextSelection.collapsed(offset: f3.length));
+    }
+    final f4 = _foto4SpalteLabel ?? '';
+    if (_foto4SpalteLabelCtrl.text != f4) {
+      _foto4SpalteLabelCtrl.value = TextEditingValue(text: f4, selection: TextSelection.collapsed(offset: f4.length));
     }
   }
 
@@ -211,7 +252,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _templateAnlageBauteilSpalte = settings['anlageBauteilSpalte'] as int? ?? 1;
           _templateAnlagentypSpalte = settings['anlagentypSpalte'] as int? ?? 2;
           _templateBezeichnungSpalte = settings['bezeichnungSpalte'] as int? ?? 3;
-          _templateParameterSpalte = settings['parameterSpalte'] as int? ?? 4;
+          _templateErsteSpalteAttributDefinitionen = settings['ersteSpalteAttributDefinitionen'] as int? ?? 4;
           _templateAuswahlAnlagentypSpalte = settings['auswahlAnlagentypSpalte'] as int?;
         });
       }
@@ -228,7 +269,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       'anlageBauteilSpalte': _templateAnlageBauteilSpalte,
       'anlagentypSpalte': _templateAnlagentypSpalte,
       'bezeichnungSpalte': _templateBezeichnungSpalte,
-      'parameterSpalte': _templateParameterSpalte,
+      'ersteSpalteAttributDefinitionen': _templateErsteSpalteAttributDefinitionen,
       'auswahlAnlagentypSpalte': _templateAuswahlAnlagentypSpalte,
     };
     await prefs.setString(key, json.encode(settings));
@@ -245,14 +286,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _gewerkSpalte = settings.gewerkSpalte;
         _etageSpalte = settings.etageSpalte;
         _anlageBauteilSpalte = settings.anlageBauteilSpalte;
-        _parameterSpalte = settings.parameterSpalte;
-        _delimiterMode = settings.delimiterMode;
         _anlageKuerzel = settings.anlageKuerzel;
         _bauteilKuerzel = settings.bauteilKuerzel;
         _useDisciplineGrouping = settings.useDisciplineGrouping;
         _labelGewerk = settings.labelGewerk;
         _labelAnlage = settings.labelAnlage;
         _labelBauteil = settings.labelBauteil;
+        _attributeColumnPairs = List<AttributeColumnPair>.from(settings.attributeColumnPairs);
+        _foto1SpalteLabel = settings.foto1SpalteLabel;
+        _foto2SpalteLabel = settings.foto2SpalteLabel;
+        _foto3SpalteLabel = settings.foto3SpalteLabel;
+        _foto4SpalteLabel = settings.foto4SpalteLabel;
       });
       _syncTextControllersFromState();
 
@@ -292,20 +336,27 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   Future<void> _saveCsvSettings() async {
     try {
       final notifier = ref.read(csvSettingsProvider(widget.projectId).notifier);
+      final current = ref.read(csvSettingsProvider(widget.projectId));
       final settings = CsvSettings(
         lfdNummerSpalte: _lfdNummerSpalte,
         nameSpalte: _nameSpalte,
         gewerkSpalte: _gewerkSpalte,
         etageSpalte: _etageSpalte,
         anlageBauteilSpalte: _anlageBauteilSpalte,
-        parameterSpalte: _parameterSpalte,
-        delimiterMode: _delimiterMode,
+        delimiterMode: 'auto',
         anlageKuerzel: _anlageKuerzel,
         bauteilKuerzel: _bauteilKuerzel,
         useDisciplineGrouping: _useDisciplineGrouping,
         labelGewerk: _labelGewerk,
         labelAnlage: _labelAnlage,
         labelBauteil: _labelBauteil,
+        attributeColumnPairs: List<AttributeColumnPair>.from(_attributeColumnPairs),
+        foto1SpalteLabel: _foto1SpalteLabel,
+        foto2SpalteLabel: _foto2SpalteLabel,
+        foto3SpalteLabel: _foto3SpalteLabel,
+        foto4SpalteLabel: _foto4SpalteLabel,
+        importHeaderRow: current.importHeaderRow,
+        exportDelimiter: current.exportDelimiter,
       );
       await notifier.save(settings);
 
@@ -597,34 +648,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         children: [
           const SizedBox(height: 20),
           _buildSectionHeader(
-            title: 'CSV-Format',
-            subtitle: 'Trennzeichen und Kennungen',
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            value: _delimiterMode,
-            decoration: InputDecoration(
-              labelText: 'Trennzeichen',
-              isDense: true,
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            items: const [
-              DropdownMenuItem(value: 'auto', child: Text('Auto (empfohlen)')),
-              DropdownMenuItem(value: ';', child: Text('Semikolon (;)')),
-              DropdownMenuItem(value: ',', child: Text('Komma (,)')),
-              DropdownMenuItem(value: '\t', child: Text('Tabulator (\\t)')),
-            ],
-            onChanged: (val) {
-              if (val != null) {
-                setState(() => _delimiterMode = val);
-                _scheduleAutoSave();
-              }
-            },
-          ),
-          const SizedBox(height: 16),
-          _buildSectionHeader(
             title: 'CSV-Mapping',
             subtitle: '$_labelGewerk → $_labelAnlage → $_labelBauteil',
           ),
@@ -692,7 +715,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                               _lfdNummerSpalte,
                               _nameSpalte,
                               if (_useDisciplineGrouping) _gewerkSpalte,
-                              _parameterSpalte,
                               _anlageBauteilSpalte,
                             ])
                           : null;
@@ -705,37 +727,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                         value: _etageSpalte!, 
                         onChanged: (v) {
                           setState(() => _etageSpalte = v);
-                          _scheduleAutoSave();
-                        },
-                        csvHeaders: _mappingCsvHeaders,
-                      )
-                    : null,
-                ),
-                const SizedBox(height: 12),
-                _buildToggleRow(
-                  icon: Icons.settings_input_component,
-                  label: 'Spalte für Leistungsparameter?',
-                  isActive: _parameterSpalte != null,
-                  onToggle: (val) {
-                    setState(() {
-                      _parameterSpalte = val
-                          ? _nextFreeIndex([
-                              _lfdNummerSpalte,
-                              _nameSpalte,
-                              if (_useDisciplineGrouping) _gewerkSpalte,
-                              _etageSpalte,
-                              _anlageBauteilSpalte,
-                            ])
-                          : null;
-                    });
-                    _scheduleAutoSave();
-                  },
-                  child: _parameterSpalte != null 
-                    ? _buildColumnSelector(
-                        label: 'Spalte Parameter', 
-                        value: _parameterSpalte!, 
-                        onChanged: (v) {
-                          setState(() => _parameterSpalte = v);
                           _scheduleAutoSave();
                         },
                         csvHeaders: _mappingCsvHeaders,
@@ -760,13 +751,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               onToggle: (val) {
                 setState(() {
                   _anlageBauteilSpalte = val
-                      ? _nextFreeIndex([
-                          _lfdNummerSpalte,
-                          _nameSpalte,
-                          if (_useDisciplineGrouping) _gewerkSpalte,
-                          _etageSpalte,
-                          _parameterSpalte,
-                        ])
+                      ?                           _nextFreeIndex([
+                              _lfdNummerSpalte,
+                              _nameSpalte,
+                              if (_useDisciplineGrouping) _gewerkSpalte,
+                              _etageSpalte,
+                            ])
                       : null;
                 });
                 _scheduleAutoSave();
@@ -782,6 +772,233 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                     csvHeaders: _mappingCsvHeaders,
                   )
                 : null,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SettingsCard(
+            color: Colors.deepPurple,
+            borderColor: Colors.deepPurple.shade200,
+            icon: Icons.view_column,
+            iconColor: Colors.deepPurple,
+            title: 'Attribut-Spaltenpaare',
+            description: 'CSV-Spalten, in denen pro Zeile Attributname und Attributwert stehen (z. B. attr_1_name → attr_1_value). Jedes Paar: eine Spalte für den Namen, eine für den Wert.',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Generierung aus Spaltenbereich
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.deepPurple.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Paare aus Spaltenbereich erzeugen',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Colors.deepPurple.shade700,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Erste Spalte = Attributname, nächste = Attributwert (z. B. 24–63 → Paare 24/25, 26/27, … 62/63). Gerade Anzahl Spalten im Bereich nötig.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black87),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 90,
+                            child: TextField(
+                              controller: _attrPairGenStartCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Erste Spalte',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 8),
+                            child: Text('…'),
+                          ),
+                          SizedBox(
+                            width: 90,
+                            child: TextField(
+                              controller: _attrPairGenEndCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Letzte Spalte',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            icon: const Icon(Icons.auto_fix_high, size: 18),
+                            label: const Text('Paare generieren'),
+                            onPressed: () {
+                              final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
+                              final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
+                              if (start == null || end == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Bitte gültige Zahlen für erste und letzte Spalte eingeben.')),
+                                );
+                                return;
+                              }
+                              if (start >= end) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Letzte Spalte muss größer als die erste sein.')),
+                                );
+                                return;
+                              }
+                              final count = end - start + 1;
+                              if (count.isOdd) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Spaltenanzahl im Bereich muss gerade sein (aktuell: $count). Z. B. $start–${end - 1} oder $start–${end + 1}.')),
+                                );
+                                return;
+                              }
+                              final pairs = <AttributeColumnPair>[];
+                              for (var i = start; i < end; i += 2) {
+                                pairs.add(AttributeColumnPair(nameColumn: i, valueColumn: i + 1));
+                              }
+                              setState(() {
+                                _attributeColumnPairs = pairs;
+                              });
+                              _scheduleAutoSave();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('${pairs.length} Paare generiert (Spalten $start–$end).')),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ...List.generate(_attributeColumnPairs.length, (idx) {
+                  final pair = _attributeColumnPairs[idx];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Spalte Attributname',
+                            value: pair.nameColumn,
+                            onChanged: (v) {
+                              setState(() {
+                                _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
+                                  ..[idx] = AttributeColumnPair(nameColumn: v, valueColumn: pair.valueColumn);
+                              });
+                              _scheduleAutoSave();
+                            },
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Spalte Attributwert',
+                            value: pair.valueColumn,
+                            onChanged: (v) {
+                              setState(() {
+                                _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
+                                  ..[idx] = AttributeColumnPair(nameColumn: pair.nameColumn, valueColumn: v);
+                              });
+                              _scheduleAutoSave();
+                            },
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)..removeAt(idx);
+                            });
+                            _scheduleAutoSave();
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.add),
+                  label: const Text('Paar hinzufügen'),
+                  onPressed: () {
+                    final maxCol = (_mappingCsvHeaders?.length ?? 10) - 1;
+                    final used = <int>{
+                      _lfdNummerSpalte,
+                      _nameSpalte,
+                      if (_useDisciplineGrouping) _gewerkSpalte,
+                      if (_etageSpalte != null) _etageSpalte!,
+                      if (_anlageBauteilSpalte != null) _anlageBauteilSpalte!,
+                    };
+                    for (final p in _attributeColumnPairs) {
+                      used.add(p.nameColumn);
+                      used.add(p.valueColumn);
+                    }
+                    var n = 0;
+                    while (used.contains(n) && n <= maxCol) n++;
+                    var v = n + 1;
+                    while (used.contains(v) && v <= maxCol) v++;
+                    if (v > maxCol) v = n;
+                    setState(() {
+                      _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
+                        ..add(AttributeColumnPair(nameColumn: n, valueColumn: v));
+                    });
+                    _scheduleAutoSave();
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SettingsCard(
+            color: Colors.teal,
+            borderColor: Colors.teal.shade200,
+            icon: Icons.photo_library,
+            iconColor: Colors.teal,
+            title: 'Fotonummern-Spalten (Export)',
+            description: 'Spalten-Labels Ihrer CSV, in die beim Export die Fotonummern (1–4) geschrieben werden. Beim Import können diese Spalten leer sein. Leer lassen = Spalte nicht verwenden.',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildFotoSpalteField(
+                  'Fotonummer 1',
+                  _foto1SpalteLabelCtrl,
+                  (v) => setState(() { _foto1SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+                ),
+                const SizedBox(height: 8),
+                _buildFotoSpalteField(
+                  'Fotonummer 2',
+                  _foto2SpalteLabelCtrl,
+                  (v) => setState(() { _foto2SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+                ),
+                const SizedBox(height: 8),
+                _buildFotoSpalteField(
+                  'Fotonummer 3',
+                  _foto3SpalteLabelCtrl,
+                  (v) => setState(() { _foto3SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+                ),
+                const SizedBox(height: 8),
+                _buildFotoSpalteField(
+                  'Fotonummer 4',
+                  _foto4SpalteLabelCtrl,
+                  (v) => setState(() { _foto4SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+                ),
+              ],
             ),
           ),
           if (_anlageBauteilSpalte != null) ...[
@@ -1406,14 +1623,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   },
                 ),
                 const SizedBox(height: 12),
-                _buildTemplateColumnSelector(
-                  label: 'Spalte Parameter',
-                  value: _templateParameterSpalte,
-                  onChanged: (v) {
-                    setState(() => _templateParameterSpalte = v);
-                    _scheduleAutoSave();
-                  },
-                ),
+                _buildTemplateErsteSpalteAttributSection(),
                 const SizedBox(height: 12),
                 _buildToggleRow(
                   icon: Icons.checklist,
@@ -1422,13 +1632,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   onToggle: (val) {
                     setState(() {
                       _templateAuswahlAnlagentypSpalte = val
-                          ? _nextFreeIndex([
-                              _templateGewerkSpalte,
-                              _templateAnlageBauteilSpalte,
-                              _templateAnlagentypSpalte,
-                              _templateBezeichnungSpalte,
-                              _templateParameterSpalte,
-                            ])
+                          ? _nextFreeTemplateColumn()
                           : null;
                     });
                     _scheduleAutoSave();
@@ -1556,14 +1760,53 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
+  int _nextFreeTemplateColumn() {
+    final used = <int>{
+      _templateGewerkSpalte,
+      _templateAnlageBauteilSpalte,
+      _templateAnlagentypSpalte,
+      _templateBezeichnungSpalte,
+      _templateErsteSpalteAttributDefinitionen,
+    };
+    var candidate = 0;
+    while (used.contains(candidate)) candidate++;
+    return candidate;
+  }
+
+  Widget _buildTemplateErsteSpalteAttributSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Attribut-Definitionen (Dreiergruppen)',
+          style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Ab welcher Spalte kommen die Dreiergruppen: 1 = Attributname, 2 = Typ (z. B. select, int), 3 = Optionen (z. B. Ol;Gas;Holz). Standard: Spalte 5 (E).',
+          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+        ),
+        const SizedBox(height: 8),
+        _buildTemplateColumnSelector(
+          label: 'Erste Spalte für Attribut-Name (dann Typ, dann Optionen)',
+          value: _templateErsteSpalteAttributDefinitionen,
+          onChanged: (v) {
+            setState(() => _templateErsteSpalteAttributDefinitionen = v);
+            _scheduleAutoSave();
+          },
+        ),
+      ],
+    );
+  }
+
   Widget _buildTemplateValidationWarning() {
     final values = [
       _templateGewerkSpalte,
       _templateAnlageBauteilSpalte,
       _templateAnlagentypSpalte,
       _templateBezeichnungSpalte,
-      _templateParameterSpalte,
-      if (_templateAuswahlAnlagentypSpalte != null) _templateAuswahlAnlagentypSpalte,
+      _templateErsteSpalteAttributDefinitionen,
+      if (_templateAuswahlAnlagentypSpalte != null) _templateAuswahlAnlagentypSpalte!,
     ];
     final uniqueValues = values.toSet();
     
@@ -1846,6 +2089,25 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     }
   }
 
+  Widget _buildFotoSpalteField(
+    String label,
+    TextEditingController controller,
+    ValueChanged<String> onChanged,
+  ) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: 'z.B. Foto1 oder Spaltenname aus Ihrer CSV',
+        isDense: true,
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      onChanged: onChanged,
+    );
+  }
+
   Widget _buildColumnSelector({
     required String label,
     required int value,
@@ -1906,10 +2168,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
-      onFieldSubmitted: (text) {
-        final userInput = int.tryParse(text);
+      onChanged: (text) {
+        final userInput = int.tryParse(text.trim());
         if (userInput != null && userInput > 0) {
-          // User gibt 1 ein -> wir speichern 0
+          onChanged(userInput - 1);
+        }
+      },
+      onFieldSubmitted: (text) {
+        final userInput = int.tryParse(text.trim());
+        if (userInput != null && userInput > 0) {
           onChanged(userInput - 1);
         }
       },
@@ -1954,7 +2221,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       if (_useDisciplineGrouping) _gewerkSpalte,
       if (_etageSpalte != null) _etageSpalte,
       if (_anlageBauteilSpalte != null) _anlageBauteilSpalte,
-      if (_parameterSpalte != null) _parameterSpalte,
     ];
     if (values.length != values.toSet().length) {
       return Container(

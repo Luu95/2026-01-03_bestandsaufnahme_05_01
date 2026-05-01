@@ -4,10 +4,8 @@ import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../database/database_service.dart';
-import '../models/disziplin_schnittstelle.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_utils.dart';
 
@@ -30,19 +28,23 @@ class Template {
     this.parameter,
   });
 
-  /// Erstellt eine Template-Instanz aus einer CSV-Zeile
-  factory Template.fromCsvRow(List<dynamic> row, Map<String, int> columnIndices) {
+  /// Erstellt eine Template-Instanz aus einer CSV-Zeile.
+  /// [parameterOverride]: wenn gesetzt, wird dies als Parameter verwendet (z. B. JSON aus Attribut-Spaltenpaaren).
+  factory Template.fromCsvRow(List<dynamic> row, Map<String, int> columnIndices, [String? parameterOverride]) {
     String safeCell(int? idx) {
       if (idx == null || idx < 0 || idx >= row.length) return '';
       return row[idx].toString().trim();
     }
+
+    final param = parameterOverride ?? (columnIndices.containsKey('parameter') ? safeCell(columnIndices['parameter']) : null);
+    final paramValue = (param != null && param.isNotEmpty) ? param : null;
 
     return Template(
       gewerk: safeCell(columnIndices['gewerk']),
       anlageBauteil: safeCell(columnIndices['anlageBauteil']).toLowerCase(),
       anlagentyp: safeCell(columnIndices['anlagentyp']),
       bezeichnung: safeCell(columnIndices['bezeichnung']),
-      parameter: safeCell(columnIndices['parameter']),
+      parameter: paramValue,
     );
   }
 }
@@ -105,6 +107,49 @@ class TemplateService {
     return best;
   }
 
+  static String _safeCell(List<dynamic> row, int idx) {
+    if (idx < 0 || idx >= row.length) return '';
+    return row[idx].toString().trim();
+  }
+
+  /// Parst Optionen-String (Semikolon- oder Komma-getrennt) in eine Liste.
+  static List<String> _parseOptions(String? optionsStr) {
+    if (optionsStr == null || optionsStr.trim().isEmpty) return [];
+    final s = optionsStr.trim();
+    final split = s.contains(';') ? s.split(';') : s.split(',');
+    return split.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
+
+  /// Baut aus einer CSV-Zeile die Attribut-Definitionen (Dreiergruppen: Name, Typ, Optionen) ab [startColumn].
+  /// Liefert JSON für template.parameter mit "_schema": [{ key, label, type, options? }].
+  static String _buildParameterJsonFromAttributeTriplets(List<dynamic> row, int startColumn) {
+    final schema = <Map<String, dynamic>>[];
+    for (var i = startColumn; i + 2 < row.length; i += 3) {
+      final name = _safeCell(row, i);
+      if (name.isEmpty) continue;
+      final typeStr = _safeCell(row, i + 1).toLowerCase();
+      final optionsStr = _safeCell(row, i + 2);
+      String type = 'text';
+      if (typeStr == 'select' || typeStr == 'dropdown') {
+        type = 'dropdown';
+      } else if (typeStr == 'int' || typeStr == 'number') {
+        type = 'number';
+      } else if (typeStr.isNotEmpty) {
+        type = typeStr;
+      }
+      final entry = <String, dynamic>{
+        'key': name,
+        'label': name,
+        'type': type,
+      };
+      final options = _parseOptions(optionsStr);
+      if (options.isNotEmpty) entry['options'] = options;
+      schema.add(entry);
+    }
+    if (schema.isEmpty) return '';
+    return json.encode({'_schema': schema});
+  }
+
   /// Lädt die CSV-Einstellungen für Vorlagen
   static Future<Map<String, dynamic>> _loadTemplateCsvSettings(String projectId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -119,22 +164,21 @@ class TemplateService {
           'anlageBauteilSpalte': settings['anlageBauteilSpalte'] as int? ?? 1,
           'anlagentypSpalte': settings['anlagentypSpalte'] as int? ?? 2,
           'bezeichnungSpalte': settings['bezeichnungSpalte'] as int? ?? 3,
-          'parameterSpalte': settings['parameterSpalte'] as int? ?? 4,
           'auswahlAnlagentypSpalte': settings['auswahlAnlagentypSpalte'] as int?,
+          'ersteSpalteAttributDefinitionen': settings['ersteSpalteAttributDefinitionen'] as int? ?? 4,
         };
       } catch (e) {
         debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
       }
     }
     
-    // Standardwerte basierend auf der Beispiel-CSV
     return {
       'gewerkSpalte': 0,
       'anlageBauteilSpalte': 1,
       'anlagentypSpalte': 2,
       'bezeichnungSpalte': 3,
-      'parameterSpalte': 4,
       'auswahlAnlagentypSpalte': null,
+      'ersteSpalteAttributDefinitionen': 4,
     };
   }
 
@@ -192,14 +236,15 @@ class TemplateService {
 
     // Lade CSV-Einstellungen (für Delimiter-Sniffing brauchen wir den maxIndex)
     final settings = await _loadTemplateCsvSettings(projectId);
+    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 4;
     final columnIndices = {
       'gewerk': settings['gewerkSpalte'] as int,
       'anlageBauteil': settings['anlageBauteilSpalte'] as int,
       'anlagentyp': settings['anlagentypSpalte'] as int,
       'bezeichnung': settings['bezeichnungSpalte'] as int,
-      'parameter': settings['parameterSpalte'] as int,
     };
-    final requiredMaxIndex = columnIndices.values.fold<int>(0, (m, v) => v > m ? v : m);
+    int requiredMaxIndex = columnIndices.values.fold<int>(0, (m, v) => v > m ? v : m);
+    if (ersteSpalteAttribut + 2 > requiredMaxIndex) requiredMaxIndex = ersteSpalteAttribut + 2;
 
     // Delimiter-Sniffing mit zusätzlicher Prüfung: welche Variante liefert viele gültige a/b-Werte?
     const candidates = [';', '\t', ','];
@@ -271,13 +316,14 @@ class TemplateService {
         final ab = template.anlageBauteil.trim().toLowerCase();
         final isValidAB = ab == 'a' || ab == 'b';
         if (template.gewerk.isNotEmpty && isValidAB) {
+          final parameterJson = _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
           await dbService.insertTemplate(
             projectId,
             template.gewerk,
             ab,
             template.anlagentyp,
             template.bezeichnung,
-            template.parameter,
+            parameterJson.isEmpty ? null : parameterJson,
           );
           
           // Sammle Gewerke (für Disziplinen) bei jedem validen Datensatz
@@ -302,17 +348,57 @@ class TemplateService {
       'Vorlagen-Import abgeschlossen: projectId=$projectId, valid=$count, a=$validA, b=$validB, skipped=$skipped, delimiter=$delimiter, requiredMaxIndex=$requiredMaxIndex, uniqueGewerke=${uniqueGewerke.length}',
     );
 
-    // Erstelle automatisch Disziplinen aus den Gewerken für alle Gebäude im Projekt
-    if (uniqueGewerke.isNotEmpty && buildingId != null) {
+    // Optional: Disziplin-Schemata aus Vorlagen synchronisieren,
+    // aber keine neuen Gewerke mehr automatisch anlegen.
+    if (buildingId != null) {
       try {
-        await _createDisciplinesFromGewerke(dbService, buildingId, uniqueGewerke);
+        await _syncDisciplineSchemasFromTemplates(dbService, buildingId, projectId);
       } catch (e) {
-        debugPrint('Fehler beim Erstellen der Disziplinen: $e');
+        debugPrint('Fehler beim Sync der Disziplinen aus Vorlagen: $e');
         // Fehler wird ignoriert, damit der Import nicht fehlschlägt
       }
     }
 
     return count;
+  }
+
+  /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (Attribut-Definitionen pro Gewerk).
+  static Future<void> _syncDisciplineSchemasFromTemplates(
+    DatabaseService dbService,
+    String buildingId,
+    String projectId,
+  ) async {
+    final disciplines = await dbService.getDisciplinesByBuildingId(buildingId);
+    final templateRows = await dbService.getTemplatesByProjectId(projectId);
+    final schemaByGewerk = <String, List<Map<String, dynamic>>>{};
+    for (final row in templateRows) {
+      final gewerk = row.gewerk.trim();
+      if (gewerk.isEmpty) continue;
+      final schema = getSchemaFromTemplateParameter(row.parameter);
+      if (schema.isEmpty) continue;
+      schemaByGewerk.putIfAbsent(gewerk, () => []).addAll(schema);
+    }
+    for (final d in disciplines) {
+      final gewerkLabel = d.label.trim();
+      final fromTemplates = schemaByGewerk[gewerkLabel];
+      if (fromTemplates == null || fromTemplates.isEmpty) continue;
+      final byKey = <String, Map<String, dynamic>>{};
+      for (final f in fromTemplates) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isEmpty) continue;
+        if (!byKey.containsKey(key)) byKey[key] = Map<String, dynamic>.from(f);
+      }
+      final mergedSchema = byKey.values.toList();
+      final mergedKeys = mergedSchema.map((f) => (f['key'] ?? '').toString()).toSet();
+      final globalFields = d.schema.where((f) => f['isGlobal'] == true).map((f) => Map<String, dynamic>.from(f)).toList();
+      final existingIndividual = d.schema
+          .where((f) => f['isGlobal'] != true && !mergedKeys.contains((f['key'] ?? '').toString()))
+          .map((f) => Map<String, dynamic>.from(f))
+          .toList();
+      d.schema = [...globalFields, ...mergedSchema, ...existingIndividual];
+    }
+    await dbService.replaceDisciplines(buildingId, disciplines);
+    debugPrint('Disziplin-Schemata aus Vorlagen synchronisiert für ${disciplines.length} Disziplinen.');
   }
 
   /// Lädt Vorlagen aus einer CSV-Datei (ohne Speichern in DB - für temporäre Verwendung)
@@ -353,20 +439,21 @@ class TemplateService {
 
     // Lade CSV-Einstellungen, falls projectId vorhanden
     Map<String, int> columnIndices = {};
+    int ersteSpalteAttribut = 4;
     if (projectId != null) {
       final settings = await _loadTemplateCsvSettings(projectId);
+      ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 4;
       columnIndices = {
         'gewerk': settings['gewerkSpalte'] as int,
         'anlageBauteil': settings['anlageBauteilSpalte'] as int,
         'anlagentyp': settings['anlagentypSpalte'] as int,
         'bezeichnung': settings['bezeichnungSpalte'] as int,
-        'parameter': settings['parameterSpalte'] as int,
       };
     } else {
       // Erste Zeile ist der Header
       final headerRow = csvData[0].map((e) => e.toString().trim().toLowerCase()).toList();
       
-      // Finde Spaltenindizes
+      // Finde Spaltenindizes (ohne Parameter-Spalte; Attribute über Spaltenpaare)
       for (var i = 0; i < headerRow.length; i++) {
         final header = headerRow[i];
         if (header.contains('gewerk')) {
@@ -377,8 +464,6 @@ class TemplateService {
           columnIndices['anlagentyp'] = i;
         } else if (header.contains('bezeichnung')) {
           columnIndices['bezeichnung'] = i;
-        } else if (header.contains('parameter')) {
-          columnIndices['parameter'] = i;
         }
       }
 
@@ -389,12 +474,11 @@ class TemplateService {
           'anlageBauteil': 1,
           'anlagentyp': 2,
           'bezeichnung': 3,
-          'parameter': 4,
         };
       }
     }
 
-    // Parse Datenzeilen
+    // Parse Datenzeilen (Parameter = _schema aus Dreiergruppen Name/Typ/Optionen)
     final templates = <Template>[];
     for (var i = 1; i < csvData.length; i++) {
       final row = csvData[i];
@@ -402,7 +486,8 @@ class TemplateService {
         continue;
       }
       try {
-        final template = Template.fromCsvRow(row, columnIndices);
+        final parameterOverride = _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
+        final template = Template.fromCsvRow(row, columnIndices, parameterOverride.isEmpty ? null : parameterOverride);
         if (template.gewerk.isNotEmpty) {
           templates.add(template);
         }
@@ -451,23 +536,9 @@ class TemplateService {
   }
 
   /// Konvertiert Template-Parameter in ein Map-Format für Anlagen.
-  /// Gruppiert diese unter 'Leistungsparameter'.
+  /// Erwartet JSON-String (Attribut → Attributwert) aus den Vorlagen-Attribut-Spalten.
   static Map<String, dynamic> parseParameters(String? parameterString) {
-    final Map<String, String> lpMap = {};
-    if (parameterString == null || parameterString.trim().isEmpty) {
-      return {'Leistungsparameter': lpMap};
-    }
-
-    // Parameter können durch Komma getrennt sein
-    final parts = parameterString.split(',');
-    for (final part in parts) {
-      final trimmed = part.trim();
-      if (trimmed.isNotEmpty) {
-        lpMap[trimmed] = trimmed;
-      }
-    }
-
-    return {'Leistungsparameter': lpMap};
+    return _paramsMapFromParameterJson(parameterString);
   }
 
   /// Extrahiert eindeutige Anlagentypen aus einer Liste von Templates
@@ -482,72 +553,43 @@ class TemplateService {
     return anlagentypen.toList()..sort();
   }
 
-  /// Erstellt eine leere Parameter-Map aus einem Template-Parameter-String
-  /// Die Keys werden aus dem Parameter-String extrahiert und in einem gruppierten
-  /// 'Leistungsparameter'-Feld abgelegt, damit sie im UI im Kasten erscheinen.
+  /// Erstellt eine Parameter-Map aus dem gespeicherten Template-Parameter-String.
+  /// Der String ist JSON (Attributname → Attributwert), wie beim Anlagen-Import in Einzelspalten.
   static Map<String, dynamic> buildEmptyParamsFromTemplate(String? parameterString) {
-    final Map<String, String> lpMap = {};
-    if (parameterString == null || parameterString.trim().isEmpty) {
-      return {'Leistungsparameter': lpMap};
-    }
-
-    // Parameter können durch Komma getrennt sein
-    final parts = parameterString.split(',');
-    for (final part in parts) {
-      final trimmed = part.trim();
-      if (trimmed.isNotEmpty) {
-        lpMap[trimmed] = '';
-      }
-    }
-
-    return {'Leistungsparameter': lpMap};
+    return _paramsMapFromParameterJson(parameterString);
   }
 
-  /// Erstellt automatisch Disziplinen aus Gewerken für ein Gebäude
-  static Future<void> _createDisciplinesFromGewerke(
-    DatabaseService dbService,
-    String buildingId,
-    Set<String> gewerke,
-  ) async {
-    // Lade bestehende Disziplinen
-    final existingDisciplines = await dbService.getDisciplinesByBuildingId(buildingId);
-    final existingLabels = existingDisciplines.map((d) => d.label.toLowerCase()).toSet();
-    
-    // Erstelle neue Disziplinen für Gewerke, die noch nicht existieren
-    final newDisciplines = <Disziplin>[];
-    
-    for (final gewerk in gewerke) {
-      // Gewerk-Name original beibehalten (keine Änderungen!)
-      final cleanGewerk = gewerk.trim();
-      
-      // Prüfe, ob eine Disziplin mit diesem Namen bereits existiert
-      bool exists = false;
-      for (final existingLabel in existingLabels) {
-        if (existingLabel == cleanGewerk.toLowerCase()) {
-          exists = true;
-          break;
-        }
-      }
-      
-      if (!exists && cleanGewerk.isNotEmpty) {
-        // Erstelle neue Disziplin mit originalem Gewerk-Namen
-        final newDiscipline = Disziplin(
-          label: cleanGewerk,
-          icon: Icons.build,
-          color: Colors.blueGrey,
-          schema: [], // Leeres Schema - kann später angepasst werden
-        );
-        newDisciplines.add(newDiscipline);
-        existingLabels.add(cleanGewerk.toLowerCase());
-      }
-    }
-    
-    // Speichere neue Disziplinen
-    if (newDisciplines.isNotEmpty) {
-      final allDisciplines = [...existingDisciplines, ...newDisciplines];
-      await dbService.replaceDisciplines(buildingId, allDisciplines);
-      debugPrint('${newDisciplines.length} neue Disziplinen erstellt: ${newDisciplines.map((d) => d.label).join(", ")}');
+  static Map<String, dynamic> _paramsMapFromParameterJson(String? parameterString) {
+    if (parameterString == null || parameterString.trim().isEmpty) return {};
+    try {
+      final decoded = json.decode(parameterString);
+      if (decoded is! Map) return {};
+      return decoded.entries
+          .where((e) => e.key != '_schema')
+          .map((e) => MapEntry(e.key.toString(), e.value))
+          .fold<Map<String, dynamic>>({}, (m, e) => m..[e.key] = e.value);
+    } catch (_) {
+      return {};
     }
   }
+
+  /// Liest das in template.parameter gespeicherte _schema (Attribut-Definitionen) aus.
+  static List<Map<String, dynamic>> getSchemaFromTemplateParameter(String? parameterString) {
+    if (parameterString == null || parameterString.trim().isEmpty) return [];
+    try {
+      final decoded = json.decode(parameterString);
+      if (decoded is! Map) return [];
+      final raw = decoded['_schema'];
+      if (raw is! List) return [];
+      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Hinweis: Früher gab es hier eine Hilfsfunktion, die automatisch Disziplinen
+  // aus den in den Vorlagen vorkommenden Gewerken erstellt hat.
+  // Dieses Verhalten wurde entfernt, damit beim Vorlagen-Import
+  // keine neuen Gewerke mehr ungefragt in der Technik-Übersicht entstehen.
 }
 

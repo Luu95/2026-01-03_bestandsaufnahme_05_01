@@ -35,6 +35,8 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
   bool _isLoading = true;
   String? _error;
   List<Template> _templates = [];
+  List<String> _gewerke = [];
+  String? _selectedGewerk;
   List<String> _anlagentypen = [];
   String? _selectedAnlagentyp;
 
@@ -49,13 +51,46 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       // Lade ALLE Vorlagen für das Projekt
       final allTemplates =
           await TemplateService.loadTemplatesFromDatabase(widget.dbService, widget.projectId);
-      // Filtere nur nach dem aktuellen Gewerk (Disziplin = Gewerk)
-      final templates = allTemplates
-          .where((t) => t.gewerk == widget.discipline.label)
-          .toList();
-      final anlagentypen = TemplateService.getAnlagentypenForGewerk(templates);
+
+      final disciplineLabel = widget.discipline.label.trim();
+      final isSammelDisziplin = disciplineLabel.toLowerCase() == 'allgemein';
+
+      List<Template> effectiveTemplates;
+      List<String> gewerke;
+      String? initialGewerk;
+
+      if (isSammelDisziplin) {
+        // Sammel-Disziplin (z.B. bei deaktivierter Gewerk-Gruppierung): alle Gewerke anbieten
+        effectiveTemplates = allTemplates;
+        final gewerkSet = <String>{};
+        for (final t in allTemplates) {
+          final g = t.gewerk.trim();
+          if (g.isNotEmpty) gewerkSet.add(g);
+        }
+        gewerke = gewerkSet.toList()..sort();
+        initialGewerk = gewerke.isNotEmpty ? gewerke.first : null;
+      } else {
+        // Normales Gewerk: nur Vorlagen für dieses Gewerk
+        effectiveTemplates = allTemplates
+            .where((t) => t.gewerk.trim() == disciplineLabel)
+            .toList();
+        gewerke = effectiveTemplates
+            .map((t) => t.gewerk.trim())
+            .where((g) => g.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+        initialGewerk = gewerke.isNotEmpty ? gewerke.first : null;
+      }
+
+      final templatesForSelectedGewerk = initialGewerk == null
+          ? <Template>[]
+          : effectiveTemplates.where((t) => t.gewerk.trim() == initialGewerk).toList();
+      final anlagentypen = TemplateService.getAnlagentypenForGewerk(templatesForSelectedGewerk);
       setState(() {
-        _templates = templates;
+        _templates = effectiveTemplates;
+        _gewerke = gewerke;
+        _selectedGewerk = initialGewerk;
         _anlagentypen = anlagentypen;
         _selectedAnlagentyp =
             anlagentypen.isNotEmpty ? anlagentypen.first : null;
@@ -69,16 +104,50 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
     }
   }
 
+  void _onGewerkChanged(String? newGewerk) {
+    if (newGewerk == null || newGewerk.trim().isEmpty) {
+      setState(() {
+        _selectedGewerk = null;
+        _anlagentypen = [];
+        _selectedAnlagentyp = null;
+      });
+      return;
+    }
+
+    final gewerkTrimmed = newGewerk.trim();
+    final templatesForGewerk = _templates
+        .where((t) => t.gewerk.trim() == gewerkTrimmed)
+        .toList();
+    final anlagentypen = TemplateService.getAnlagentypenForGewerk(templatesForGewerk);
+
+    setState(() {
+      _selectedGewerk = gewerkTrimmed;
+      _anlagentypen = anlagentypen;
+      _selectedAnlagentyp =
+          anlagentypen.isNotEmpty ? anlagentypen.first : null;
+    });
+  }
+
   void _createFromTemplate() {
     final selectedType = _selectedAnlagentyp;
+    final selectedGewerk = _selectedGewerk;
     if (selectedType == null || selectedType.trim().isEmpty) return;
 
+    // Wenn Gewerke auswählbar sind, muss eines gewählt sein.
+    if (_gewerke.isNotEmpty && (selectedGewerk == null || selectedGewerk.trim().isEmpty)) {
+      return;
+    }
+
     final matching = _templates
-        .where((t) => t.anlagentyp.trim() == selectedType.trim())
+        .where((t) =>
+            (selectedGewerk == null ||
+             t.gewerk.trim() == selectedGewerk.trim()) &&
+            t.anlagentyp.trim() == selectedType.trim())
         .toList();
+    final gewerkForTemplate = (selectedGewerk ?? widget.discipline.label).trim();
     final parentTemplate = matching
         .firstWhere((t) => t.anlageBauteil == 'a', orElse: () => Template(
-              gewerk: widget.discipline.label,
+              gewerk: gewerkForTemplate,
               anlageBauteil: 'a',
               anlagentyp: selectedType,
               bezeichnung: selectedType,
@@ -93,6 +162,30 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       parentTemplate.parameter,
     );
 
+    // Disziplin mit Schema aus der Vorlage, damit die individuellen Attribute
+    // in der Parameterliste erscheinen (z.B. Brennstoff, Wasserart)
+    final schemaFromTemplate = TemplateService.getSchemaFromTemplateParameter(parentTemplate.parameter);
+    final mergedKeys = widget.discipline.schema
+        .map((f) => (f['key'] ?? '').toString())
+        .where((k) => k.isNotEmpty)
+        .toSet();
+    final additionalSchema = <Map<String, dynamic>>[];
+    for (final f in schemaFromTemplate) {
+      final k = (f['key'] ?? '').toString();
+      if (k.isNotEmpty && !mergedKeys.contains(k)) {
+        additionalSchema.add(Map<String, dynamic>.from(f));
+        mergedKeys.add(k);
+      }
+    }
+    final mergedSchema = [...widget.discipline.schema, ...additionalSchema];
+    final disciplineWithSchema = Disziplin(
+      label: widget.discipline.label,
+      icon: widget.discipline.icon,
+      color: widget.discipline.color,
+      schema: mergedSchema,
+      groupingKey: widget.discipline.groupingKey,
+    );
+
     final parent = Anlage(
       id: parentId,
       parentId: null,
@@ -103,7 +196,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       isMarker: false,
       markerInfo: null,
       markerType: widget.discipline.label,
-      discipline: widget.discipline,
+      discipline: disciplineWithSchema,
     );
 
     final children = matching
@@ -112,6 +205,26 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       final name = t.bezeichnung.trim().isNotEmpty
           ? t.bezeichnung.trim()
           : t.anlagentyp.trim();
+      final childSchemaFromTemplate = TemplateService.getSchemaFromTemplateParameter(t.parameter);
+      final childMergedKeys = disciplineWithSchema.schema
+          .map((f) => (f['key'] ?? '').toString())
+          .where((k) => k.isNotEmpty)
+          .toSet();
+      final childAdditionalSchema = <Map<String, dynamic>>[];
+      for (final f in childSchemaFromTemplate) {
+        final k = (f['key'] ?? '').toString();
+        if (k.isNotEmpty && !childMergedKeys.contains(k)) {
+          childAdditionalSchema.add(Map<String, dynamic>.from(f));
+          childMergedKeys.add(k);
+        }
+      }
+      final childDiscipline = Disziplin(
+        label: disciplineWithSchema.label,
+        icon: disciplineWithSchema.icon,
+        color: disciplineWithSchema.color,
+        schema: [...disciplineWithSchema.schema, ...childAdditionalSchema],
+        groupingKey: disciplineWithSchema.groupingKey,
+      );
       return Anlage(
         id: _uuid.v4(),
         parentId: parentId,
@@ -122,7 +235,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
         isMarker: false,
         markerInfo: null,
         markerType: widget.discipline.label,
-        discipline: widget.discipline,
+        discipline: childDiscipline,
       );
     }).toList();
 
@@ -133,6 +246,8 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
   @override
   Widget build(BuildContext context) {
     final hasTypes = _anlagentypen.isNotEmpty;
+    final hasMultipleGewerke = _gewerke.length > 1 ||
+        (widget.discipline.label.trim().toLowerCase() == 'allgemein' && _gewerke.isNotEmpty);
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -197,6 +312,35 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (hasMultipleGewerke) ...[
+                      Text(
+                        'Gewerk',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        value: _selectedGewerk,
+                        items: _gewerke
+                            .map((g) => DropdownMenuItem<String>(
+                                  value: g,
+                                  child: Text(g),
+                                ))
+                            .toList(),
+                        onChanged: _onGewerkChanged,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     Text(
                       'Anlagentyp',
                       style: TextStyle(

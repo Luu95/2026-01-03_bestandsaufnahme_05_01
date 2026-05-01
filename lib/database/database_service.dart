@@ -317,15 +317,56 @@ class DatabaseService {
     return map;
   }
 
+  /// Merged die Schema-Felder aus der gespeicherten Anlagen-Disziplin in die Gebäude-Disziplin,
+  /// damit ATT1, ATT2 usw. aus der Gewerkevorlage in der Parameterliste erscheinen.
+  Disziplin _mergeDisciplineSchema({required Disziplin? base, required Disziplin fromAnlage}) {
+    if (base == null) return fromAnlage;
+    final baseKeys = base.schema
+        .map((f) => (f['key'] ?? '').toString())
+        .where((k) => k.isNotEmpty)
+        .toSet();
+    final additional = fromAnlage.schema
+        .where((f) {
+          final k = (f['key'] ?? '').toString();
+          return k.isNotEmpty && !baseKeys.contains(k);
+        })
+        .map((f) => Map<String, dynamic>.from(f))
+        .toList();
+    return Disziplin(
+      label: base.label,
+      icon: base.icon,
+      color: base.color,
+      schema: [...base.schema, ...additional],
+      groupingKey: base.groupingKey,
+    );
+  }
+
   models.Anlage _anlageRowToModelWithCurrentDiscipline(AnlageDb row, Disziplin? currentDiscipline) {
-    // Verwende die aktuelle Disziplin, falls verfügbar, sonst die gespeicherte
-    final discipline = currentDiscipline ?? Disziplin.fromJson(json.decode(row.discipline));
-    
+    // Gespeicherte Disziplin der Anlage (enthält ggf. Schema aus Gewerkevorlage: ATT1, ATT2, …)
+    final storedDiscipline = Disziplin.fromJson(json.decode(row.discipline) as Map<String, dynamic>);
+
+    // Disziplin für die Anlage: Gebäude-Disziplin als Basis, Schema aus gespeicherter Anlage übernehmen,
+    // damit die individuellen Attribute aus der Gewerke-CSV (Brennstoff, Wasserart, Leistung etc.) erhalten bleiben.
+    final discipline = _mergeDisciplineSchema(
+      base: currentDiscipline ?? storedDiscipline,
+      fromAnlage: storedDiscipline,
+    );
+
+    // Params als vollständige Map mit String-Keys (inkl. aller Attribut-Spalten aus dem Import)
+    final rawParams = json.decode(row.params);
+    final baseParams = rawParams is Map
+        ? Map<String, dynamic>.from(rawParams.map((k, v) => MapEntry(k.toString(), v)))
+        : <String, dynamic>{};
+
+    // Alte Validierungs-Meta-Felder bereinigen, da sie nicht mehr verwendet werden
+    baseParams.remove('_validated');
+    baseParams.remove('_validatedAt');
+
     return models.Anlage(
       id: row.id,
       parentId: row.parentId,
       name: row.name,
-      params: json.decode(row.params) as Map<String, dynamic>,
+      params: baseParams,
       floorId: row.floorId ?? '',
       buildingId: row.buildingId,
       isMarker: row.isMarker,

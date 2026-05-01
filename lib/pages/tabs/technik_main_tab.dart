@@ -30,6 +30,12 @@ class TechnikMainTab extends StatefulWidget {
   final VoidCallback? onAnlageCreated;
   final VoidCallback? onBauteilCreated;
   final VoidCallback? onAnlagenMoved;
+  /// Wird bei Long-Press auf einen Gruppen-Header aufgerufen.
+  final void Function(Disziplin discipline, String groupingKey, String groupValue)? onGroupLongPress;
+
+  /// Globaler Gruppierungs-Key für alle Anlagen-Listen (Etage, Raum, …).
+  /// Wird im Gebäude-Header ausgewählt.
+  final String? systemsGroupingKey;
 
   const TechnikMainTab({
     Key? key,
@@ -51,6 +57,8 @@ class TechnikMainTab extends StatefulWidget {
     this.onAnlageCreated,
     this.onBauteilCreated,
     this.onAnlagenMoved,
+    this.onGroupLongPress,
+    this.systemsGroupingKey,
   }) : super(key: key);
 
   @override
@@ -166,6 +174,34 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                 onPressed: widget.onImportCsv,
               ),
             ],
+          ),
+        ),
+      );
+    }
+
+    // Bei genau einem Gewerk: Anlagen direkt anzeigen, ohne aufklappbaren Reiter
+    if (disziplinen.length == 1) {
+      final discipline = disziplinen.first;
+      return SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: SystemsPage(
+          key: widget.systemsPageKeys[discipline],
+          building: widget.building,
+          floor: FloorPlan(id: 'global', name: 'Global'),
+          discipline: discipline,
+          groupingKey: widget.systemsGroupingKey,
+          onSelectionChanged: (isActive, count) {
+            if (widget.onSelectionChanged != null) {
+              widget.onSelectionChanged!(isActive, count, discipline);
+            }
+          },
+          isAnySelectionActive: widget.isAnySelectionActive,
+          onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
+          onAnlageCreated: widget.onAnlageCreated,
+          onBauteilCreated: widget.onBauteilCreated,
+          onAnlagenMoved: widget.onAnlagenMoved,
+          onGroupLongPress: widget.onGroupLongPress,
           ),
         ),
       );
@@ -347,6 +383,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                       building: widget.building,
                       floor: FloorPlan(id: 'global', name: 'Global'),
                       discipline: discipline,
+                      groupingKey: widget.systemsGroupingKey,
                       onSelectionChanged: (isActive, count) {
                         if (widget.onSelectionChanged != null) {
                           widget.onSelectionChanged!(isActive, count, discipline);
@@ -357,6 +394,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                       onAnlageCreated: widget.onAnlageCreated,
                       onBauteilCreated: widget.onBauteilCreated,
                       onAnlagenMoved: widget.onAnlagenMoved,
+                      onGroupLongPress: widget.onGroupLongPress,
                     ),
                   ),
                 ],

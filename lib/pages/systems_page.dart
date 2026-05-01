@@ -31,6 +31,10 @@ class SystemsPage extends ConsumerStatefulWidget {
   final FloorPlan floor;   // Der Plan des Floors, auf dem die Anlagen zu finden sind
   final Disziplin discipline; // Die Disziplin, für die Anlagen angezeigt werden
 
+  /// Optionaler globaler Gruppierungs-Key, der von außen (Gebäude-Header) gesetzt wird.
+  /// Wenn null oder leer, erfolgt keine Gruppierung.
+  final String? groupingKey;
+
   /// Callback, um Selektion (aktiv, count) nach außen zu melden.
   final void Function(bool isActive, int selectedCount)? onSelectionChanged;
   
@@ -48,18 +52,22 @@ class SystemsPage extends ConsumerStatefulWidget {
 
   /// Wird aufgerufen, wenn Anlagen verschoben wurden (für Neuladen aller betroffenen Gewerke).
   final VoidCallback? onAnlagenMoved;
+  /// Wird bei Long-Press auf einen Gruppen-Header aufgerufen (Disziplin, groupingKey, groupValue).
+  final void Function(Disziplin discipline, String groupingKey, String groupValue)? onGroupLongPress;
 
   const SystemsPage({
     Key? key,
     required this.building,
     required this.floor,
     required this.discipline,
+    this.groupingKey,
     this.onSelectionChanged,
     this.isAnySelectionActive,
     this.onExitDisciplineSelectionMode,
     this.onAnlageCreated,
     this.onBauteilCreated,
     this.onAnlagenMoved,
+    this.onGroupLongPress,
   }) : super(key: key);
 
   @override
@@ -210,14 +218,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         });
       }
 
-      // Wenn Gruppierung aktiv ist und die Anlage in einer Gruppe ist, klappe die Gruppe auf
-      final disc = widget.discipline;
-      if (disc.groupingKey != null && disc.groupingKey!.isNotEmpty) {
-        final groupValue = anlage.params[disc.groupingKey]?.toString() ?? '';
-        setState(() {
-          _expandedGroups.add(groupValue);
-        });
-      }
+      // Gruppierung / Gruppenexpansion wird außerhalb der SystemsPage gesteuert
 
       final key = _anlageKeys[_lastOpenedAnlageId];
       if (key != null) {
@@ -377,20 +378,25 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   /// Für globale (Marker-basierte) oder für text-basierte Anzeige unterscheiden.
-  /// Gibt nur Haupt-Anlagen zurück (ohne parentId).
+  /// Gibt Haupt-Anlagen zurück und behandelt verwaiste Bauteile als Top-Level,
+  /// damit importierte Einträge ohne auflösbaren Parent nicht verschwinden.
   List<Anlage> get _anzeigeAnlagen {
     final label = widget.discipline.label;
-    final baseAnlagen = widget.floor.id == 'global'
+    final baseAnlagen = (widget.floor.id == 'global'
         ? _alleAnlagen.where((a) =>
             a.buildingId == widget.building.id &&
             a.discipline.label == label)
         : _alleAnlagen.where((a) =>
             a.buildingId == widget.building.id &&
             a.floorId == widget.floor.id &&
-            a.discipline.label == label);
+            a.discipline.label == label))
+      .toList();
 
-    // Nur Haupt-Anlagen zurückgeben (die ohne parentId)
-    return baseAnlagen.where((a) => a.parentId == null).toList();
+    final existingIds = baseAnlagen.map((a) => a.id).toSet();
+    return baseAnlagen.where((a) {
+      if (a.parentId == null || a.parentId!.isEmpty) return true;
+      return !existingIds.contains(a.parentId!);
+    }).toList();
   }
 
   /// Gibt die Kinder einer Anlage zurück
@@ -694,6 +700,20 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         existingAnlage: a,
         index: idx,
         onSave: (editedAnlage, index) async {
+          // Wenn Gruppierungsattribut geändert wurde: Zielgruppe aufklappen,
+          // damit die Anlage in ihrer neuen Gruppierung sichtbar ist
+          final gk = widget.groupingKey;
+          if (gk != null && gk.isNotEmpty) {
+            final oldValue = a.params[gk]?.toString() ?? '';
+            final newValue = editedAnlage.params[gk]?.toString() ?? '';
+            if (oldValue != newValue && newValue.isNotEmpty) {
+              setState(() {
+                _expandedGroups.add(newValue);
+              });
+              _saveExpandedGroups();
+            }
+          }
+
           setState(() {
             _alleAnlagen[index!] = editedAnlage;
           });
@@ -760,7 +780,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: 16, top: 12),
-      child: _buildList(widget.discipline),  // Baut die Liste der Anlagen
+      child: _buildList(widget.discipline),
     );
   }
 
@@ -773,6 +793,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       disc: disc,
       parents: parents,
       getChildren: _getChildren,
+      groupingKey: widget.groupingKey,
       expandedGroups: _expandedGroups,
       expandedAnlagenIds: _expandedAnlagenIds,
       onGroupExpansionChanged: (groupKey, expanded) {
@@ -794,6 +815,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           }
         });
       },
+      onGroupLongPress: widget.onGroupLongPress != null
+          ? (gk, gv) => widget.onGroupLongPress!(widget.discipline, gk, gv)
+          : null,
       itemBuilder: _buildHierarchicalAnlageItem,
     );
   }
@@ -807,7 +831,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     VoidCallback? onToggleExpanded,
   }) {
     final isSelected = _selectedAnlagenIds.contains(a.id);
-    final isValidated = AnlageValidationService.getValidatedStatus(a);
+    final isValidated = AnlageValidationService.isAnlageValidated(a);
     final isLastOpened = _lastOpenedAnlageId == a.id;
 
     // Stelle sicher, dass ein GlobalKey für diese Anlage existiert

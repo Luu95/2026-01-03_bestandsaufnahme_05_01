@@ -96,6 +96,8 @@ class GenericAnlageDialog extends ConsumerStatefulWidget {
   final Anlage? existingAnlage;
   final int? index;
   final void Function(Anlage anlage, int? index) onSave;
+  /// Optionale Vorbefüllung für neue Anlagen (z.B. Gruppierungsattribut aus Long-Press auf Gruppe).
+  final Map<String, dynamic>? initialParams;
 
   const GenericAnlageDialog({
     Key? key,
@@ -106,6 +108,7 @@ class GenericAnlageDialog extends ConsumerStatefulWidget {
     this.existingAnlage,
     this.index,
     required this.onSave,
+    this.initialParams,
   }) : super(key: key);
 
   @override
@@ -158,9 +161,48 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         (d) => d.label == widget.discipline.label,
         orElse: () => widget.discipline, // Fallback auf übergebene Disziplin
       );
+
+      // Falls die bestehende Anlage ein erweitertes Schema aus einer Gewerkevorlage
+      // mitbringt (z.B. individuelle Attribute), mergen wir dieses Schema mit der
+      // in der Datenbank hinterlegten Disziplin. So gehen Template-Felder nicht
+      // verloren, auch wenn die Sammel-Disziplin (z.B. "Allgemein") selbst sie
+      // nicht kennt.
+      Disziplin effectiveDiscipline = updatedDiscipline;
+      if (widget.existingAnlage != null) {
+        final existingDisc = widget.existingAnlage!.discipline;
+        final mergedKeys = <String>{};
+        final mergedSchema = <Map<String, dynamic>>[];
+
+        // Zuerst Schema aus der DB
+        for (final f in updatedDiscipline.schema) {
+          final key = (f['key'] ?? '').toString();
+          if (key.isNotEmpty && !mergedKeys.contains(key)) {
+            mergedKeys.add(key);
+            mergedSchema.add(Map<String, dynamic>.from(f));
+          }
+        }
+
+        // Dann zusätzliche Felder aus der bestehenden Anlage ergänzen
+        for (final f in existingDisc.schema) {
+          final key = (f['key'] ?? '').toString();
+          if (key.isNotEmpty && !mergedKeys.contains(key)) {
+            mergedKeys.add(key);
+            mergedSchema.add(Map<String, dynamic>.from(f));
+          }
+        }
+
+        effectiveDiscipline = Disziplin(
+          label: updatedDiscipline.label,
+          icon: updatedDiscipline.icon,
+          color: updatedDiscipline.color,
+          schema: mergedSchema,
+          groupingKey: updatedDiscipline.groupingKey,
+        );
+      }
+
       if (mounted) {
         setState(() {
-          _currentDiscipline = updatedDiscipline;
+          _currentDiscipline = effectiveDiscipline;
         });
       }
     } catch (e) {
@@ -187,12 +229,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             .toList();
         _photoManager.updateImageFiles(files);
       }
+    } else if (widget.initialParams != null && widget.initialParams!.isNotEmpty) {
+      _params.addAll(widget.initialParams!);
+      for (var entry in widget.initialParams!.entries) {
+        final key = entry.key;
+        final value = entry.value;
+        if (!key.startsWith('_') && value != null && value.toString().trim().isNotEmpty) {
+          _prefilledFields.add(key);
+        }
+      }
     }
     
-    // Stelle sicher, dass Leistungsparameter immer vorhanden ist (auch wenn leer)
-    if (!_params.containsKey('Leistungsparameter')) {
-      _params['Leistungsparameter'] = <String, String>{};
-    }
     _nameController = TextEditingController(text: widget.existingAnlage?.name ?? '');
     _nameController.addListener(_updateValidationStatus);
 
@@ -954,6 +1001,29 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     setState(() {});
   }
 
+  /// Synchronisiert alle Controller-Werte in _params. Sollte vor dem Speichern
+  /// aufgerufen werden, damit keine Eingaben verloren gehen.
+  void _syncControllersToParams() {
+    final schema = _currentDiscipline.schema;
+    final schemaByKey = <String, Map<String, dynamic>>{};
+    for (final f in schema) {
+      final k = (f['key'] ?? '').toString();
+      if (k.isNotEmpty) schemaByKey[k] = f;
+    }
+    for (final entry in _controllers.entries) {
+      final key = entry.key;
+      final controller = entry.value;
+      final text = controller.text.trim();
+      final fieldDef = schemaByKey[key];
+      final type = (fieldDef?['type'] ?? 'text').toString().toLowerCase();
+      if (type == 'number' || type == 'int') {
+        _params[key] = text.isEmpty ? '' : (num.tryParse(text) ?? text);
+      } else {
+        _params[key] = text;
+      }
+    }
+  }
+
   void _toggleFieldMissing(String key) {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
@@ -978,7 +1048,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     // Verwende nur die Felder aus dem Schema - keine extraKeys mehr hinzufügen
     // Das stellt sicher, dass nur die definierten Felder angezeigt werden
     final schema = List<Map<String, dynamic>>.from(_currentDiscipline.schema);
-    final parameterKeyFromCsv = _params['__parameterKey']?.toString();
     
     final fields = <Widget>[];
     final tempAnlage = Anlage(
@@ -996,9 +1065,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     
     for (var fieldDef in schema) {
       final key = fieldDef['key'] as String;
-      
-      // EXPLIZIT: Falls der Key "Parameter" oder "Leistungsparameter" ist, oben nicht anzeigen!
-      if (key == 'Leistungsparameter' || (parameterKeyFromCsv != null && key == parameterKeyFromCsv)) continue;
 
       final label = fieldDef['label'] as String;
       final type = (fieldDef['type'] ?? 'string').toString();
@@ -1098,11 +1164,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
 
       Widget inputWidget;
-      if (type == 'dropdown') {
+      if (type == 'dropdown' || type == 'select') {
+        final inlineOptions = fieldDef['options'];
+        List<String> options = const [];
+        final hasInlineOptions = inlineOptions is List && inlineOptions.isNotEmpty;
+        if (hasInlineOptions) {
+          options = inlineOptions.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+        }
         final data = _dropdownCsvData;
-        final options = (data != null && dropdownColumn.isNotEmpty)
-            ? (data.valuesByHeader[dropdownColumn] ?? const <String>[])
-            : const <String>[];
+        if (options.isEmpty && dropdownColumn.isNotEmpty && data != null) {
+          options = data.valuesByHeader[dropdownColumn] ?? const <String>[];
+        }
 
         String? currentValue = controller.text.trim().isEmpty ? null : controller.text.trim();
         if (currentValue != null && options.isNotEmpty && !options.contains(currentValue)) {
@@ -1137,7 +1209,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
               ),
             ),
-            if (_isLoadingDropdownCsv)
+            if (!hasInlineOptions && _isLoadingDropdownCsv)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -1145,7 +1217,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
               )
-            else if (data == null || data.error != null)
+            else if (!hasInlineOptions && (data == null || data.error != null))
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -1153,7 +1225,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                   style: TextStyle(fontSize: 12, color: Colors.orange[800]),
                 ),
               )
-            else if (dropdownColumn.isEmpty)
+            else if (!hasInlineOptions && dropdownColumn.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -1161,7 +1233,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                   style: TextStyle(fontSize: 12, color: Colors.orange[800]),
                 ),
               )
-            else if (options.isEmpty)
+            else if (!hasInlineOptions && options.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -1172,12 +1244,19 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           ],
         );
       } else {
+        final isMultilineTextField =
+            type == 'multiline' || label.toLowerCase().contains('bemerk');
+
         inputWidget = TextField(
           controller: controller,
           readOnly: isEditable != true || type == 'date',
           onTap: (isEditable == true && type == 'date') ? pickDate : null,
-          keyboardType:
-              (type == 'number' || type == 'int') ? TextInputType.number : TextInputType.text,
+          keyboardType: (type == 'number' || type == 'int')
+              ? TextInputType.number
+              : (isMultilineTextField ? TextInputType.multiline : TextInputType.text),
+          minLines: isMultilineTextField ? 1 : null,
+          maxLines: isMultilineTextField ? null : 1,
+          textInputAction: isMultilineTextField ? TextInputAction.newline : TextInputAction.next,
           style: TextStyle(
             fontSize: 15,
             color: isEditable == true ? Colors.grey[900] : Colors.grey[600],
@@ -1230,139 +1309,126 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       );
     }
 
-    return fields;
-  }
+    // Zusätzliche Felder: Params, die nicht im Schema sind (z. B. aus CSV-Attribut-Spaltenpaaren)
+    final schemaKeys = schema.map((f) => (f['key'] as String?).toString()).where((k) => k.isNotEmpty).toSet();
+    const reservedKeys = {
+      'lfdNummer',
+      'Etage',
+      'Anlage/Bauteil',
+      'Anlage/Bautel',
+      'photoPaths',
+    };
+    for (final key in _params.keys) {
+      if (schemaKeys.contains(key)) continue;
+      if (key.startsWith('__')) continue;
+      if (key.startsWith('_')) continue; // interne/Validierungs-Felder nicht als Extra-Felder anzeigen
+      if (reservedKeys.contains(key)) continue;
+      final value = _params[key];
+      if (value is Map || value is List) continue; // keine komplexen Typen als einfaches Textfeld
 
-  Widget _buildLeistungsparameterSection() {
-    // 1. Hole die Map der Leistungsparameter
-    var leistungsparameter = _params['Leistungsparameter'];
-    final parameterKeyFromCsv = _params['__parameterKey']?.toString();
-    
-    // 2. Falls ein konfiguriertes Parameter-Feld (Text aus CSV) existiert, aber noch nicht in die Map gewandelt wurde
-    if (parameterKeyFromCsv != null && _params.containsKey(parameterKeyFromCsv) && (leistungsparameter == null || (leistungsparameter is Map && leistungsparameter.isEmpty))) {
-      final String raw = _params[parameterKeyFromCsv].toString();
-      if (raw.isNotEmpty) {
-        final Map<String, String> lpMap = {};
-        for (var label in raw.split(RegExp(r'[,;]'))) {
-          final trimmed = label.trim();
-          if (trimmed.isNotEmpty) lpMap[trimmed] = '';
-        }
-        _params['Leistungsparameter'] = lpMap;
-        leistungsparameter = lpMap;
+      if (!_controllers.containsKey(key)) {
+        _controllers[key] = TextEditingController(text: value?.toString() ?? '');
+        _controllers[key]!.addListener(_updateValidationStatus);
       }
-    }
+      final controller = _controllers[key]!;
+      final isEmpty = controller.text.trim().isEmpty;
+      final tempAnlageForExtra = Anlage(
+        id: widget.existingAnlage?.id ?? '',
+        parentId: widget.parentId ?? widget.existingAnlage?.parentId,
+        name: _nameController.text.trim(),
+        params: Map<String, dynamic>.from(_params),
+        floorId: widget.floorId,
+        buildingId: widget.buildingId,
+        isMarker: widget.existingAnlage?.isMarker ?? false,
+        markerInfo: widget.existingAnlage?.markerInfo,
+        markerType: _currentDiscipline.label,
+        discipline: _currentDiscipline,
+      );
+      final isFieldValidatedExtra = AnlageValidationService.isFieldValidated(tempAnlageForExtra, key);
+      final isFieldMissingExtra = AnlageValidationService.isFieldMarkedAsMissing(tempAnlageForExtra, key);
 
-    Map<String, String> lpMap = {};
-    if (leistungsparameter is Map) {
-      lpMap = Map<String, String>.from(leistungsparameter);
-    }
-    
-    final keys = lpMap.keys.toList();
+      Widget actionButtonExtra;
+      if (isEmpty) {
+        actionButtonExtra = Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _toggleFieldMissing(key),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isFieldMissingExtra ? Colors.grey[200] : Colors.red[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: isFieldMissingExtra ? Colors.grey[400]! : Colors.red[300]!, width: 1.5),
+              ),
+              child: Icon(Icons.close, color: isFieldMissingExtra ? Colors.grey[700] : Colors.red[600], size: 20),
+            ),
+          ),
+        );
+      } else {
+        actionButtonExtra = Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _toggleFieldValidation(key),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isFieldValidatedExtra ? Colors.green[50] : Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: isFieldValidatedExtra ? Colors.green[400]! : Colors.grey[400]!, width: 1.5),
+              ),
+              child: Icon(Icons.check_circle, color: isFieldValidatedExtra ? Colors.green[600] : Colors.grey[500], size: 20),
+            ),
+          ),
+        );
+      }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.withOpacity(0.2), width: 1),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      void applyTextValueExtra(String val) {
+        final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
+        _params[key] = val;
+        if (wasEmpty && val.trim().isNotEmpty) {
+          _params.addAll(AnlageValidationService.setFieldValidated(tempAnlageForExtra, key, true).params);
+        }
+        _updateValidationStatus();
+      }
+
+      fields.add(
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: isFieldMissingExtra ? Colors.grey[200] : Colors.grey[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isFieldValidatedExtra ? Colors.green.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
+              width: isFieldValidatedExtra ? 1.5 : 1,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-                      child: Icon(Icons.settings_input_component, color: Colors.orange[700], size: 20),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    style: TextStyle(fontSize: 15, color: Colors.grey[900]),
+                    decoration: InputDecoration(
+                      labelText: key,
+                      labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
+                      border: InputBorder.none,
                     ),
-                    const SizedBox(width: 12),
-                    Text('Leistungsparameter', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey[900])),
-                  ],
+                    onChanged: (val) => applyTextValueExtra(val),
+                  ),
                 ),
-                IconButton(
-                  icon: Icon(Icons.add, color: Theme.of(context).primaryColor),
-                  onPressed: () async {
-                    String? newLabel = await showDialog<String>(
-                      context: context,
-                      builder: (context) {
-                        String label = '';
-                        return AlertDialog(
-                          title: const Text('Neuer Parameter'),
-                          content: TextField(
-                            decoration: const InputDecoration(hintText: 'Bezeichnung'),
-                            onChanged: (val) => label = val,
-                          ),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Abbrechen')),
-                            TextButton(onPressed: () => Navigator.pop(context, label), child: const Text('Hinzufügen')),
-                          ],
-                        );
-                      },
-                    );
-                    if (newLabel != null && newLabel.trim().isNotEmpty) {
-                      setState(() {
-                        lpMap[newLabel.trim()] = '';
-                        _params['Leistungsparameter'] = lpMap;
-                      });
-                    }
-                  },
-                ),
+                actionButtonExtra,
               ],
             ),
-            const SizedBox(height: 12),
-            ...keys.map((label) {
-              final value = lpMap[label] ?? '';
-              if (!_controllers.containsKey('lp_$label')) {
-                _controllers['lp_$label'] = TextEditingController(text: value);
-                _controllers['lp_$label']!.addListener(_updateValidationStatus);
-              }
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.withOpacity(0.2))),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _controllers['lp_$label'],
-                        style: TextStyle(fontSize: 14, color: Colors.grey[900]),
-                        decoration: InputDecoration(
-                          labelText: label,
-                          labelStyle: TextStyle(color: Colors.grey[600], fontSize: 12),
-                          border: InputBorder.none,
-                        ),
-                        onChanged: (val) {
-                          lpMap[label] = val;
-                          _params['Leistungsparameter'] = lpMap;
-                        },
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 18, color: Colors.red),
-                      onPressed: () {
-                        setState(() {
-                          lpMap.remove(label);
-                          _controllers['lp_$label']?.dispose();
-                          _controllers.remove('lp_$label');
-                          _params['Leistungsparameter'] = lpMap;
-                        });
-                      },
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ],
+          ),
         ),
-      ),
-    );
+      );
+    }
+
+    return fields;
   }
 
   @override
@@ -1535,10 +1601,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       ),
 
                       // Normale Schema-Felder (aus CSV-Spalten)
-                      // Spezielle Leistungsparameter (aus der Parameter-Zelle)
-                      const SizedBox(height: 8),
-                      _buildLeistungsparameterSection(),
-
                       const SizedBox(height: 8),
                       ..._buildSchemaFields(),
 
@@ -1613,6 +1675,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         if (name.isEmpty) return;
                         _params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
 
+                        // Wichtig: Alle Controller-Werte vor dem Speichern in _params übernehmen.
+                        // Verhindert, dass Eingaben verloren gehen (z.B. bei Fokus-Wechsel ohne onChanged).
+                        _syncControllersToParams();
+
                         // Erstelle Anlage
                         var anlage = Anlage(
                           id: widget.existingAnlage?.id ?? const Uuid().v4(),
@@ -1626,11 +1692,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           markerType: _currentDiscipline.label,
                           discipline: _currentDiscipline,
                         );
-
-                        // Prüfe Validierung und setze Status automatisch
-                        final isValidated = AnlageValidationService.isAnlageValidated(anlage);
-                        anlage = AnlageValidationService.setValidatedStatus(anlage, isValidated);
-
                         widget.onSave(anlage, widget.index);
                         Navigator.of(context).pop();
                       },

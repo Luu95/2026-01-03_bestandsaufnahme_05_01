@@ -10,6 +10,7 @@ import 'database/database_service.dart';
 import 'providers/database_provider.dart';
 import 'providers/projects_provider.dart';
 import 'pages/building_details_page.dart';
+import 'navigation/route_observer.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +51,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Projekte & Gebäude',
+      navigatorObservers: [routeObserver],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSwatch(primarySwatch: Colors.lightBlue),
         useMaterial3: true,

@@ -53,10 +53,9 @@ class AnlageValidationService {
   /// Setzt den Validierungsstatus einer Anlage
   static Anlage setValidatedStatus(Anlage anlage, bool validated) {
     final updatedParams = Map<String, dynamic>.from(anlage.params);
-    updatedParams['_validated'] = validated;
-    updatedParams['_validatedAt'] = validated 
-        ? DateTime.now().toIso8601String() 
-        : null;
+    // Historisch wurden hier Meta-Felder (_validated, _validatedAt) gesetzt.
+    // Diese werden nicht mehr verwendet und daher auch nicht mehr geschrieben.
+    // Existierende Meta-Felder in params bleiben unangetastet, werden aber ignoriert.
     
     return Anlage(
       id: anlage.id,
@@ -74,12 +73,8 @@ class AnlageValidationService {
 
   /// Liest den gespeicherten Validierungsstatus (prüft auch automatisch)
   static bool getValidatedStatus(Anlage anlage) {
-    // Wenn explizit als validiert markiert, verwende das
-    if (anlage.params.containsKey('_validated')) {
-      return anlage.params['_validated'] == true;
-    }
-    
-    // Sonst prüfe automatisch
+    // Ignoriere ggf. vorhandene Meta-Felder (_validated, _validatedAt) und
+    // verwende ausschließlich die aktuelle Feld-Validierungslogik.
     return isAnlageValidated(anlage);
   }
 

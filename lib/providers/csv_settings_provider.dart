@@ -4,13 +4,36 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Ein explizites Paar: eine Spalte für den Attributnamen, eine für den Attributwert.
+/// Beim Import wird pro Zeile gelesen: params[wert(nameSpalte)] = wert(valueSpalte).
+class AttributeColumnPair {
+  final int nameColumn;
+  final int valueColumn;
+
+  const AttributeColumnPair({
+    required this.nameColumn,
+    required this.valueColumn,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'nameColumn': nameColumn,
+        'valueColumn': valueColumn,
+      };
+
+  factory AttributeColumnPair.fromJson(Map<String, dynamic> json) {
+    return AttributeColumnPair(
+      nameColumn: json['nameColumn'] as int? ?? 0,
+      valueColumn: json['valueColumn'] as int? ?? 0,
+    );
+  }
+}
+
 class CsvSettings {
   final int lfdNummerSpalte;
   final int nameSpalte;
   final int gewerkSpalte;
   final int? etageSpalte;
   final int? anlageBauteilSpalte;
-  final int? parameterSpalte;
   final String delimiterMode;
   final String anlageKuerzel;
   final String bauteilKuerzel;
@@ -18,6 +41,16 @@ class CsvSettings {
   final String labelGewerk;
   final String labelAnlage;
   final String labelBauteil;
+  final List<AttributeColumnPair> attributeColumnPairs;
+  /// Spalten-Labels für Fotonummern beim Export (1–4). Leer = Spalte nicht verwendet.
+  final String? foto1SpalteLabel;
+  final String? foto2SpalteLabel;
+  final String? foto3SpalteLabel;
+  final String? foto4SpalteLabel;
+  /// Beim Anlagen-Import aus CSV gespeicherte Header-Zeile; für Export „wie Import“.
+  final List<String> importHeaderRow;
+  /// Beim Export verwendeter Delimiter (z. B. ';' oder ','). Wird beim Import aus erkanntem Delimiter gesetzt.
+  final String exportDelimiter;
 
   const CsvSettings({
     required this.lfdNummerSpalte,
@@ -25,7 +58,6 @@ class CsvSettings {
     required this.gewerkSpalte,
     this.etageSpalte,
     this.anlageBauteilSpalte,
-    this.parameterSpalte,
     required this.delimiterMode,
     required this.anlageKuerzel,
     required this.bauteilKuerzel,
@@ -33,6 +65,13 @@ class CsvSettings {
     required this.labelGewerk,
     required this.labelAnlage,
     required this.labelBauteil,
+    this.attributeColumnPairs = const [],
+    this.foto1SpalteLabel,
+    this.foto2SpalteLabel,
+    this.foto3SpalteLabel,
+    this.foto4SpalteLabel,
+    this.importHeaderRow = const [],
+    this.exportDelimiter = ';',
   });
 
   factory CsvSettings.defaults() {
@@ -42,7 +81,6 @@ class CsvSettings {
       gewerkSpalte: 2,
       etageSpalte: null,
       anlageBauteilSpalte: null,
-      parameterSpalte: null,
       delimiterMode: 'auto',
       anlageKuerzel: 'A,Anlage',
       bauteilKuerzel: 'B,Bauteil',
@@ -50,6 +88,13 @@ class CsvSettings {
       labelGewerk: 'Gewerk',
       labelAnlage: 'Anlage',
       labelBauteil: 'Bauteil',
+      attributeColumnPairs: [],
+      foto1SpalteLabel: null,
+      foto2SpalteLabel: null,
+      foto3SpalteLabel: null,
+      foto4SpalteLabel: null,
+      importHeaderRow: const [],
+      exportDelimiter: ';',
     );
   }
 
@@ -59,7 +104,6 @@ class CsvSettings {
     int? gewerkSpalte,
     int? etageSpalte,
     int? anlageBauteilSpalte,
-    int? parameterSpalte,
     String? delimiterMode,
     String? anlageKuerzel,
     String? bauteilKuerzel,
@@ -67,6 +111,13 @@ class CsvSettings {
     String? labelGewerk,
     String? labelAnlage,
     String? labelBauteil,
+    List<AttributeColumnPair>? attributeColumnPairs,
+    String? foto1SpalteLabel,
+    String? foto2SpalteLabel,
+    String? foto3SpalteLabel,
+    String? foto4SpalteLabel,
+    List<String>? importHeaderRow,
+    String? exportDelimiter,
   }) {
     return CsvSettings(
       lfdNummerSpalte: lfdNummerSpalte ?? this.lfdNummerSpalte,
@@ -74,7 +125,6 @@ class CsvSettings {
       gewerkSpalte: gewerkSpalte ?? this.gewerkSpalte,
       etageSpalte: etageSpalte ?? this.etageSpalte,
       anlageBauteilSpalte: anlageBauteilSpalte ?? this.anlageBauteilSpalte,
-      parameterSpalte: parameterSpalte ?? this.parameterSpalte,
       delimiterMode: delimiterMode ?? this.delimiterMode,
       anlageKuerzel: anlageKuerzel ?? this.anlageKuerzel,
       bauteilKuerzel: bauteilKuerzel ?? this.bauteilKuerzel,
@@ -82,6 +132,13 @@ class CsvSettings {
       labelGewerk: labelGewerk ?? this.labelGewerk,
       labelAnlage: labelAnlage ?? this.labelAnlage,
       labelBauteil: labelBauteil ?? this.labelBauteil,
+      attributeColumnPairs: attributeColumnPairs ?? this.attributeColumnPairs,
+      foto1SpalteLabel: foto1SpalteLabel ?? this.foto1SpalteLabel,
+      foto2SpalteLabel: foto2SpalteLabel ?? this.foto2SpalteLabel,
+      foto3SpalteLabel: foto3SpalteLabel ?? this.foto3SpalteLabel,
+      foto4SpalteLabel: foto4SpalteLabel ?? this.foto4SpalteLabel,
+      importHeaderRow: importHeaderRow ?? this.importHeaderRow,
+      exportDelimiter: exportDelimiter ?? this.exportDelimiter,
     );
   }
 
@@ -92,7 +149,6 @@ class CsvSettings {
       'gewerkSpalte': gewerkSpalte,
       'etageSpalte': etageSpalte,
       'anlageBauteilSpalte': anlageBauteilSpalte,
-      'parameterSpalte': parameterSpalte,
       'delimiterMode': delimiterMode,
       'anlageKuerzel': anlageKuerzel,
       'bauteilKuerzel': bauteilKuerzel,
@@ -100,17 +156,34 @@ class CsvSettings {
       'labelGewerk': labelGewerk,
       'labelAnlage': labelAnlage,
       'labelBauteil': labelBauteil,
+      'attributeColumnPairs': attributeColumnPairs.map((p) => p.toJson()).toList(),
+      'foto1SpalteLabel': foto1SpalteLabel,
+      'foto2SpalteLabel': foto2SpalteLabel,
+      'foto3SpalteLabel': foto3SpalteLabel,
+      'foto4SpalteLabel': foto4SpalteLabel,
+      'importHeaderRow': importHeaderRow,
+      'exportDelimiter': exportDelimiter,
     };
   }
 
   factory CsvSettings.fromJson(Map<String, dynamic> json) {
+    final pairsRaw = json['attributeColumnPairs'];
+    final List<AttributeColumnPair> pairs = [];
+    if (pairsRaw is List) {
+      for (final e in pairsRaw) {
+        if (e is Map<String, dynamic>) {
+          pairs.add(AttributeColumnPair.fromJson(e));
+        } else if (e is Map) {
+          pairs.add(AttributeColumnPair.fromJson(Map<String, dynamic>.from(e)));
+        }
+      }
+    }
     return CsvSettings(
       lfdNummerSpalte: json['lfdNummerSpalte'] as int? ?? 0,
       nameSpalte: json['nameSpalte'] as int? ?? 1,
       gewerkSpalte: json['gewerkSpalte'] as int? ?? 2,
       etageSpalte: json['etageSpalte'] as int?,
       anlageBauteilSpalte: json['anlageBauteilSpalte'] as int?,
-      parameterSpalte: json['parameterSpalte'] as int?,
       delimiterMode: json['delimiterMode'] as String? ?? 'auto',
       anlageKuerzel: json['anlageKuerzel'] as String? ?? 'A,Anlage',
       bauteilKuerzel: json['bauteilKuerzel'] as String? ?? 'B,Bauteil',
@@ -118,7 +191,19 @@ class CsvSettings {
       labelGewerk: json['labelGewerk'] as String? ?? 'Gewerk',
       labelAnlage: json['labelAnlage'] as String? ?? 'Anlage',
       labelBauteil: json['labelBauteil'] as String? ?? 'Bauteil',
+      attributeColumnPairs: pairs,
+      foto1SpalteLabel: json['foto1SpalteLabel'] as String?,
+      foto2SpalteLabel: json['foto2SpalteLabel'] as String?,
+      foto3SpalteLabel: json['foto3SpalteLabel'] as String?,
+      foto4SpalteLabel: json['foto4SpalteLabel'] as String?,
+      importHeaderRow: _parseStringList(json['importHeaderRow']),
+      exportDelimiter: json['exportDelimiter'] as String? ?? ';',
     );
+  }
+
+  static List<String> _parseStringList(dynamic raw) {
+    if (raw is! List) return [];
+    return raw.map((e) => e.toString()).toList();
   }
 }
 

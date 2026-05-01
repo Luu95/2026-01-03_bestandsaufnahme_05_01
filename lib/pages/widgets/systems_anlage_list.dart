@@ -19,11 +19,17 @@ class SystemsAnlageList extends StatelessWidget {
   final List<Anlage> parents;
   final List<Anlage> Function(Anlage parent) getChildren;
 
+  /// Optionaler Gruppierungs-Key, mit dem die Liste dynamisch gruppiert werden kann.
+  /// Wenn null oder leer, wird nicht gruppiert.
+  final String? groupingKey;
+
   final Set<String> expandedGroups;
   final Set<String> expandedAnlagenIds;
 
   final void Function(String groupKey, bool expanded) onGroupExpansionChanged;
   final void Function(String anlageId) onToggleAnlageExpanded;
+  /// Wird bei Long-Press auf einen Gruppen-Header aufgerufen (groupingKey, groupValue).
+  final void Function(String groupingKey, String groupValue)? onGroupLongPress;
 
   final AnlageItemBuilder itemBuilder;
 
@@ -34,10 +40,12 @@ class SystemsAnlageList extends StatelessWidget {
     required this.disc,
     required this.parents,
     required this.getChildren,
+    this.groupingKey,
     required this.expandedGroups,
     required this.expandedAnlagenIds,
     required this.onGroupExpansionChanged,
     required this.onToggleAnlageExpanded,
+    this.onGroupLongPress,
     required this.itemBuilder,
   });
 
@@ -116,12 +124,26 @@ class SystemsAnlageList extends StatelessWidget {
       );
     }
 
-    // Gruppierung: Wenn groupingKey gesetzt ist, nach diesem Key gruppieren
-    if (disc.groupingKey != null && disc.groupingKey!.isNotEmpty) {
+    // Gruppierung: Nur wenn ein expliziter groupingKey von außen gesetzt ist.
+    // Die frühere fallback-Gruppierung über disc.groupingKey wird nicht mehr verwendet.
+    final effectiveGroupingKey = (groupingKey != null && groupingKey!.isNotEmpty)
+        ? groupingKey
+        : null;
+
+    if (effectiveGroupingKey != null && effectiveGroupingKey.isNotEmpty) {
+      final hasAnyGroupingValue = parents.any((anlage) {
+        final value = anlage.params[effectiveGroupingKey]?.toString().trim() ?? '';
+        return value.isNotEmpty;
+      });
+      if (!hasAnyGroupingValue) {
+        // Wenn das Feld in den aktuellen Anlagen keine Werte hat, ungegruppte Liste zeigen.
+        return _buildUngroupedList();
+      }
+
       // Gruppiere Anlagen nach dem Wert des groupingKey Parameters
       final Map<String, List<Anlage>> grouped = {};
       for (final anlage in parents) {
-        final groupValue = anlage.params[disc.groupingKey]?.toString() ?? '';
+        final groupValue = anlage.params[effectiveGroupingKey]?.toString() ?? '';
         grouped.putIfAbsent(groupValue, () => []).add(anlage);
       }
 
@@ -137,11 +159,15 @@ class SystemsAnlageList extends StatelessWidget {
       for (final groupKey in sortedGroupKeys) {
         final groupAnlagen = grouped[groupKey]!;
         final groupDisplayName =
-            groupKey.isEmpty ? '(Ohne ${disc.groupingKey})' : groupKey;
+            groupKey.isEmpty ? '(Ohne $effectiveGroupingKey)' : groupKey;
         final isGroupExpanded = expandedGroups.contains(groupKey);
 
         items.add(
-          Container(
+          GestureDetector(
+            onLongPress: onGroupLongPress != null
+                ? () => onGroupLongPress!(effectiveGroupingKey, groupKey)
+                : null,
+            child: Container(
             margin: const EdgeInsets.only(bottom: 6),
             decoration: BoxDecoration(
               // Feine Nuance für Gruppierung: sehr subtiler lila/grauer Ton
@@ -315,6 +341,7 @@ class SystemsAnlageList extends StatelessWidget {
               ),
             ),
           ),
+        ),
         );
       }
 
@@ -326,6 +353,10 @@ class SystemsAnlageList extends StatelessWidget {
       );
     }
 
+    return _buildUngroupedList();
+  }
+
+  Widget _buildUngroupedList() {
     // Aufklappbare Darstellung: Eltern-Anlage + Bauteile erst bei Expand anzeigen (ohne Gruppierung)
     final List<Widget> items = [];
     for (final parent in parents) {

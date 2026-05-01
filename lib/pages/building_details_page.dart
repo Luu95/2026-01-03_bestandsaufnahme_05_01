@@ -19,9 +19,9 @@ import '../services/floor_plan_service.dart';
 import '../services/csv_service.dart';
 import '../utils/delete_utils.dart';
 import '../utils/app_log.dart';
-import '../navigation/route_observer.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
+import '../navigation/route_observer.dart';
 import 'widgets/generic_anlage_dialog.dart';
 import 'widgets/template_anlage_dialog.dart';
 
@@ -80,6 +80,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   List<Disziplin> _disciplines = [];
   bool _disciplineSelectionMode = false;
   final Set<String> _selectedDisciplineLabels = {};
+
+  /// Globaler Gruppierungs-Key für alle Anlagen im Technik-Tab.
+  /// Wird in der AppBar (rechts neben Gebäudenamen) ausgewählt.
+  String? _systemsGroupingKey;
+
+  /// Mögliche Gruppierungs-Keys (Attribut-Namen) aus allen Disziplin-Schemata.
+  List<String> _systemsGroupingOptions = [];
+
+  /// Lesbare Labels je Gruppierungs-Key (aus Schema, Fallback: Key selbst).
+  final Map<String, String> _systemsGroupingLabels = {};
+
+  /// Zuletzt aufgeklapptes Gewerk (für Add-FAB bei mehreren Gewerken).
+  Disziplin? _lastExpandedDiscipline;
+
+  /// Kontext für „Anlage zu Gruppe hinzufügen“ (nach Long-Press auf Gruppen-Header).
+  ({Disziplin discipline, String groupKey, String groupValue})? _addAnlageFromGroupContext;
 
   @override
   void initState() {
@@ -250,6 +266,83 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     
     // SystemsPages neu laden
     _refreshSystemsPages();
+
+    // Globale Gruppierungsoptionen neu berechnen
+    await _rebuildSystemsGroupingOptions();
+  }
+
+  /// Bestimmte technische/Meta-Keys nicht für die globale Gruppierung anbieten.
+  bool _isReservedGroupingKey(String key) {
+    const reserved = {
+      'lfdNummer',
+      '__parentLfdNummer',
+      '__etageName',
+      'photoPaths',
+      'Gewerk',
+      'gewerk',
+      'Anlage/Bauteil',
+      'Anlage/Bautel',
+    };
+    if (reserved.contains(key)) return true;
+    if (key.startsWith('_') || key.startsWith('__')) return true;
+    return false;
+  }
+
+  /// Erzeugt die globale Liste der Gruppierungsfelder (Etage, Raum, …) aus allen Disziplin-Schemata.
+  Future<void> _rebuildSystemsGroupingOptions() async {
+    final keys = <String>{};
+    _systemsGroupingLabels.clear();
+
+    final dbService = ref.read(databaseServiceProvider);
+    final allAnlagen = await dbService.getAnlagenByBuildingId(_building.id);
+
+    // Primäre Quelle: tatsächlich vorhandene Attribut-Keys aus importierten/erfassten Anlagen.
+    for (final anlage in allAnlagen) {
+      anlage.params.forEach((rawKey, value) {
+        final key = rawKey.toString().trim();
+        if (key.isEmpty) return;
+        if (_isReservedGroupingKey(key)) return;
+        // Nur Felder berücksichtigen, die auch mindestens einmal einen Wert tragen.
+        final valueText = value?.toString().trim() ?? '';
+        if (valueText.isEmpty) return;
+        keys.add(key);
+      });
+    }
+
+    // Fallback/Ergänzung: Schema-Felder für den Fall, dass Werte noch nicht gesetzt wurden.
+    for (final d in _disciplines) {
+      for (final field in d.schema) {
+        final key = field['key']?.toString();
+        if (key == null || key.isEmpty) continue;
+        if (_isReservedGroupingKey(key)) continue;
+        keys.add(key);
+
+        final label = field['label']?.toString();
+        if (label != null && label.isNotEmpty) {
+          _systemsGroupingLabels[key] = label;
+        }
+      }
+    }
+
+    final sorted = keys.toList()
+      ..sort((a, b) {
+        final la = _systemsGroupingLabels[a] ?? a;
+        final lb = _systemsGroupingLabels[b] ?? b;
+        return la.toLowerCase().compareTo(lb.toLowerCase());
+      });
+
+    if (!mounted) return;
+    setState(() {
+      _systemsGroupingOptions = sorted;
+
+      // Nach Änderungen (insb. CSV-Import) immer ungegruppt starten.
+      // Zusätzlich ungültigen Gruppierungs-Key absichern.
+      if (_systemsGroupingKey != null &&
+          (_systemsGroupingKey!.isEmpty ||
+              !_systemsGroupingOptions.contains(_systemsGroupingKey))) {
+        _systemsGroupingKey = null;
+      }
+    });
   }
 
   void _refreshSystemsPages() {
@@ -299,6 +392,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final dbService = ref.read(databaseServiceProvider);
       int savedCount = 0;
       int skippedCount = 0;
+      int errorCount = 0;
+      final List<String> failedRows = [];
       bool floorsAdded = false;
       final Map<String, String> lfdToId = {}; // lfdNummer -> finale DB-ID (für parentId)
       for (final anlage in anlagen) {
@@ -392,7 +487,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               debugPrint('Anlage gespeichert: ${anlage.name} (${anlage.id}, Floor: $resolvedFloorId)');
             }
           } catch (e) {
-            debugPrint('Fehler beim Speichern der Anlage ${anlage.name} (${anlage.id}): $e');
+            errorCount++;
+            final info = '${anlage.name} (lfd: ${anlage.params['lfdNummer']}): $e';
+            failedRows.add(info);
+            debugPrint('Fehler beim Speichern der Anlage $info');
           }
         }
 
@@ -401,7 +499,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           await ref.read(projectsProvider.notifier).updateBuilding(_building);
         }
 
-        debugPrint('CSV-Import: $savedCount neue Anlagen hinzugefügt, $skippedCount Anlagen übersprungen (existierten bereits)');
+        debugPrint('CSV-Import: $savedCount importiert, $skippedCount übersprungen, $errorCount Fehler. Fehlgeschlagen: $failedRows');
 
       // Dialog schließen
       if (mounted) {
@@ -411,19 +509,39 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       // Disziplinen neu laden (wichtig, da Schema aktualisiert wurde)
       debugPrint('Lade Disziplinen neu...');
       await _loadDisciplines(clearExpandedState: true);
+      // Nach Import immer zunächst alle Anlagen ungefiltert anzeigen.
+      if (mounted) {
+        setState(() {
+          _systemsGroupingKey = null;
+        });
+      }
+      await _rebuildSystemsGroupingOptions();
       // SystemsPages neu laden, damit importierte Anlagen angezeigt werden
       _refreshSystemsPages();
 
-      // Erfolgsmeldung anzeigen
+      // Erfolgsmeldung anzeigen (inkl. Fehleranzahl, falls vorhanden)
       if (mounted) {
-        final message = skippedCount > 0
-            ? '$savedCount neue Anlagen hinzugefügt, $skippedCount übersprungen (existierten bereits)'
-            : '$savedCount neue Anlagen erfolgreich importiert';
+        String message = '$savedCount importiert';
+        if (skippedCount > 0) message += ', $skippedCount übersprungen';
+        if (errorCount > 0) {
+          message += ', $errorCount Fehler';
+          if (failedRows.isNotEmpty && failedRows.length <= 3) {
+            message += ' (${failedRows.join('; ')})';
+          } else if (failedRows.isNotEmpty) {
+            message += ' (Details im Log)';
+          }
+        } else {
+          message += ' – erfolgreich';
+        }
+        message += '.';
+        if (savedCount > 0 && errorCount == 0) {
+          message += ' Hinweis: Die Reihenfolge in der CSV bestimmt die Hierarchie (Anlage vor Bauteilen).';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(message),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
+            backgroundColor: errorCount > 0 ? Colors.orange : Colors.green,
+            duration: Duration(seconds: errorCount > 0 ? 6 : 3),
           ),
         );
       }
@@ -493,12 +611,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ),
       );
 
-      // Alle Anlagen für dieses Gebäude laden
+      // Alle Anlagen für dieses Gebäude neu aus der DB laden (inkl. zuletzt aufgenommene)
       debugPrint('Starte Export für Building: ${_building.id}');
       final dbService = ref.read(databaseServiceProvider);
       final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
 
-      debugPrint('Export: ${anlagen.length} Anlagen gefunden');
+      debugPrint('Export: ${anlagen.length} Anlagen gefunden (alle Anlagen des Gebäudes)');
 
       // Dialog schließen
       if (mounted) {
@@ -650,6 +768,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   void _onDisciplineExpanded(Disziplin? discipline) {
+    if (discipline != null) {
+      _lastExpandedDiscipline = discipline;
+    }
     // Falls gerade eine Auswahl aktiv ist, merken wir uns alle aktiven Disziplinen,
     // damit wir die zugehörigen SystemsPages nach dem State-Update sauber beenden können.
     final activeDisciplines = _systemsSelectionMode 
@@ -1169,7 +1290,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     }
   }
 
-  Future<void> _openAddAnlageDialogDirect(Disziplin discipline) async {
+  Future<void> _openAddAnlageDialogDirect(Disziplin discipline, {Map<String, dynamic>? initialParams}) async {
     void openManual() {
       showModalBottomSheet<void>(
         context: context,
@@ -1183,6 +1304,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           floorId: 'global',
           existingAnlage: null,
           index: null,
+          initialParams: initialParams,
           onSave: (newAnlage, _) async {
             final dbService = ref.read(databaseServiceProvider);
             final existing = await dbService.getAnlageById(newAnlage.id);
@@ -1735,7 +1857,68 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ),
         actions: inSelectionMode
             ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
-            : [],
+            : [
+                if (_tabController.index == 1)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.of(context).size.width * 0.4,
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.view_list, size: 16, color: Colors.black54),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String>(
+                                    value: _systemsGroupingKey ?? '',
+                                    icon: const Icon(Icons.arrow_drop_down, size: 18),
+                                    isDense: true,
+                                    menuMaxHeight: MediaQuery.of(context).size.height * 0.5,
+                                    items: [
+                                      const DropdownMenuItem<String>(
+                                        value: '',
+                                        child: Text(
+                                          'Keine Gruppierung',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      ..._systemsGroupingOptions.map(
+                                        (key) => DropdownMenuItem<String>(
+                                          value: key,
+                                          child: Text(
+                                            _systemsGroupingLabels[key] ?? key,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                    onChanged: (value) {
+                                      setState(() {
+                                        final newKey = (value == null || value.isEmpty) ? null : value;
+                                        _systemsGroupingKey = newKey;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
       ),
       body: TabBarView(
         controller: _tabController,
@@ -1784,6 +1967,16 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             },
             onImportCsv: _importCsv,
             isAnySelectionActive: () => _systemsSelectionMode,
+            systemsGroupingKey: _systemsGroupingKey,
+            onGroupLongPress: (discipline, groupKey, groupValue) {
+              setState(() {
+                _addAnlageFromGroupContext = (
+                  discipline: discipline,
+                  groupKey: groupKey,
+                  groupValue: groupValue,
+                );
+              });
+            },
           ),
         ],
       ),
@@ -1854,6 +2047,24 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         tooltip: 'Grundriss hochladen',
         backgroundColor: Theme.of(context).primaryColor,
         child: const Icon(Icons.download, color: Colors.white),
+      );
+    }
+
+    // Technik-Tab: Button zum Hinzufügen (wenn nicht im Selection Mode, wie bei Grundrissen)
+    if (_tabController.index == 1 && !inSelectionMode && _disciplines.isNotEmpty) {
+      return FloatingActionButton(
+        onPressed: () async {
+          final ctx = _addAnlageFromGroupContext;
+          final d = ctx != null
+              ? ctx.discipline
+              : (_disciplines.length == 1 ? _disciplines.first : (_lastExpandedDiscipline ?? _disciplines.first));
+          final initialParams = ctx != null ? {ctx.groupKey: ctx.groupValue} : null;
+          setState(() => _addAnlageFromGroupContext = null);
+          await _openAddAnlageDialogDirect(d, initialParams: initialParams);
+        },
+        tooltip: 'Anlage hinzufügen',
+        backgroundColor: Colors.green,
+        child: const Icon(Icons.add, color: Colors.white),
       );
     }
 
