@@ -12,7 +12,8 @@ class ProjectsState {
   final bool isLoading;
   final int? selectedProjectIndex;
   final int? selectedBuildingIndex;
-//huhn
+
+
   ProjectsState({
     required this.projects,
     this.isLoading = false,
