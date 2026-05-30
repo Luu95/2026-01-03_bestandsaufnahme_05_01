@@ -816,15 +816,22 @@ class TemplateService {
       mergedRoSchemas[resolvedKey] = roFields;
     }
 
-    final withMaps = Disziplin(
+    // Flaches Schema direkt zusammenbauen – withEffectiveSchema würde bei fehlendem
+    // Map-Eintrag sonst auf nur globale Felder zurückfallen.
+    var flatSchema = mergeSchemaFieldLists(
+      discipline.globalSchemaFields,
+      roFields,
+    );
+    flatSchema = mergeSchemaFieldLists(flatSchema, discipline.schema);
+
+    return Disziplin(
       label: discipline.label,
       icon: discipline.icon,
       color: discipline.color,
-      schema: discipline.schema,
+      schema: flatSchema,
       groupingKey: discipline.groupingKey,
       revisionsobjektSchemas: mergedRoSchemas,
     );
-    return withMaps.withEffectiveSchema(revisionsobjekt: resolvedKey);
   }
 
   // Hinweis: Früher gab es hier eine Hilfsfunktion, die automatisch Disziplinen

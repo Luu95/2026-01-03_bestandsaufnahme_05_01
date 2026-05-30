@@ -419,9 +419,8 @@ class SystemsAnlageList extends StatelessWidget {
                   parentGroupingKey.isNotEmpty) {
                 additional[parentGroupingKey] = parentGroupValue;
               }
-              final schemaOverride = _schemaOverrideFrom(subGroupAnlagen);
-              if (schemaOverride != null) {
-                additional['__schemaOverride'] = schemaOverride;
+              if (subGroupAnlagen.isNotEmpty) {
+                additional['__sampleAnlageId'] = subGroupAnlagen.first.id;
               }
               onGroupLongPress!(subKey, subGroupKey, additional);
             }
@@ -511,9 +510,8 @@ class SystemsAnlageList extends StatelessWidget {
       onLongPress: onGroupLongPress != null
           ? () {
               final additional = <String, dynamic>{};
-              final schemaOverride = _schemaOverrideFrom(groupAnlagen);
-              if (schemaOverride != null) {
-                additional['__schemaOverride'] = schemaOverride;
+              if (groupAnlagen.isNotEmpty) {
+                additional['__sampleAnlageId'] = groupAnlagen.first.id;
               }
               onGroupLongPress!(effectiveGroupingKey, groupKey, additional);
             }
@@ -659,13 +657,4 @@ class SystemsAnlageList extends StatelessWidget {
     );
   }
 
-  List<Map<String, dynamic>>? _schemaOverrideFrom(List<Anlage> items) {
-    for (final item in items) {
-      final schema = item.discipline.schema;
-      if (schema.isNotEmpty) {
-        return schema.map((f) => Map<String, dynamic>.from(f)).toList();
-      }
-    }
-    return null;
-  }
 }

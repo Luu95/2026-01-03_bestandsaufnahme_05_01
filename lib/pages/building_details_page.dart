@@ -1256,15 +1256,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ? ctx.groupKey.trim()
         : (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
             csvSettings.resolveSchemaItemParamKey());
-    final rawSchemaOverride = ctx.additionalParams['__schemaOverride'];
-    final schemaOverride = rawSchemaOverride is List
-        ? rawSchemaOverride
-            .whereType<Map>()
-            .map((f) => Map<String, dynamic>.from(f))
-            .toList()
-        : <Map<String, dynamic>>[];
     final additionalParams = Map<String, dynamic>.from(ctx.additionalParams)
-      ..remove('__schemaOverride');
+      ..remove('__schemaOverride')
+      ..remove('__sampleAnlageId');
+    final sampleAnlageId = ctx.additionalParams['__sampleAnlageId']?.toString().trim();
 
     final dbService = ref.read(databaseServiceProvider);
 
@@ -1314,31 +1309,38 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       template: parentTemplate,
       templatesForLookup: gewerkTemplates,
     );
-    if (schemaOverride.isNotEmpty) {
-      final roSpecificSchema = schemaOverride
-          .where((f) => f['isGlobal'] != true)
-          .map((f) => Map<String, dynamic>.from(f))
-          .toList();
-      final mergedRoSchemas =
-          Map<String, List<Map<String, dynamic>>>.from(
-        effectiveDiscipline.revisionsobjektSchemas,
-      );
-      mergedRoSchemas[schemaRo] = TemplateService.mergeSchemaFieldLists(
-        mergedRoSchemas[schemaRo] ?? const [],
-        roSpecificSchema.isNotEmpty ? roSpecificSchema : schemaOverride,
-      );
-      effectiveDiscipline = Disziplin(
-        label: effectiveDiscipline.label,
-        icon: effectiveDiscipline.icon,
-        color: effectiveDiscipline.color,
-        schema: TemplateService.mergeSchemaFieldLists(
-          effectiveDiscipline.schema,
-          schemaOverride,
-        ),
-        groupingKey: effectiveDiscipline.groupingKey,
-        revisionsobjektSchemas: mergedRoSchemas,
-      );
+
+    // Sample-Anlage: nur RO-Schema-Maps mergen, nie gespeichertes Flat-Schema (Legacy-Bauteil).
+    if (sampleAnlageId != null && sampleAnlageId.isNotEmpty) {
+      final sampleAnlage = await dbService.getAnlageById(sampleAnlageId);
+      if (sampleAnlage != null) {
+        final mergedRoSchemas =
+            Map<String, List<Map<String, dynamic>>>.from(
+          effectiveDiscipline.revisionsobjektSchemas,
+        );
+        sampleAnlage.discipline.revisionsobjektSchemas.forEach((key, fields) {
+          mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
+            mergedRoSchemas[key] ?? const [],
+            fields,
+          );
+        });
+        effectiveDiscipline = Disziplin(
+          label: effectiveDiscipline.label,
+          icon: effectiveDiscipline.icon,
+          color: effectiveDiscipline.color,
+          schema: effectiveDiscipline.schema,
+          groupingKey: effectiveDiscipline.groupingKey,
+          revisionsobjektSchemas: mergedRoSchemas,
+        );
+      }
     }
+
+    effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: effectiveDiscipline,
+      revisionsobjekt: schemaRo,
+      template: parentTemplate,
+      templatesForLookup: gewerkTemplates,
+    );
 
     final params = TemplateService.buildEmptyParamsFromTemplate(parentTemplate.parameter);
     if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
@@ -1955,6 +1957,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                     value: _systemsGroupingMode.storageValue,
                                     icon: const Icon(Icons.arrow_drop_down, size: 18),
                                     isDense: true,
+                                    isExpanded: true,
                                     items: SystemsGroupingMode.values
                                         .map(
                                           (mode) => DropdownMenuItem<String>(

@@ -129,6 +129,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
   bool _isNameEditable = true;
+  bool _isDataReady = false;
   late Disziplin _currentDiscipline;
   String? _schemaItemParamKey;
   String _leafLevelLabel = 'Anlage';
@@ -145,6 +146,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     _photoManager = PhotoManager();
     // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
     _currentDiscipline = widget.discipline;
+    _nameController = TextEditingController(
+      text: widget.existingAnlage?.name ?? widget.initialName ?? '',
+    );
+    _nameController.addListener(_updateValidationStatus);
     _initData();
   }
 
@@ -158,27 +163,30 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         orElse: () => widget.discipline, // Fallback auf übergebene Disziplin
       );
 
-      // Falls die bestehende Anlage ein erweitertes Schema aus einer Gewerkevorlage
-      // mitbringt (z.B. individuelle Attribute), mergen wir dieses Schema mit der
-      // in der Datenbank hinterlegten Disziplin. So gehen Template-Felder nicht
-      // verloren, auch wenn die Sammel-Disziplin (z.B. "Allgemein") selbst sie
-      // nicht kennt.
+      // Gemeinsames Schema: DB + vom Aufrufer übergeben (z. B. Revisionsobjekt-Felder)
+      final mergedKeys = <String>{};
+      final mergedSchema = <Map<String, dynamic>>[];
+
+      for (final f in updatedDiscipline.schema) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isNotEmpty && !mergedKeys.contains(key)) {
+          mergedKeys.add(key);
+          mergedSchema.add(Map<String, dynamic>.from(f));
+        }
+      }
+
+      for (final f in widget.discipline.schema) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isNotEmpty && !mergedKeys.contains(key)) {
+          mergedKeys.add(key);
+          mergedSchema.add(Map<String, dynamic>.from(f));
+        }
+      }
+
       Disziplin effectiveDiscipline = updatedDiscipline;
+
       if (widget.existingAnlage != null) {
         final existingDisc = widget.existingAnlage!.discipline;
-        final mergedKeys = <String>{};
-        final mergedSchema = <Map<String, dynamic>>[];
-
-        // Zuerst Schema aus der DB
-        for (final f in updatedDiscipline.schema) {
-          final key = (f['key'] ?? '').toString();
-          if (key.isNotEmpty && !mergedKeys.contains(key)) {
-            mergedKeys.add(key);
-            mergedSchema.add(Map<String, dynamic>.from(f));
-          }
-        }
-
-        // Dann zusätzliche Felder aus der bestehenden Anlage ergänzen
         for (final f in existingDisc.schema) {
           final key = (f['key'] ?? '').toString();
           if (key.isNotEmpty && !mergedKeys.contains(key)) {
@@ -196,7 +204,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           revisionsobjektSchemas: updatedDiscipline.revisionsobjektSchemas,
         );
       } else {
-        // Neuanlage: vom Aufrufer vorbereitetes RO-Schema + gespeicherte Einstellungen aus DB
         final ro = widget.initialRevisionsobjekt?.trim() ?? '';
         var mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
           widget.discipline.revisionsobjektSchemas,
@@ -208,33 +215,42 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           );
         });
 
-        var baseDiscipline = Disziplin(
-          label: updatedDiscipline.label,
-          icon: updatedDiscipline.icon,
-          color: updatedDiscipline.color,
-          schema: updatedDiscipline.schema,
-          groupingKey: updatedDiscipline.groupingKey,
-          revisionsobjektSchemas: mergedRoSchemas,
-        );
-
         if (ro.isNotEmpty) {
+          // Vom Aufrufer (z. B. Gruppen-Plus) vorbereitetes Schema hat Vorrang vor DB-Flat-Schema.
+          final callerSchema = widget.discipline.schema;
+          var baseForRo = Disziplin(
+            label: widget.discipline.label,
+            icon: widget.discipline.icon,
+            color: widget.discipline.color,
+            schema: callerSchema.isNotEmpty ? callerSchema : updatedDiscipline.schema,
+            groupingKey: widget.discipline.groupingKey,
+            revisionsobjektSchemas: mergedRoSchemas,
+          );
           effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-            discipline: baseDiscipline,
+            discipline: baseForRo,
             revisionsobjekt: ro,
           );
-          if (effectiveDiscipline.schema.length <=
-              baseDiscipline.globalSchemaFields.length) {
-            final fromPassedDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-              discipline: widget.discipline,
-              revisionsobjekt: ro,
-            );
-            effectiveDiscipline = fromPassedDiscipline.schema.length >
-                    fromPassedDiscipline.globalSchemaFields.length
-                ? fromPassedDiscipline
-                : widget.discipline;
-          }
+          final finalSchema = TemplateService.mergeSchemaFieldLists(
+            effectiveDiscipline.schema,
+            mergedSchema,
+          );
+          effectiveDiscipline = Disziplin(
+            label: effectiveDiscipline.label,
+            icon: effectiveDiscipline.icon,
+            color: effectiveDiscipline.color,
+            schema: finalSchema,
+            groupingKey: effectiveDiscipline.groupingKey,
+            revisionsobjektSchemas: mergedRoSchemas,
+          );
         } else {
-          effectiveDiscipline = baseDiscipline;
+          effectiveDiscipline = Disziplin(
+            label: updatedDiscipline.label,
+            icon: updatedDiscipline.icon,
+            color: updatedDiscipline.color,
+            schema: mergedSchema,
+            groupingKey: updatedDiscipline.groupingKey,
+            revisionsobjektSchemas: mergedRoSchemas,
+          );
         }
       }
 
@@ -245,16 +261,15 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
     } catch (e) {
       debugPrint('Fehler beim Laden der Disziplin in GenericAnlageDialog: $e');
-      // Bei Fehler die übergebene Disziplin verwenden
       _currentDiscipline = widget.discipline;
     }
+
+    try {
     if (widget.existingAnlage != null) {
       _params.addAll(widget.existingAnlage!.params);
-      // Tracke alle Felder, die beim Initialisieren bereits einen Wert hatten
       for (var entry in widget.existingAnlage!.params.entries) {
         final key = entry.key;
         final value = entry.value;
-        // Ignoriere interne Felder (die mit _ beginnen)
         if (!key.startsWith('_') && value != null && value.toString().trim().isNotEmpty) {
           _prefilledFields.add(key);
         }
@@ -277,16 +292,22 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         }
       }
     }
-    
-    _nameController = TextEditingController(
-      text: widget.existingAnlage?.name ?? widget.initialName ?? '',
-    );
-    _nameController.addListener(_updateValidationStatus);
 
-    // Lade CSV-Einstellungen für Name-Bearbeitbarkeit und Vorbefüllung
     await _loadSettingsAndPrefill();
-    _applyEffectiveSchemaFromParams();
+    final isNewFromRevisionsobjekt = widget.existingAnlage == null &&
+        widget.initialRevisionsobjekt?.trim().isNotEmpty == true;
+    if (!isNewFromRevisionsobjekt) {
+      _applyEffectiveSchemaFromParams();
+    }
     _applyRevisionsobjektPrefill();
+    if (widget.existingAnlage == null) {
+      _finalizeSchemaForRevisionsobjekt();
+    }
+    } finally {
+      if (mounted) {
+        setState(() => _isDataReady = true);
+      }
+    }
   }
 
   void _setParamAndController(String key, String value) {
@@ -371,8 +392,31 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     _applyEffectiveSchemaFromParams();
   }
 
+  void _finalizeSchemaForRevisionsobjekt() {
+    if (!mounted) return;
+    final ro = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+        ? widget.initialRevisionsobjekt!.trim()
+        : _resolveRevisionsobjektFromParams();
+    if (ro == null || ro.isEmpty) return;
+
+    final nextDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: _currentDiscipline,
+      revisionsobjekt: ro,
+    );
+    if (nextDiscipline.schema.length <= _currentDiscipline.globalSchemaFields.length) {
+      return;
+    }
+    _currentDiscipline = nextDiscipline;
+  }
+
   void _applyEffectiveSchemaFromParams() {
     if (!mounted) return;
+    if (widget.existingAnlage == null &&
+        widget.initialRevisionsobjekt?.trim().isNotEmpty == true &&
+        _currentDiscipline.schema.length >
+            _currentDiscipline.globalSchemaFields.length) {
+      return;
+    }
     final ro =
         widget.initialRevisionsobjekt?.trim().isNotEmpty == true
             ? widget.initialRevisionsobjekt!.trim()
@@ -384,11 +428,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       revisionsobjekt: ro,
     );
 
-    // Beim Erstellen aus einem Revisionsobjekt bringt der Aufrufer oft bereits
-    // das richtige effektive Schema mit. Dieses darf nicht durch ein erneutes
-    // withEffectiveSchema() auf reine Standardfelder reduziert werden.
+    // Vererbtes/übergebenes Schema nicht durch leeres DB-RO-Schema ersetzen.
     if (nextDiscipline.schema.length <= nextDiscipline.globalSchemaFields.length &&
-        _currentDiscipline.legacyIndividualSchemaFields.isNotEmpty) {
+        (_currentDiscipline.legacyIndividualSchemaFields.isNotEmpty ||
+            _currentDiscipline.schema.length >
+                _currentDiscipline.globalSchemaFields.length)) {
       return;
     }
 
@@ -1546,6 +1590,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_isDataReady) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.25,
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
     final isEdit = widget.existingAnlage != null;
     final isChildCreate = !isEdit && widget.parentId != null;
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
