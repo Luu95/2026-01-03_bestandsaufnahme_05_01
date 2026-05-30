@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
+import '../models/csv_hierarchy_level.dart';
 import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../database/database_service.dart';
@@ -397,83 +398,24 @@ class CsvService {
   }
 
   /// Lädt die CSV-Einstellungen für ein bestimmtes Projekt.
-  /// Gibt die Standardwerte zurück, wenn keine Einstellungen gefunden werden.
-  static Future<Map<String, dynamic>> _loadCsvSettings(String projectId) async {
+  static Future<CsvSettings> _loadCsvSettings(String projectId) async {
     final cached = CsvSettingsCache.get(projectId);
-    if (cached != null) {
-      return cached.toJson();
-    }
+    if (cached != null) return cached;
+
     final prefs = await SharedPreferences.getInstance();
     final key = 'csv_settings_$projectId';
     final settingsJson = prefs.getString(key);
-    
+
     if (settingsJson != null) {
       try {
         final settings = json.decode(settingsJson) as Map<String, dynamic>;
-        final pairsRaw = settings['attributeColumnPairs'] as List?;
-        final pairMaps = <Map<String, dynamic>>[];
-        if (pairsRaw != null) {
-          for (final e in pairsRaw) {
-            if (e is Map<String, dynamic>) {
-              pairMaps.add(e);
-            } else if (e is Map) {
-              pairMaps.add(Map<String, dynamic>.from(e));
-            }
-          }
-        }
-        return {
-          'lfdNummerSpalte': settings['lfdNummerSpalte'] as int? ?? 0,
-          'nameSpalte': settings['nameSpalte'] as int? ?? 1,
-          'gewerkSpalte': settings['gewerkSpalte'] as int? ?? 2,
-          'etageSpalte': settings['etageSpalte'] as int?,
-          'anlageBauteilSpalte': settings['anlageBauteilSpalte'] as int?,
-          'delimiterMode': settings['delimiterMode'] as String? ?? 'auto',
-          'anlageKuerzel': settings['anlageKuerzel'] as String? ?? 'A,Anlage',
-          'bauteilKuerzel': settings['bauteilKuerzel'] as String? ?? 'B,Bauteil',
-          'useDisciplineGrouping': settings['useDisciplineGrouping'] as bool? ?? true,
-          'labelGewerk': settings['labelGewerk'] as String? ?? 'Gewerk',
-          'labelAnlage': settings['labelAnlage'] as String? ?? 'Anlage',
-          'labelBauteil': settings['labelBauteil'] as String? ?? 'Bauteil',
-          'headerZeile': settings['headerZeile'] as int? ?? 1,
-          'attributeColumnPairs': pairMaps,
-          'foto1SpalteLabel': settings['foto1SpalteLabel'] as String?,
-          'foto2SpalteLabel': settings['foto2SpalteLabel'] as String?,
-          'foto3SpalteLabel': settings['foto3SpalteLabel'] as String?,
-          'foto4SpalteLabel': settings['foto4SpalteLabel'] as String?,
-          'importHeaderRow': (settings['importHeaderRow'] as List?)
-                  ?.map((e) => e.toString())
-                  .toList() ??
-              <String>[],
-          'exportDelimiter': settings['exportDelimiter'] as String? ?? ';',
-        };
+        return CsvSettings.fromJson(settings);
       } catch (e) {
         debugPrint('Fehler beim Laden der CSV-Einstellungen: $e');
       }
     }
-    
-    // Standardwerte
-    return {
-      'lfdNummerSpalte': 0,
-      'nameSpalte': 1,
-      'gewerkSpalte': 2,
-      'etageSpalte': null,
-      'anlageBauteilSpalte': null,
-      'delimiterMode': 'auto',
-      'anlageKuerzel': 'A,Anlage',
-      'bauteilKuerzel': 'B,Bauteil',
-      'useDisciplineGrouping': true,
-      'labelGewerk': 'Gewerk',
-      'labelAnlage': 'Anlage',
-      'labelBauteil': 'Bauteil',
-      'headerZeile': 1,
-      'attributeColumnPairs': <Map<String, dynamic>>[],
-      'foto1SpalteLabel': null,
-      'foto2SpalteLabel': null,
-      'foto3SpalteLabel': null,
-      'foto4SpalteLabel': null,
-      'importHeaderRow': <String>[],
-      'exportDelimiter': ';',
-    };
+
+    return CsvSettings.defaults();
   }
 
   static Future<List<Map<String, dynamic>>> _loadGlobalSchema(String projectId) async {
@@ -551,19 +493,19 @@ class CsvService {
       String csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
       
       // CSV-Einstellungen für dieses Projekt laden
-      final csvSettings = await _loadCsvSettings(projectId);
-      final lfdNummerIdx = csvSettings['lfdNummerSpalte']!;
-      final nameIdx = csvSettings['nameSpalte']!;
-      final disciplineIdx = csvSettings['gewerkSpalte']!;
-      final etageIdx = csvSettings['etageSpalte'] as int?;
-      final anlageBauteilIdx = csvSettings['anlageBauteilSpalte'] as int?;
-      final delimiterMode = csvSettings['delimiterMode'] as String? ?? 'auto';
-      final headerZeile = csvSettings['headerZeile'] as int? ?? 1;
-      final useDisciplineGrouping = csvSettings['useDisciplineGrouping'] as bool? ?? true;
-      final attributePairsRaw = csvSettings['attributeColumnPairs'] as List? ?? [];
-      final attributePairs = attributePairsRaw
-          .map((e) => AttributeColumnPair.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
+      final settings = await _loadCsvSettings(projectId);
+      final enabledLevels = settings.enabledLevelsOrdered;
+      final leafLevel = settings.leafLevel;
+      if (leafLevel == null) {
+        throw Exception('Mindestens eine Hierarchie-Ebene muss aktiv sein.');
+      }
+
+      final etageIdx = settings.etageSpalte;
+      final anlageBauteilIdx = settings.anlageBauteilSpalte;
+      final delimiterMode = settings.delimiterMode;
+      const headerZeile = 1;
+      final useDisciplineGrouping = settings.level1.enabled;
+      final attributePairs = settings.attributeColumnPairs;
       final attributeColumnIndices = <int>{};
       for (final p in attributePairs) {
         attributeColumnIndices.add(p.nameColumn);
@@ -610,11 +552,15 @@ class CsvService {
       debugPrint('CSV Header: $headerRow');
       debugPrint('Anzahl Header-Spalten: ${headerRow.length}');
       
-      final anlageKuerzel = _parseKuerzel(csvSettings['anlageKuerzel'] as String?, ['a', 'anlage']);
-      final bauteilKuerzel = _parseKuerzel(csvSettings['bauteilKuerzel'] as String?, ['b', 'bauteil']);
+      final anlageKuerzel = _parseKuerzel(settings.anlageKuerzel, ['a', 'anlage']);
+      final bauteilKuerzel = _parseKuerzel(settings.bauteilKuerzel, ['b', 'bauteil']);
 
       debugPrint(
-        'CSV-Einstellungen: lfdNummer=$lfdNummerIdx, name=$nameIdx, gewerk=$disciplineIdx, '
+        'CSV-Ebenen: aktiv=${enabledLevels.length}, '
+        'L1=${settings.level1.enabled}(${settings.level1.nameColumn}), '
+        'L2=${settings.level2.enabled}(${settings.level2.nameColumn}), '
+        'L3=${settings.level3.enabled}(${settings.level3.nameColumn}), '
+        'Blatt=${leafLevel.nameColumn}, Blatt-ID=${leafLevel.idColumn}, '
         'etage=$etageIdx, anlageBauteil=$anlageBauteilIdx, '
         'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel, '
         'useDisciplineGrouping=$useDisciplineGrouping',
@@ -690,6 +636,7 @@ class CsvService {
       // Wenn Gewerk-Gruppierung deaktiviert ist, landen alle Anlagen in einer Sammel-Disziplin.
       final uniqueDisciplines = <String>{};
       if (useDisciplineGrouping) {
+        final disciplineIdx = settings.level1.nameColumn;
         for (var i = 0; i < dataRows.length; i++) {
           final row = dataRows[i];
           final disciplineLabel = _safeCell(row, disciplineIdx);
@@ -768,54 +715,61 @@ class CsvService {
 
       // Anlagen aus CSV erstellen
       final anlagen = <Anlage>[];
+      final syntheticNodeLfdByKey = <String, String>{};
+      var syntheticNodeCounter = 0;
+      var parentLevels = enabledLevels.length > 1
+          ? enabledLevels.sublist(0, enabledLevels.length - 1)
+          : <HierarchyLevelConfig>[];
+      // Ebene 1 ist bereits die Disziplin (Gewerk) – keinen doppelten Hierarchie-Knoten anlegen.
+      if (useDisciplineGrouping &&
+          settings.level1.enabled &&
+          parentLevels.isNotEmpty &&
+          parentLevels.first.nameColumn == settings.level1.nameColumn) {
+        parentLevels = parentLevels.length > 1
+            ? parentLevels.sublist(1)
+            : <HierarchyLevelConfig>[];
+      }
+
       for (var i = 0; i < dataRows.length; i++) {
         final row = dataRows[i];
 
-        // Anlagenname und lfdNummer aus konfigurierten Spalten
-        final name = _safeCell(row, nameIdx);
-        final lfdNummer = _safeCell(row, lfdNummerIdx);
+        final leafName = _safeCell(row, leafLevel.nameColumn);
+        final leafId = leafLevel.useIdColumn && leafLevel.idColumn != null
+            ? _safeCell(row, leafLevel.idColumn!).trim()
+            : '';
 
-        // Zeile überspringen, wenn weder Name noch lfdNummer angegeben (vermeidet Dummy-Anlagen wie "Anlage_7" aus Leerzeilen)
-        if (name.trim().isEmpty && lfdNummer.trim().isEmpty) {
-          debugPrint('Zeile ${headerRowIndex + 2 + i} übersprungen: Weder Name noch lfdNummer angegeben');
+        if (leafName.trim().isEmpty && leafId.isEmpty) {
+          debugPrint(
+            'Zeile ${headerRowIndex + 2 + i} übersprungen: Blatt-Ebene ohne Name und ohne ID',
+          );
           continue;
         }
 
-        final nameValue = name.isEmpty ? 'Anlage_${i + 1}' : name.trim();
-        
-        // Disziplinname aus Spalte 2 (C = "Gewerk")
+        final nameValue = leafName.trim().isEmpty ? 'Anlage_${i + 1}' : leafName.trim();
+
         final disciplineLabel = useDisciplineGrouping
-            ? _safeCell(row, disciplineIdx)
+            ? _safeCell(row, settings.level1.nameColumn)
             : 'Allgemein';
-        if (disciplineLabel.isEmpty) {
+        if (disciplineLabel.trim().isEmpty) {
           debugPrint('Zeile ${i + 1} übersprungen: Keine Disziplin angegeben');
-          continue; // Zeile überspringen, wenn keine Disziplin angegeben
+          continue;
         }
         final disciplineLabelValue = disciplineLabel.trim();
 
-        // Laufende Nummer (bereits oben gelesen): Fallback wenn leer
-        final lfdNummerValue = lfdNummer.trim().isNotEmpty
-            ? lfdNummer.trim()
+        final lfdNummerValue = leafId.isNotEmpty
+            ? leafId
             : 'AUTO_${disciplineLabelValue}_${i + 1}';
-        if (lfdNummer.trim().isEmpty) {
-          debugPrint(
-            'Zeile ${i + 1}: Keine laufende Nummer gefunden, verwende Fallback "$lfdNummerValue"',
-          );
-        }
-        
-        // Etage aus konfigurierter Spalte lesen (falls vorhanden)
+
         String? etageValue;
         if (etageIdx != null) {
           etageValue = _safeCell(row, etageIdx).trim();
         }
-        
-        // Anlage/Bauteil aus konfigurierter Spalte lesen (falls vorhanden)
+
         String? anlageBauteilValue;
         if (anlageBauteilIdx != null) {
           anlageBauteilValue = _safeCell(row, anlageBauteilIdx).trim();
         }
-        
-        // Parameter: feste Spalten (Schema = Header) + dynamische Attribut-Paare
+
         final params = _parseParamsFromRow(row, schemaColumns);
         for (final pair in attributePairs) {
           final attrName = _safeCell(row, pair.nameColumn);
@@ -824,79 +778,126 @@ class CsvService {
           params[attrName] = _parseDynamicValue(attrValue);
         }
 
-        // CSV-Mapping für die App-Logik anwenden
-        // Die lfdNummer wird zur Identifikation benötigt (inkl. Fallback-Wert).
         params['lfdNummer'] = lfdNummerValue;
-        
-        // Etage explizit setzen (falls aus Mapping-Spalte gelesen)
+
         if (etageValue != null && etageValue.isNotEmpty) {
           params['Etage'] = etageValue;
-          params['__etageName'] = etageValue; // Für Kompatibilität
-        }
-        
-        // Anlage/Bauteil explizit setzen (falls aus Mapping-Spalte gelesen)
-        // Unterstütze beide Schreibweisen für Kompatibilität
-        if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
-          params['Anlage/Bauteil'] = anlageBauteilValue;
-          params['Anlage/Bautel'] = anlageBauteilValue; // Alte Schreibweise für Kompatibilität
+          params['__etageName'] = etageValue;
         }
 
-        debugPrint('Anlage $nameValue (lfd Nummer: $lfdNummerValue): Disziplin=$disciplineLabelValue, Etage=$etageValue, Anlage/Bauteil=$anlageBauteilValue, params=$params');
+        if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
+          params['Anlage/Bauteil'] = anlageBauteilValue;
+          params['Anlage/Bautel'] = anlageBauteilValue;
+        }
 
         final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
         if (discipline == null) {
           debugPrint('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
-          continue; // Disziplin nicht gefunden, Zeile überspringen
+          continue;
         }
 
-        // Hierarchie NICHT über IDs im Parser lösen (die ändern sich beim Update via lfdNummer).
-        // Stattdessen Parent-LfdNummer in Params merken; die finale parentId wird beim Speichern gesetzt.
-        // Unterstütze beide Schreibweisen: "Anlage/Bauteil" und "Anlage/Bautel"
-        final anlageBautel = (params['Anlage/Bauteil'] ?? params['Anlage/Bautel'] ?? '')
-            .toString()
-            .trim()
-            .toLowerCase();
-        final isBauteil = _matchesAnyToken(anlageBautel, bauteilKuerzel);
+        // Hierarchie über aktive Ebenen (Eltern-Knoten pro Pfad deduplizieren)
+        String? immediateParentLfd;
+        final pathSegments = <String>[];
 
-        if (isBauteil) {
-          String? parentLfd;
-          // Die Reihenfolge der Zeilen in der CSV bestimmt die Hierarchie: Die übergeordnete
-          // Anlage muss vor ihren Bauteilen stehen, damit das Bauteil ein Parent zugeordnet wird.
-          // Suche rückwärts nach der letzten Anlage (A) im gleichen Gewerk
-          // Priorität: 1) Gleiches Gewerk + Typ A, 2) Gleiches Gewerk + kein Typ B, 3) Gleiches Gewerk (egal welcher Typ)
-          for (int j = anlagen.length - 1; j >= 0; j--) {
-            final existing = anlagen[j];
-            // Nur im gleichen Gewerk suchen
-            if (existing.discipline.label != discipline.label) continue;
-            
-            final existingLfd = existing.params['lfdNummer']?.toString();
-            if (existingLfd == null || existingLfd.isEmpty) continue;
-            
-            // Unterstütze beide Schreibweisen
-            final existingType = (existing.params['Anlage/Bauteil'] ?? existing.params['Anlage/Bautel'] ?? '')
-                .toString()
-                .trim()
-                .toLowerCase();
-            final existingIsBauteil = _matchesAnyToken(existingType, bauteilKuerzel);
-            
-            // Überspringe andere Bauteile
-            if (existingIsBauteil) continue;
-            
-            // Gefunden: Letzte Anlage (A oder leer) im gleichen Gewerk
-            parentLfd = existingLfd;
-            break;
+        for (final level in parentLevels) {
+          final levelName = _safeCell(row, level.nameColumn).trim();
+          if (levelName.isEmpty) continue;
+
+          final levelId = level.useIdColumn && level.idColumn != null
+              ? _safeCell(row, level.idColumn!).trim()
+              : '';
+          final dedupeToken = levelId.isNotEmpty ? 'id:$levelId' : 'name:$levelName';
+          pathSegments.add('${level.nameColumn}:$dedupeToken');
+          final nodeKey = '${discipline.label}|$floorId|${pathSegments.join("|")}';
+
+          var nodeLfd = syntheticNodeLfdByKey[nodeKey];
+          if (nodeLfd == null) {
+            syntheticNodeCounter++;
+            nodeLfd = levelId.isNotEmpty
+                ? levelId
+                : 'GRP_${discipline.label}_$syntheticNodeCounter';
+            syntheticNodeLfdByKey[nodeKey] = nodeLfd;
+
+            final nodeParams = <String, dynamic>{
+              'lfdNummer': nodeLfd,
+              '__syntheticParent': true,
+            };
+            if (schemaColumns.containsKey(level.nameColumn)) {
+              nodeParams[schemaColumns[level.nameColumn]!] = levelName;
+            }
+            if (levelId.isNotEmpty &&
+                level.idColumn != null &&
+                schemaColumns.containsKey(level.idColumn)) {
+              nodeParams[schemaColumns[level.idColumn]!] = levelId;
+            }
+
+            if (immediateParentLfd != null) {
+              nodeParams['__parentLfdNummer'] = immediateParentLfd;
+            }
+
+            anlagen.add(Anlage(
+              id: _uuid.v4(),
+              name: levelName,
+              params: nodeParams,
+              floorId: floorId,
+              buildingId: buildingId,
+              isMarker: false,
+              markerInfo: null,
+              markerType: discipline.label,
+              discipline: discipline,
+              parentId: null,
+            ));
+            debugPrint('Hierarchie-Knoten "$levelName" (lfd: $nodeLfd)');
           }
-          
-          if (parentLfd != null) {
-            params['__parentLfdNummer'] = parentLfd;
-            debugPrint('Bauteil $nameValue (lfd: $lfdNummerValue) -> Parent: $parentLfd (Gewerk: ${discipline.label})');
-          } else {
-            debugPrint('WARNUNG: Bauteil $nameValue (lfd: $lfdNummerValue, Gewerk: ${discipline.label}) hat kein Parent gefunden!');
+          immediateParentLfd = nodeLfd;
+        }
+
+        if (immediateParentLfd != null) {
+          params['__parentLfdNummer'] = immediateParentLfd;
+        }
+
+        // Legacy A/B-Hierarchie (nur wenn konfiguriert und noch kein Eltern-Knoten gesetzt)
+        if (anlageBauteilIdx != null && !params.containsKey('__parentLfdNummer')) {
+          final anlageBautel = (params['Anlage/Bauteil'] ?? params['Anlage/Bautel'] ?? '')
+              .toString()
+              .trim()
+              .toLowerCase();
+          final isBauteil = _matchesAnyToken(anlageBautel, bauteilKuerzel);
+
+          if (isBauteil) {
+            String? parentLfd;
+            for (int j = anlagen.length - 1; j >= 0; j--) {
+              final existing = anlagen[j];
+              if (existing.discipline.label != discipline.label) continue;
+
+              final existingLfd = existing.params['lfdNummer']?.toString();
+              if (existingLfd == null || existingLfd.isEmpty) continue;
+
+              final existingType = (existing.params['Anlage/Bauteil'] ??
+                      existing.params['Anlage/Bautel'] ??
+                      '')
+                  .toString()
+                  .trim()
+                  .toLowerCase();
+              if (_matchesAnyToken(existingType, bauteilKuerzel)) continue;
+
+              parentLfd = existingLfd;
+              break;
+            }
+
+            if (parentLfd != null) {
+              params['__parentLfdNummer'] = parentLfd;
+            }
           }
         }
 
-        // Anlage erstellen
-        final anlage = Anlage(
+        debugPrint(
+          'Blatt $nameValue (lfd: $lfdNummerValue): Disziplin=$disciplineLabelValue, '
+          'Parent=${params['__parentLfdNummer']}',
+        );
+
+        anlagen.add(Anlage(
           id: _uuid.v4(),
           name: nameValue,
           params: params,
@@ -906,10 +907,8 @@ class CsvService {
           markerInfo: null,
           markerType: discipline.label,
           discipline: discipline,
-          parentId: null, // Wird beim Speichern anhand __parentLfdNummer gesetzt
-        );
-
-        anlagen.add(anlage);
+          parentId: null,
+        ));
       }
 
       debugPrint('Insgesamt ${anlagen.length} Anlagen erstellt');
@@ -996,19 +995,16 @@ class CsvService {
     try {
       final csvSettings = await _loadCsvSettings(projectId);
       final fotoLabels = [
-        csvSettings['foto1SpalteLabel'] as String?,
-        csvSettings['foto2SpalteLabel'] as String?,
-        csvSettings['foto3SpalteLabel'] as String?,
-        csvSettings['foto4SpalteLabel'] as String?,
+        csvSettings.foto1SpalteLabel,
+        csvSettings.foto2SpalteLabel,
+        csvSettings.foto3SpalteLabel,
+        csvSettings.foto4SpalteLabel,
       ];
       final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
       final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
-      final attributePairsRaw = csvSettings['attributeColumnPairs'] as List? ?? [];
-      final attributePairs = attributePairsRaw
-          .map((e) => AttributeColumnPair.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
-      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings);
+      final attributePairs = csvSettings.attributeColumnPairs;
+      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
       final hasImportStructure = importHeaderRow.isNotEmpty;
       final rawDataColumnKeys =
           hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagen);
@@ -1051,7 +1047,9 @@ class CsvService {
       }
 
       // CSV-String erstellen (UTF-8 mit BOM für Excel-Kompatibilität)
-      final exportDelimiter = csvSettings['exportDelimiter'] as String? ?? _delimiter;
+      final exportDelimiter = csvSettings.exportDelimiter.isNotEmpty
+          ? csvSettings.exportDelimiter
+          : _delimiter;
       final csvString = ListToCsvConverter(
         fieldDelimiter: exportDelimiter,
         eol: '\n',
@@ -1102,10 +1100,10 @@ class CsvService {
     try {
       final csvSettings = await _loadCsvSettings(projectId);
       final fotoLabels = [
-        csvSettings['foto1SpalteLabel'] as String?,
-        csvSettings['foto2SpalteLabel'] as String?,
-        csvSettings['foto3SpalteLabel'] as String?,
-        csvSettings['foto4SpalteLabel'] as String?,
+        csvSettings.foto1SpalteLabel,
+        csvSettings.foto2SpalteLabel,
+        csvSettings.foto3SpalteLabel,
+        csvSettings.foto4SpalteLabel,
       ];
       final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
@@ -1119,11 +1117,8 @@ class CsvService {
       int fotoCounter = 1;
 
       final orderedAnlagenForHeader = _orderAnlagenHierarchically(anlagen);
-      final attributePairsRaw = csvSettings['attributeColumnPairs'] as List? ?? [];
-      final attributePairs = attributePairsRaw
-          .map((e) => AttributeColumnPair.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
-      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings);
+      final attributePairs = csvSettings.attributeColumnPairs;
+      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
       final hasImportStructure = importHeaderRow.isNotEmpty;
       final rawDataColumnKeys =
           hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagenForHeader);
@@ -1235,7 +1230,9 @@ class CsvService {
       }
 
       // CSV-Datei erstellen
-      final exportDelimiter = csvSettings['exportDelimiter'] as String? ?? _delimiter;
+      final exportDelimiter = csvSettings.exportDelimiter.isNotEmpty
+          ? csvSettings.exportDelimiter
+          : _delimiter;
       final csvString = ListToCsvConverter(
         fieldDelimiter: exportDelimiter,
         eol: '\n',

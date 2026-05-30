@@ -11,7 +11,9 @@ import '../models/floor_plan.dart';
 import '../models/marker.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/database_provider.dart';
+import '../providers/csv_settings_provider.dart';
 import '../services/anlage_validation_service.dart';
+import '../services/template_service.dart';
 
 // Widgets für Anlage-Dialoge (relativ zu lib/pages/)
 import 'widgets/generic_anlage_dialog.dart';
@@ -35,6 +37,12 @@ class SystemsPage extends ConsumerStatefulWidget {
   /// Wenn null oder leer, erfolgt keine Gruppierung.
   final String? groupingKey;
 
+  /// Unter-Gruppierungs-Key (Revisionsobjekt) innerhalb der oberen Gruppierung.
+  final String? subGroupingKey;
+
+  /// Param-Key für Anzeigenamen einzelner Anlagen (Name-Spalte).
+  final String? displayNameParamKey;
+
   /// Callback, um Selektion (aktiv, count) nach außen zu melden.
   final void Function(bool isActive, int selectedCount)? onSelectionChanged;
   
@@ -53,7 +61,15 @@ class SystemsPage extends ConsumerStatefulWidget {
   /// Wird aufgerufen, wenn Anlagen verschoben wurden (für Neuladen aller betroffenen Gewerke).
   final VoidCallback? onAnlagenMoved;
   /// Wird bei Long-Press auf einen Gruppen-Header aufgerufen (Disziplin, groupingKey, groupValue).
-  final void Function(Disziplin discipline, String groupingKey, String groupValue)? onGroupLongPress;
+  final void Function(
+    Disziplin discipline,
+    String groupingKey,
+    String groupValue,
+    Map<String, dynamic> additionalParams,
+  )? onGroupLongPress;
+
+  /// Eigene Scroll-Liste (statt shrinkWrap in übergeordnetem ScrollView).
+  final bool usePrimaryScroll;
 
   const SystemsPage({
     Key? key,
@@ -61,6 +77,9 @@ class SystemsPage extends ConsumerStatefulWidget {
     required this.floor,
     required this.discipline,
     this.groupingKey,
+    this.subGroupingKey,
+    this.displayNameParamKey,
+    this.usePrimaryScroll = false,
     this.onSelectionChanged,
     this.isAnySelectionActive,
     this.onExitDisciplineSelectionMode,
@@ -77,6 +96,9 @@ class SystemsPage extends ConsumerStatefulWidget {
 class SystemsPageState extends ConsumerState<SystemsPage>
     with RouteAware, TickerProviderStateMixin {
   List<Anlage> _alleAnlagen = [];  // Liste aller Anlagen im aktuellen Gebäude und auf dem aktuellen Floor
+  List<Anlage> _parentAnlagen = [];
+  Map<String, List<Anlage>> _childrenByParentId = {};
+  final Map<String, bool> _validationByAnlageId = {};
   bool _isSelectionMode = false;    // Gibt an, ob sich die Seite im Auswahlmodus befindet
   bool _isLoading = false;           // Gibt an, ob die Anlagen gerade geladen werden
   bool _hasLoadedOnce = false;       // Gibt an, ob die Daten bereits einmal geladen wurden
@@ -312,8 +334,14 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           : loaded.where((a) => a.floorId == widget.floor.id).toList();
       debugPrint('SystemsPage._loadAnlagen: Gefiltert auf ${filtered.length} Anlagen');
       
+      _validationByAnlageId.clear();
+      for (final a in filtered) {
+        _validationByAnlageId[a.id] = AnlageValidationService.isAnlageValidated(a);
+      }
+
       setState(() {
         _alleAnlagen = filtered;
+        _rebuildAnlagenIndexes();
         _isLoading = false;
         _hasLoadedOnce = true;
         _selectedAnlagenIds.removeWhere(
@@ -339,6 +367,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       
       setState(() {
         _alleAnlagen = [];
+        _parentAnlagen = [];
+        _childrenByParentId = {};
         _isLoading = false;
         _hasLoadedOnce = true;
         _selectedAnlagenIds.clear();
@@ -377,37 +407,51 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     }
   }
 
-  /// Für globale (Marker-basierte) oder für text-basierte Anzeige unterscheiden.
-  /// Gibt Haupt-Anlagen zurück und behandelt verwaiste Bauteile als Top-Level,
-  /// damit importierte Einträge ohne auflösbaren Parent nicht verschwinden.
-  List<Anlage> get _anzeigeAnlagen {
+  /// Baut Index für Eltern-/Kinder-Beziehungen (einmal pro Laden, nicht pro Listeneintrag).
+  void _rebuildAnlagenIndexes() {
     final label = widget.discipline.label;
-    final baseAnlagen = (widget.floor.id == 'global'
-        ? _alleAnlagen.where((a) =>
-            a.buildingId == widget.building.id &&
-            a.discipline.label == label)
-        : _alleAnlagen.where((a) =>
-            a.buildingId == widget.building.id &&
-            a.floorId == widget.floor.id &&
-            a.discipline.label == label))
-      .toList();
+    final buildingId = widget.building.id;
+    final isGlobal = widget.floor.id == 'global';
+    final floorId = widget.floor.id;
+
+    final baseAnlagen = <Anlage>[];
+    final childrenByParent = <String, List<Anlage>>{};
+
+    for (final a in _alleAnlagen) {
+      if (a.buildingId != buildingId || a.discipline.label != label) continue;
+      if (!isGlobal && a.floorId != floorId) continue;
+      baseAnlagen.add(a);
+      final pid = a.parentId;
+      if (pid != null && pid.isNotEmpty) {
+        childrenByParent.putIfAbsent(pid, () => []).add(a);
+      }
+    }
 
     final existingIds = baseAnlagen.map((a) => a.id).toSet();
-    return baseAnlagen.where((a) {
+    var roots = baseAnlagen.where((a) {
       if (a.parentId == null || a.parentId!.isEmpty) return true;
       return !existingIds.contains(a.parentId!);
     }).toList();
+
+    // Ebene 1 = Disziplin: synthetischen „Brandschutz“-Knoten nicht nochmal als Wurzel zeigen.
+    final labelLower = label.trim().toLowerCase();
+    final flattened = <Anlage>[];
+    for (final a in roots) {
+      final isRedundantDisciplineNode = a.params['__syntheticParent'] == true &&
+          a.name.trim().toLowerCase() == labelLower;
+      if (isRedundantDisciplineNode) {
+        flattened.addAll(childrenByParent[a.id] ?? const []);
+      } else {
+        flattened.add(a);
+      }
+    }
+    _parentAnlagen = flattened;
+    _childrenByParentId = childrenByParent;
   }
 
   /// Gibt die Kinder einer Anlage zurück
-  List<Anlage> _getChildren(Anlage parent) {
-    return _alleAnlagen.where((a) =>
-        a.parentId == parent.id &&
-        a.buildingId == widget.building.id &&
-        a.discipline.label == widget.discipline.label &&
-        (widget.floor.id == 'global' || a.floorId == widget.floor.id)
-    ).toList();
-  }
+  List<Anlage> _getChildren(Anlage parent) =>
+      _childrenByParentId[parent.id] ?? const [];
 
 
   void _exitSelectionMode() {
@@ -614,6 +658,91 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     );
   }
 
+  Future<void> _openGenericFormFromTemplateSelection({
+    required String projectId,
+    required String selectedAnlagentyp,
+    required Template parentTemplate,
+    required List<Template> childTemplates,
+  }) async {
+    final csvSettings = ref.read(csvSettingsProvider(projectId));
+    final schemaItemKey = csvSettings.resolveSchemaItemParamKey();
+    final params = TemplateService.buildInitialParamsForSchemaItem(
+      parentTemplate: parentTemplate,
+      selectedAnlagentyp: selectedAnlagentyp,
+      schemaItemParamKey: schemaItemKey,
+    );
+    final effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: widget.discipline,
+      revisionsobjekt: selectedAnlagentyp.trim(),
+      template: parentTemplate,
+    );
+    final initialName = TemplateService.resolveParentNameFromTemplate(
+      parentTemplate,
+      selectedAnlagentyp,
+    );
+    const uuid = Uuid();
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => GenericAnlageDialog(
+        discipline: effectiveDiscipline,
+        buildingId: widget.building.id,
+        floorId: widget.floor.id,
+        initialParams: params,
+        initialName: initialName,
+        initialRevisionsobjekt: selectedAnlagentyp.trim(),
+        onSave: (newAnlage, _) async {
+          final dbService = ref.read(databaseServiceProvider);
+          final existing = await dbService.getAnlageById(newAnlage.id);
+          if (existing != null) {
+            await dbService.updateAnlage(newAnlage);
+          } else {
+            await dbService.insertAnlage(newAnlage);
+          }
+
+          final children = <Anlage>[];
+          for (final t in childTemplates) {
+            final childName = t.bezeichnung.trim().isNotEmpty
+                ? t.bezeichnung.trim()
+                : t.anlagentyp.trim();
+            children.add(Anlage(
+              id: uuid.v4(),
+              parentId: newAnlage.id,
+              name: childName,
+              params: TemplateService.buildEmptyParamsFromTemplate(t.parameter),
+              floorId: widget.floor.id,
+              buildingId: widget.building.id,
+              isMarker: false,
+              markerInfo: null,
+              markerType: widget.discipline.label,
+              discipline: effectiveDiscipline.withEffectiveSchema(
+                revisionsobjekt: t.anlagentyp.trim(),
+              ),
+            ));
+          }
+          for (final child in children) {
+            await dbService.insertAnlage(child);
+          }
+
+          if (!mounted) return;
+          setState(() {
+            _alleAnlagen.add(newAnlage);
+            _alleAnlagen.addAll(children);
+            _expandedAnlagenIds.add(newAnlage.id);
+          });
+          await _saveAnlagen();
+          await _loadAnlagen();
+          widget.onAnlageCreated?.call();
+        },
+      ),
+    );
+  }
+
   /// Öffnet den Dialog zum Hinzufügen einer neuen Anlage (ohne Marker).
   Future<void> _showAddDialog() async {
     final dbService = ref.read(databaseServiceProvider);
@@ -648,6 +777,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       return;
     }
 
+    await ref.read(csvSettingsProvider(projectId).notifier).load();
+    final csvSettings = ref.read(csvSettingsProvider(projectId));
+
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -660,6 +792,21 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         discipline: widget.discipline,
         buildingId: widget.building.id,
         floorId: widget.floor.id,
+        gewerkLevelLabel: csvSettings.schemaDisciplineLevelLabel,
+        anlageLevelLabel: csvSettings.resolveSchemaItemLevelLabel(),
+        onProceedToForm: ({
+          required selectedGewerk,
+          required selectedAnlagentyp,
+          required parentTemplate,
+          required childTemplates,
+        }) {
+          _openGenericFormFromTemplateSelection(
+            projectId: projectId,
+            selectedAnlagentyp: selectedAnlagentyp,
+            parentTemplate: parentTemplate,
+            childTemplates: childTemplates,
+          );
+        },
         onCreate: (created) async {
           setState(() {
             _alleAnlagen.addAll(created);
@@ -682,11 +829,14 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   /// Öffnet den Dialog zum Bearbeiten einer bestehenden Anlage.
-  void _showEditDialog(Anlage a) {
-    // Speichere die zuletzt geöffnete Anlage-ID
+  Future<void> _showEditDialog(Anlage a) async {
     _saveLastOpenedAnlage(a.id);
-    
+
+    final dbService = ref.read(databaseServiceProvider);
+    final fullAnlage = await dbService.getAnlageById(a.id) ?? a;
     final idx = _alleAnlagen.indexWhere((x) => x.id == a.id);
+    if (!mounted) return;
+
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -694,17 +844,15 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => GenericAnlageDialog(
-        discipline: a.discipline,
-        buildingId: a.buildingId,
-        floorId: a.floorId,
-        existingAnlage: a,
+        discipline: fullAnlage.discipline,
+        buildingId: fullAnlage.buildingId,
+        floorId: fullAnlage.floorId,
+        existingAnlage: fullAnlage,
         index: idx,
         onSave: (editedAnlage, index) async {
-          // Wenn Gruppierungsattribut geändert wurde: Zielgruppe aufklappen,
-          // damit die Anlage in ihrer neuen Gruppierung sichtbar ist
           final gk = widget.groupingKey;
           if (gk != null && gk.isNotEmpty) {
-            final oldValue = a.params[gk]?.toString() ?? '';
+            final oldValue = fullAnlage.params[gk]?.toString() ?? '';
             final newValue = editedAnlage.params[gk]?.toString() ?? '';
             if (oldValue != newValue && newValue.isNotEmpty) {
               setState(() {
@@ -768,32 +916,27 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
   @override
   Widget build(BuildContext context) {
-    // Aktualisiere die Markierung gewerkeübergreifend, wenn die Anlagen bereits geladen sind
-    // (nur wenn nicht gerade geladen wird, um unnötige Updates zu vermeiden)
-    // Verwende WidgetsBinding.instance.addPostFrameCallback, um Updates nach dem Build durchzuführen
-    if (!_isLoading && _alleAnlagen.isNotEmpty && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Lade die Markierung asynchron, ohne setState während des Builds zu blockieren
-        _loadLastOpenedAnlage();
-      });
+    final list = _buildList(widget.discipline);
+    if (widget.usePrimaryScroll) {
+      return list;
     }
-    
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: 16, top: 12),
-      child: _buildList(widget.discipline),
+      child: list,
     );
   }
 
   Widget _buildList(Disziplin disc) {
-    final parents = _anzeigeAnlagen.where((a) => a.discipline.label == disc.label).toList();
-
     return SystemsAnlageList(
       isLoading: _isLoading,
       hasLoadedOnce: _hasLoadedOnce,
       disc: disc,
-      parents: parents,
+      parents: _parentAnlagen,
       getChildren: _getChildren,
+      usePrimaryScroll: widget.usePrimaryScroll,
       groupingKey: widget.groupingKey,
+      subGroupingKey: widget.subGroupingKey,
+      displayNameParamKey: widget.displayNameParamKey,
       expandedGroups: _expandedGroups,
       expandedAnlagenIds: _expandedAnlagenIds,
       onGroupExpansionChanged: (groupKey, expanded) {
@@ -816,7 +959,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         });
       },
       onGroupLongPress: widget.onGroupLongPress != null
-          ? (gk, gv) => widget.onGroupLongPress!(widget.discipline, gk, gv)
+          ? (gk, gv, extra) =>
+              widget.onGroupLongPress!(widget.discipline, gk, gv, extra)
           : null,
       itemBuilder: _buildHierarchicalAnlageItem,
     );
@@ -831,12 +975,14 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     VoidCallback? onToggleExpanded,
   }) {
     final isSelected = _selectedAnlagenIds.contains(a.id);
-    final isValidated = AnlageValidationService.isAnlageValidated(a);
+    final isValidated = _validationByAnlageId[a.id] ?? false;
     final isLastOpened = _lastOpenedAnlageId == a.id;
 
-    // Stelle sicher, dass ein GlobalKey für diese Anlage existiert
-    _anlageKeys.putIfAbsent(a.id, () => GlobalKey());
-    final itemKey = _anlageKeys[a.id]!;
+    Key? itemKey;
+    if (isLastOpened) {
+      _anlageKeys.putIfAbsent(a.id, () => GlobalKey());
+      itemKey = _anlageKeys[a.id]!;
+    }
 
     // Prüfe, ob irgendwo ein Selection-Mode aktiv ist (gewerkeübergreifend)
     final anySelectionActive = widget.isAnySelectionActive?.call() ?? false;

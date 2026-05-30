@@ -6,6 +6,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../database/database_service.dart';
+import '../models/disziplin_schnittstelle.dart';
+import '../providers/csv_settings_provider.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_utils.dart';
 
@@ -46,6 +48,34 @@ class Template {
       bezeichnung: safeCell(columnIndices['bezeichnung']),
       parameter: paramValue,
     );
+  }
+
+  /// Erstellt eine Template-Instanz anhand der projektbezogenen CSV-Einstellungen.
+  static Template fromCsvRowWithSettings(List<dynamic> row, Map<String, dynamic> settings) {
+    final gewerkIdx = settings['gewerkSpalte'] as int? ?? 0;
+    final revisObjIdx = settings['revisionsobjektSpalte'] as int? ??
+        settings['anlagentypSpalte'] as int? ??
+        1;
+    final bezIdx = settings['bezeichnungSpalte'] as int? ?? revisObjIdx;
+
+    final gewerk = _safeCellStatic(row, gewerkIdx);
+    final anlagentyp = _safeCellStatic(row, revisObjIdx);
+    final bezeichnung = bezIdx == revisObjIdx
+        ? anlagentyp
+        : _safeCellStatic(row, bezIdx);
+
+    return Template(
+      gewerk: gewerk,
+      anlageBauteil: 'a',
+      anlagentyp: anlagentyp,
+      bezeichnung: bezeichnung.isEmpty ? anlagentyp : bezeichnung,
+      parameter: null,
+    );
+  }
+
+  static String _safeCellStatic(List<dynamic> row, int idx) {
+    if (idx < 0 || idx >= row.length) return '';
+    return row[idx].toString().trim();
   }
 }
 
@@ -127,27 +157,62 @@ class TemplateService {
     for (var i = startColumn; i + 2 < row.length; i += 3) {
       final name = _safeCell(row, i);
       if (name.isEmpty) continue;
-      final typeStr = _safeCell(row, i + 1).toLowerCase();
-      final optionsStr = _safeCell(row, i + 2);
-      String type = 'text';
-      if (typeStr == 'select' || typeStr == 'dropdown') {
-        type = 'dropdown';
-      } else if (typeStr == 'int' || typeStr == 'number') {
-        type = 'number';
-      } else if (typeStr.isNotEmpty) {
-        type = typeStr;
-      }
-      final entry = <String, dynamic>{
-        'key': name,
-        'label': name,
-        'type': type,
-      };
-      final options = _parseOptions(optionsStr);
-      if (options.isNotEmpty) entry['options'] = options;
-      schema.add(entry);
+      schema.add(_schemaEntryFromTripletCells(name, _safeCell(row, i + 1), _safeCell(row, i + 2)));
     }
     if (schema.isEmpty) return '';
     return json.encode({'_schema': schema});
+  }
+
+  static Map<String, dynamic> _schemaEntryFromTripletCells(String name, String typeStr, String optionsStr) {
+    final normalizedType = typeStr.toLowerCase();
+    String type = 'text';
+    if (normalizedType == 'select' || normalizedType == 'dropdown') {
+      type = 'dropdown';
+    } else if (normalizedType == 'int' || normalizedType == 'number') {
+      type = 'number';
+    } else if (normalizedType.isNotEmpty) {
+      type = normalizedType;
+    }
+    final entry = <String, dynamic>{
+      'key': name,
+      'label': name,
+      'type': type,
+    };
+    final options = _parseOptions(optionsStr);
+    if (options.isNotEmpty) entry['options'] = options;
+    return entry;
+  }
+
+  /// Baut Attribut-Schema aus explizit konfigurierten Spalten-Dreiergruppen.
+  static String _buildParameterJsonFromConfiguredTriplets(
+    List<dynamic> row,
+    List<AttributeTripletColumn> triplets,
+  ) {
+    final schema = <Map<String, dynamic>>[];
+    for (final triplet in triplets) {
+      final name = _safeCell(row, triplet.nameColumn);
+      if (name.isEmpty) continue;
+      schema.add(_schemaEntryFromTripletCells(
+        name,
+        _safeCell(row, triplet.typeColumn),
+        _safeCell(row, triplet.optionsColumn),
+      ));
+    }
+    if (schema.isEmpty) return '';
+    return json.encode({'_schema': schema});
+  }
+
+  static List<AttributeTripletColumn> _parseAttributeTripletColumns(dynamic raw) {
+    if (raw is! List) return [];
+    final triplets = <AttributeTripletColumn>[];
+    for (final e in raw) {
+      if (e is Map<String, dynamic>) {
+        triplets.add(AttributeTripletColumn.fromJson(e));
+      } else if (e is Map) {
+        triplets.add(AttributeTripletColumn.fromJson(Map<String, dynamic>.from(e)));
+      }
+    }
+    return triplets;
   }
 
   /// Lädt die CSV-Einstellungen für Vorlagen
@@ -155,31 +220,55 @@ class TemplateService {
     final prefs = await SharedPreferences.getInstance();
     final key = 'template_csv_settings_$projectId';
     final settingsJson = prefs.getString(key);
-    
+
+    const defaultGewerkSpalte = 0;
+    const defaultRevisionsobjektSpalte = 1;
+    const defaultErsteSpalteAttribut = 2;
+
     if (settingsJson != null) {
       try {
         final settings = json.decode(settingsJson) as Map<String, dynamic>;
+        final gewerkSpalte = settings['revisionsfeldSpalte'] as int? ??
+            settings['gewerkSpalte'] as int? ??
+            defaultGewerkSpalte;
+        final revisionsobjektSpalte = settings['revisionsobjektSpalte'] as int? ??
+            settings['anlagentypSpalte'] as int? ??
+            defaultRevisionsobjektSpalte;
+        final attributeTripletColumns = _parseAttributeTripletColumns(settings['attributeTripletColumns']);
         return {
-          'gewerkSpalte': settings['gewerkSpalte'] as int? ?? 0,
-          'anlageBauteilSpalte': settings['anlageBauteilSpalte'] as int? ?? 1,
-          'anlagentypSpalte': settings['anlagentypSpalte'] as int? ?? 2,
-          'bezeichnungSpalte': settings['bezeichnungSpalte'] as int? ?? 3,
-          'auswahlAnlagentypSpalte': settings['auswahlAnlagentypSpalte'] as int?,
-          'ersteSpalteAttributDefinitionen': settings['ersteSpalteAttributDefinitionen'] as int? ?? 4,
+          'gewerkSpalte': gewerkSpalte,
+          'revisionsobjektSpalte': revisionsobjektSpalte,
+          'anlagentypSpalte': revisionsobjektSpalte,
+          'bezeichnungSpalte': settings['bezeichnungSpalte'] as int? ?? revisionsobjektSpalte,
+          'ersteSpalteAttributDefinitionen':
+              settings['ersteSpalteAttributDefinitionen'] as int? ?? defaultErsteSpalteAttribut,
+          'attributeTripletColumns': attributeTripletColumns,
         };
       } catch (e) {
         debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
       }
     }
-    
+
     return {
-      'gewerkSpalte': 0,
-      'anlageBauteilSpalte': 1,
-      'anlagentypSpalte': 2,
-      'bezeichnungSpalte': 3,
-      'auswahlAnlagentypSpalte': null,
-      'ersteSpalteAttributDefinitionen': 4,
+      'gewerkSpalte': defaultGewerkSpalte,
+      'revisionsobjektSpalte': defaultRevisionsobjektSpalte,
+      'anlagentypSpalte': defaultRevisionsobjektSpalte,
+      'bezeichnungSpalte': defaultRevisionsobjektSpalte,
+      'ersteSpalteAttributDefinitionen': defaultErsteSpalteAttribut,
+      'attributeTripletColumns': <AttributeTripletColumn>[],
     };
+  }
+
+  static String _buildParameterJsonForRow(
+    List<dynamic> row,
+    Map<String, dynamic> settings,
+  ) {
+    final triplets = settings['attributeTripletColumns'] as List<AttributeTripletColumn>? ?? [];
+    if (triplets.isNotEmpty) {
+      return _buildParameterJsonFromConfiguredTriplets(row, triplets);
+    }
+    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 2;
+    return _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
   }
 
   /// Lädt Vorlagen aus der Datenbank (projektbezogen)
@@ -236,17 +325,25 @@ class TemplateService {
 
     // Lade CSV-Einstellungen (für Delimiter-Sniffing brauchen wir den maxIndex)
     final settings = await _loadTemplateCsvSettings(projectId);
-    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 4;
-    final columnIndices = {
-      'gewerk': settings['gewerkSpalte'] as int,
-      'anlageBauteil': settings['anlageBauteilSpalte'] as int,
-      'anlagentyp': settings['anlagentypSpalte'] as int,
-      'bezeichnung': settings['bezeichnungSpalte'] as int,
-    };
-    int requiredMaxIndex = columnIndices.values.fold<int>(0, (m, v) => v > m ? v : m);
-    if (ersteSpalteAttribut + 2 > requiredMaxIndex) requiredMaxIndex = ersteSpalteAttribut + 2;
+    final gewerkIdx = settings['gewerkSpalte'] as int? ?? 0;
+    final revisObjIdx = settings['revisionsobjektSpalte'] as int? ??
+        settings['anlagentypSpalte'] as int? ??
+        1;
+    final triplets = settings['attributeTripletColumns'] as List<AttributeTripletColumn>? ?? [];
+    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 2;
 
-    // Delimiter-Sniffing mit zusätzlicher Prüfung: welche Variante liefert viele gültige a/b-Werte?
+    int requiredMaxIndex = gewerkIdx > revisObjIdx ? gewerkIdx : revisObjIdx;
+    if (triplets.isNotEmpty) {
+      for (final t in triplets) {
+        if (t.nameColumn > requiredMaxIndex) requiredMaxIndex = t.nameColumn;
+        if (t.typeColumn > requiredMaxIndex) requiredMaxIndex = t.typeColumn;
+        if (t.optionsColumn > requiredMaxIndex) requiredMaxIndex = t.optionsColumn;
+      }
+    } else if (ersteSpalteAttribut + 2 > requiredMaxIndex) {
+      requiredMaxIndex = ersteSpalteAttribut + 2;
+    }
+
+    // Delimiter-Sniffing anhand Revisionsfeld/Revisionsobjekt
     const candidates = [';', '\t', ','];
     String delimiter = _detectDelimiterWithSettings(csvString, requiredMaxIndex);
 
@@ -266,13 +363,11 @@ class TemplateService {
         for (var i = 1; i < sample.length; i++) {
           final row = sample[i];
           if (row.isEmpty) continue;
-          // Muss mindestens bis zum Anlage/Bauteil-Index reichen
-          if (row.length <= columnIndices['anlageBauteil']!) continue;
-          if (row.length <= columnIndices['gewerk']!) continue;
-          final gewerkVal = row[columnIndices['gewerk']!].toString().trim();
-          final abVal = row[columnIndices['anlageBauteil']!].toString().trim().toLowerCase();
+          if (row.length <= gewerkIdx || row.length <= revisObjIdx) continue;
+          final gewerkVal = row[gewerkIdx].toString().trim();
           if (gewerkVal.isEmpty) continue;
-          if (abVal == 'a' || abVal == 'b') score++;
+          final revisObjVal = row[revisObjIdx].toString().trim();
+          if (revisObjVal.isNotEmpty) score++;
         }
 
         if (score > bestScore || (score == bestScore && d == ';' && bestDelimiter != ';')) {
@@ -312,28 +407,20 @@ class TemplateService {
         continue;
       }
       try {
-        final template = Template.fromCsvRow(row, columnIndices);
-        final ab = template.anlageBauteil.trim().toLowerCase();
-        final isValidAB = ab == 'a' || ab == 'b';
-        if (template.gewerk.isNotEmpty && isValidAB) {
-          final parameterJson = _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
+        final template = Template.fromCsvRowWithSettings(row, settings);
+        if (template.gewerk.isNotEmpty && template.anlagentyp.isNotEmpty) {
+          final parameterJson = _buildParameterJsonForRow(row, settings);
           await dbService.insertTemplate(
             projectId,
             template.gewerk,
-            ab,
+            'a',
             template.anlagentyp,
             template.bezeichnung,
             parameterJson.isEmpty ? null : parameterJson,
           );
           
-          // Sammle Gewerke (für Disziplinen) bei jedem validen Datensatz
           uniqueGewerke.add(template.gewerk);
-          if (ab == 'a') {
-            validA++;
-          } else {
-            validB++;
-          }
-          
+          validA++;
           count++;
         } else {
           skipped++;
@@ -362,7 +449,7 @@ class TemplateService {
     return count;
   }
 
-  /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (Attribut-Definitionen pro Gewerk).
+  /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (pro Revisionsobjekt).
   static Future<void> _syncDisciplineSchemasFromTemplates(
     DatabaseService dbService,
     String buildingId,
@@ -370,35 +457,46 @@ class TemplateService {
   ) async {
     final disciplines = await dbService.getDisciplinesByBuildingId(buildingId);
     final templateRows = await dbService.getTemplatesByProjectId(projectId);
-    final schemaByGewerk = <String, List<Map<String, dynamic>>>{};
+    final schemaByGewerkAndTyp = <String, Map<String, List<Map<String, dynamic>>>>{};
+
     for (final row in templateRows) {
       final gewerk = row.gewerk.trim();
-      if (gewerk.isEmpty) continue;
+      final typ = row.anlagentyp.trim();
+      if (gewerk.isEmpty || typ.isEmpty) continue;
       final schema = getSchemaFromTemplateParameter(row.parameter);
       if (schema.isEmpty) continue;
-      schemaByGewerk.putIfAbsent(gewerk, () => []).addAll(schema);
-    }
-    for (final d in disciplines) {
-      final gewerkLabel = d.label.trim();
-      final fromTemplates = schemaByGewerk[gewerkLabel];
-      if (fromTemplates == null || fromTemplates.isEmpty) continue;
+
+      schemaByGewerkAndTyp.putIfAbsent(gewerk, () => {});
+      final existing = schemaByGewerkAndTyp[gewerk]![typ] ?? const <Map<String, dynamic>>[];
       final byKey = <String, Map<String, dynamic>>{};
-      for (final f in fromTemplates) {
+      for (final f in existing) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isNotEmpty) byKey[key] = Map<String, dynamic>.from(f);
+      }
+      for (final f in schema) {
         final key = (f['key'] ?? '').toString();
         if (key.isEmpty) continue;
-        if (!byKey.containsKey(key)) byKey[key] = Map<String, dynamic>.from(f);
+        byKey[key] = Map<String, dynamic>.from(f);
       }
-      final mergedSchema = byKey.values.toList();
-      final mergedKeys = mergedSchema.map((f) => (f['key'] ?? '').toString()).toSet();
-      final globalFields = d.schema.where((f) => f['isGlobal'] == true).map((f) => Map<String, dynamic>.from(f)).toList();
-      final existingIndividual = d.schema
-          .where((f) => f['isGlobal'] != true && !mergedKeys.contains((f['key'] ?? '').toString()))
-          .map((f) => Map<String, dynamic>.from(f))
-          .toList();
-      d.schema = [...globalFields, ...mergedSchema, ...existingIndividual];
+      schemaByGewerkAndTyp[gewerk]![typ] = byKey.values.toList();
+    }
+
+    for (final d in disciplines) {
+      final gewerkLabel = d.label.trim();
+      final byTyp = schemaByGewerkAndTyp[gewerkLabel];
+      if (byTyp == null || byTyp.isEmpty) continue;
+
+      final globalFields = d.globalSchemaFields;
+      final mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(d.revisionsobjektSchemas);
+      for (final entry in byTyp.entries) {
+        mergedRoSchemas[entry.key] = entry.value.map((f) => Map<String, dynamic>.from(f)).toList();
+      }
+
+      d.revisionsobjektSchemas = mergedRoSchemas;
+      d.schema = globalFields;
     }
     await dbService.replaceDisciplines(buildingId, disciplines);
-    debugPrint('Disziplin-Schemata aus Vorlagen synchronisiert für ${disciplines.length} Disziplinen.');
+    debugPrint('Disziplin-Schemata pro Revisionsobjekt synchronisiert für ${disciplines.length} Disziplinen.');
   }
 
   /// Lädt Vorlagen aus einer CSV-Datei (ohne Speichern in DB - für temporäre Verwendung)
@@ -438,44 +536,29 @@ class TemplateService {
     }
 
     // Lade CSV-Einstellungen, falls projectId vorhanden
-    Map<String, int> columnIndices = {};
-    int ersteSpalteAttribut = 4;
+    Map<String, dynamic>? settings;
     if (projectId != null) {
-      final settings = await _loadTemplateCsvSettings(projectId);
-      ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 4;
-      columnIndices = {
-        'gewerk': settings['gewerkSpalte'] as int,
-        'anlageBauteil': settings['anlageBauteilSpalte'] as int,
-        'anlagentyp': settings['anlagentypSpalte'] as int,
-        'bezeichnung': settings['bezeichnungSpalte'] as int,
-      };
+      settings = await _loadTemplateCsvSettings(projectId);
     } else {
       // Erste Zeile ist der Header
       final headerRow = csvData[0].map((e) => e.toString().trim().toLowerCase()).toList();
-      
-      // Finde Spaltenindizes (ohne Parameter-Spalte; Attribute über Spaltenpaare)
+      int? gewerkIdx;
+      int? revisObjIdx;
       for (var i = 0; i < headerRow.length; i++) {
         final header = headerRow[i];
-        if (header.contains('gewerk')) {
-          columnIndices['gewerk'] = i;
-        } else if (header.contains('anlage') && header.contains('bauteil')) {
-          columnIndices['anlageBauteil'] = i;
-        } else if (header.contains('anlagentyp')) {
-          columnIndices['anlagentyp'] = i;
-        } else if (header.contains('bezeichnung')) {
-          columnIndices['bezeichnung'] = i;
+        if (header.contains('revisionsfeld') || header == 'gewerk' || header.contains('gewerk')) {
+          gewerkIdx = i;
+        } else if (header.contains('revisionsobjekt') || header.contains('anlagentyp')) {
+          revisObjIdx = i;
         }
       }
-
-      // Fallback: Wenn keine Header gefunden wurden, verwende Standard-Indizes
-      if (columnIndices.isEmpty) {
-        columnIndices = {
-          'gewerk': 0,
-          'anlageBauteil': 1,
-          'anlagentyp': 2,
-          'bezeichnung': 3,
-        };
-      }
+      settings = {
+        'gewerkSpalte': gewerkIdx ?? 0,
+        'revisionsobjektSpalte': revisObjIdx ?? 1,
+        'bezeichnungSpalte': revisObjIdx ?? 1,
+        'ersteSpalteAttributDefinitionen': (revisObjIdx ?? 1) + 1,
+        'attributeTripletColumns': <AttributeTripletColumn>[],
+      };
     }
 
     // Parse Datenzeilen (Parameter = _schema aus Dreiergruppen Name/Typ/Optionen)
@@ -486,10 +569,17 @@ class TemplateService {
         continue;
       }
       try {
-        final parameterOverride = _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
-        final template = Template.fromCsvRow(row, columnIndices, parameterOverride.isEmpty ? null : parameterOverride);
-        if (template.gewerk.isNotEmpty) {
-          templates.add(template);
+        final parameterOverride = _buildParameterJsonForRow(row, settings);
+        final template = Template.fromCsvRowWithSettings(row, settings);
+        final withParams = Template(
+          gewerk: template.gewerk,
+          anlageBauteil: template.anlageBauteil,
+          anlagentyp: template.anlagentyp,
+          bezeichnung: template.bezeichnung,
+          parameter: parameterOverride.isEmpty ? null : parameterOverride,
+        );
+        if (withParams.gewerk.isNotEmpty) {
+          templates.add(withParams);
         }
       } catch (e) {
         debugPrint('Fehler beim Parsen der Vorlage in Zeile ${i + 1}: $e');
@@ -553,6 +643,30 @@ class TemplateService {
     return anlagentypen.toList()..sort();
   }
 
+  /// Params für den Anlage-Dialog nach Vorlagenauswahl (Schema-Ebene aus CSV-Mapping).
+  static Map<String, dynamic> buildInitialParamsForSchemaItem({
+    required Template parentTemplate,
+    required String selectedAnlagentyp,
+    String? schemaItemParamKey,
+  }) {
+    final params = buildEmptyParamsFromTemplate(parentTemplate.parameter);
+    final type = selectedAnlagentyp.trim();
+    if (type.isEmpty) return params;
+    final key = schemaItemParamKey?.trim();
+    if (key != null && key.isNotEmpty) {
+      params[key] = type;
+    }
+    params['Anlagentyp'] = type;
+    params['Revisionsobjekt'] = type;
+    return params;
+  }
+
+  static String resolveParentNameFromTemplate(Template parentTemplate, String selectedAnlagentyp) {
+    final bez = parentTemplate.bezeichnung.trim();
+    if (bez.isNotEmpty) return bez;
+    return selectedAnlagentyp.trim();
+  }
+
   /// Erstellt eine Parameter-Map aus dem gespeicherten Template-Parameter-String.
   /// Der String ist JSON (Attributname → Attributwert), wie beim Anlagen-Import in Einzelspalten.
   static Map<String, dynamic> buildEmptyParamsFromTemplate(String? parameterString) {
@@ -585,6 +699,136 @@ class TemplateService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// Vereinigt zwei Feldlisten (nach [key], spätere Einträge überschreiben).
+  static List<Map<String, dynamic>> mergeSchemaFieldLists(
+    List<Map<String, dynamic>> base,
+    List<Map<String, dynamic>> extra,
+  ) {
+    final byKey = <String, Map<String, dynamic>>{};
+    for (final f in base) {
+      final key = (f['key'] ?? '').toString();
+      if (key.isNotEmpty) byKey[key] = Map<String, dynamic>.from(f);
+    }
+    for (final f in extra) {
+      final key = (f['key'] ?? '').toString();
+      if (key.isNotEmpty) byKey[key] = Map<String, dynamic>.from(f);
+    }
+    return byKey.values.toList();
+  }
+
+  /// Findet den gespeicherten Revisionsobjekt-Key zu einem Anzeige-/Gruppenwert.
+  static String? resolveRevisionsobjektKeyForValue(
+    Disziplin discipline,
+    String value, {
+    List<Template>? templates,
+  }) {
+    final direct = discipline.resolveRevisionsobjektKey(value);
+    if (direct != null) return direct;
+
+    final v = value.trim().toLowerCase();
+    if (v.isEmpty) return null;
+
+    if (templates != null) {
+      for (final t in templates) {
+        if (t.anlageBauteil != 'a') continue;
+        final typ = t.anlagentyp.trim();
+        final bez = t.bezeichnung.trim();
+        if (typ.toLowerCase() == v || bez.toLowerCase() == v) {
+          return discipline.resolveRevisionsobjektKey(typ) ?? typ;
+        }
+      }
+    }
+
+    for (final k in discipline.revisionsobjektSchemas.keys) {
+      final kk = k.trim().toLowerCase();
+      if (kk == v || kk.contains(v) || v.contains(kk)) return k;
+    }
+
+    if (templates != null) {
+      for (final t in templates) {
+        if (t.anlageBauteil != 'a') continue;
+        final typ = t.anlagentyp.trim().toLowerCase();
+        if (typ.contains(v) || v.contains(typ)) {
+          return discipline.resolveRevisionsobjektKey(t.anlagentyp.trim()) ??
+              t.anlagentyp.trim();
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Sucht eine Gewerkevorlage (Anlage) zum Revisionsobjekt-Wert.
+  static Template? findTemplateForRevisionsobjekt(
+    List<Template> templates,
+    String revisionsobjektValue,
+  ) {
+    final v = revisionsobjektValue.trim().toLowerCase();
+    if (v.isEmpty) return null;
+
+    Template? partial;
+    for (final t in templates) {
+      if (t.anlageBauteil != 'a') continue;
+      final typ = t.anlagentyp.trim();
+      final bez = t.bezeichnung.trim();
+      if (typ.toLowerCase() == v || bez.toLowerCase() == v) return t;
+      if (partial == null &&
+          (typ.toLowerCase().contains(v) ||
+              v.contains(typ.toLowerCase()) ||
+              bez.toLowerCase().contains(v))) {
+        partial = t;
+      }
+    }
+    return partial;
+  }
+
+  /// Disziplin mit effektivem Schema für ein Revisionsobjekt (DB + Vorlage + Einstellungen).
+  static Disziplin disciplineWithSchemaForRevisionsobjekt({
+    required Disziplin discipline,
+    required String revisionsobjekt,
+    Template? template,
+    List<Template>? templatesForLookup,
+  }) {
+    final roRaw = revisionsobjekt.trim();
+    if (roRaw.isEmpty) return discipline;
+
+    final resolvedKey = resolveRevisionsobjektKeyForValue(
+          discipline,
+          roRaw,
+          templates: templatesForLookup,
+        ) ??
+        roRaw;
+
+    var roFields = discipline.revisionsobjektSchemas[resolvedKey] ?? const <Map<String, dynamic>>[];
+    roFields = roFields.map((f) => Map<String, dynamic>.from(f)).toList();
+
+    final templateToUse = template ??
+        (templatesForLookup != null
+            ? findTemplateForRevisionsobjekt(templatesForLookup, roRaw)
+            : null);
+    if (templateToUse != null) {
+      final fromTemplate = getSchemaFromTemplateParameter(templateToUse.parameter);
+      if (fromTemplate.isNotEmpty) {
+        roFields = mergeSchemaFieldLists(roFields, fromTemplate);
+      }
+    }
+
+    final mergedRoSchemas =
+        Map<String, List<Map<String, dynamic>>>.from(discipline.revisionsobjektSchemas);
+    if (roFields.isNotEmpty) {
+      mergedRoSchemas[resolvedKey] = roFields;
+    }
+
+    final withMaps = Disziplin(
+      label: discipline.label,
+      icon: discipline.icon,
+      color: discipline.color,
+      schema: discipline.schema,
+      groupingKey: discipline.groupingKey,
+      revisionsobjektSchemas: mergedRoSchemas,
+    );
+    return withMaps.withEffectiveSchema(revisionsobjekt: resolvedKey);
   }
 
   // Hinweis: Früher gab es hier eine Hilfsfunktion, die automatisch Disziplinen

@@ -17,13 +17,15 @@ import '../models/disziplin_schnittstelle.dart';
 import '../models/anlage.dart';
 import '../services/floor_plan_service.dart';
 import '../services/csv_service.dart';
+import '../services/template_service.dart';
 import '../utils/delete_utils.dart';
 import '../utils/app_log.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/csv_settings_provider.dart';
+import '../models/systems_grouping_mode.dart';
 import '../navigation/route_observer.dart';
 import 'widgets/generic_anlage_dialog.dart';
-import 'widgets/template_anlage_dialog.dart';
 
 // Import der Fullscreen-Version
 import 'floor_plan_page.dart';
@@ -81,21 +83,17 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   bool _disciplineSelectionMode = false;
   final Set<String> _selectedDisciplineLabels = {};
 
-  /// Globaler Gruppierungs-Key für alle Anlagen im Technik-Tab.
-  /// Wird in der AppBar (rechts neben Gebäudenamen) ausgewählt.
-  String? _systemsGroupingKey;
+  /// Gruppierungsart für alle Anlagen im Technik-Tab (AppBar rechts).
+  SystemsGroupingMode _systemsGroupingMode = SystemsGroupingMode.none;
 
-  /// Mögliche Gruppierungs-Keys (Attribut-Namen) aus allen Disziplin-Schemata.
-  List<String> _systemsGroupingOptions = [];
-
-  /// Lesbare Labels je Gruppierungs-Key (aus Schema, Fallback: Key selbst).
-  final Map<String, String> _systemsGroupingLabels = {};
-
-  /// Zuletzt aufgeklapptes Gewerk (für Add-FAB bei mehreren Gewerken).
-  Disziplin? _lastExpandedDiscipline;
-
-  /// Kontext für „Anlage zu Gruppe hinzufügen“ (nach Long-Press auf Gruppen-Header).
-  ({Disziplin discipline, String groupKey, String groupValue})? _addAnlageFromGroupContext;
+  bool _groupSelectionMode = false;
+  ({
+    Disziplin discipline,
+    String groupKey,
+    String groupValue,
+    Map<String, dynamic> additionalParams,
+    bool isSchemaItemLevel,
+  })? _groupSelectionContext;
 
   @override
   void initState() {
@@ -183,6 +181,49 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     _loadDisciplines();
     // Lade alle Anlagen für Fortschrittsanzeige
     _loadAllAnlagenForProgress();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_currentProject.id.isNotEmpty) {
+        ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+      }
+    });
+  }
+
+  String? _resolveSystemsGroupingParamKey() {
+    if (_systemsGroupingMode == SystemsGroupingMode.none) return null;
+
+    if (_currentProject.id.isNotEmpty) {
+      final settings = ref.read(csvSettingsProvider(_currentProject.id));
+      switch (_systemsGroupingMode) {
+        case SystemsGroupingMode.etage:
+          return settings.resolveEtageGroupingParamKey();
+        case SystemsGroupingMode.revisionsfeld:
+          return settings.resolveRevisionsfeldListGroupingParamKey();
+        case SystemsGroupingMode.none:
+          return null;
+      }
+    }
+
+    switch (_systemsGroupingMode) {
+      case SystemsGroupingMode.etage:
+        return 'Etage';
+      case SystemsGroupingMode.revisionsfeld:
+        return 'Gewerk';
+      case SystemsGroupingMode.none:
+        return null;
+    }
+  }
+
+  String? _resolveSystemsSubGroupingParamKey() {
+    if (_currentProject.id.isEmpty) return null;
+    final settings = ref.read(csvSettingsProvider(_currentProject.id));
+    return settings.resolveRevisionsobjektGroupingParamKey();
+  }
+
+  String? _resolveSystemsDisplayNameParamKey() {
+    if (_currentProject.id.isEmpty) return null;
+    final settings = ref.read(csvSettingsProvider(_currentProject.id));
+    return settings.resolveNameParamKey();
   }
 
   @override
@@ -206,10 +247,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   @override
   void didPopNext() {
-    // Wird aufgerufen, wenn von Datenmodell zurückgekehrt wird
-    _loadDisciplines();
-    // Aktualisiere auch Fortschritt
-    _loadAllAnlagenForProgress();
+    // Nur Disziplinen-Metadaten nachladen, keine vollständigen Anlagen-Reloads
+    _loadDisciplines(refreshSystemsPages: false);
   }
   
   /// Lädt alle Anlagen für dieses Gebäude (für ggf. spätere Fortschrittsnutzung).
@@ -217,7 +256,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     // Fortschrittsanzeige entfernt – Methode bleibt für konsistente Aufrufstellen.
   }
 
-  Future<void> _loadDisciplines({bool clearExpandedState = false}) async {
+  Future<void> _loadDisciplines({
+    bool clearExpandedState = false,
+    bool refreshSystemsPages = false,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
 
     if (clearExpandedState) {
@@ -264,85 +306,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       _technikTabKey = UniqueKey();
     }
     
-    // SystemsPages neu laden
-    _refreshSystemsPages();
-
-    // Globale Gruppierungsoptionen neu berechnen
-    await _rebuildSystemsGroupingOptions();
-  }
-
-  /// Bestimmte technische/Meta-Keys nicht für die globale Gruppierung anbieten.
-  bool _isReservedGroupingKey(String key) {
-    const reserved = {
-      'lfdNummer',
-      '__parentLfdNummer',
-      '__etageName',
-      'photoPaths',
-      'Gewerk',
-      'gewerk',
-      'Anlage/Bauteil',
-      'Anlage/Bautel',
-    };
-    if (reserved.contains(key)) return true;
-    if (key.startsWith('_') || key.startsWith('__')) return true;
-    return false;
-  }
-
-  /// Erzeugt die globale Liste der Gruppierungsfelder (Etage, Raum, …) aus allen Disziplin-Schemata.
-  Future<void> _rebuildSystemsGroupingOptions() async {
-    final keys = <String>{};
-    _systemsGroupingLabels.clear();
-
-    final dbService = ref.read(databaseServiceProvider);
-    final allAnlagen = await dbService.getAnlagenByBuildingId(_building.id);
-
-    // Primäre Quelle: tatsächlich vorhandene Attribut-Keys aus importierten/erfassten Anlagen.
-    for (final anlage in allAnlagen) {
-      anlage.params.forEach((rawKey, value) {
-        final key = rawKey.toString().trim();
-        if (key.isEmpty) return;
-        if (_isReservedGroupingKey(key)) return;
-        // Nur Felder berücksichtigen, die auch mindestens einmal einen Wert tragen.
-        final valueText = value?.toString().trim() ?? '';
-        if (valueText.isEmpty) return;
-        keys.add(key);
-      });
+    if (refreshSystemsPages || disciplinesChanged) {
+      _refreshSystemsPages();
     }
-
-    // Fallback/Ergänzung: Schema-Felder für den Fall, dass Werte noch nicht gesetzt wurden.
-    for (final d in _disciplines) {
-      for (final field in d.schema) {
-        final key = field['key']?.toString();
-        if (key == null || key.isEmpty) continue;
-        if (_isReservedGroupingKey(key)) continue;
-        keys.add(key);
-
-        final label = field['label']?.toString();
-        if (label != null && label.isNotEmpty) {
-          _systemsGroupingLabels[key] = label;
-        }
-      }
-    }
-
-    final sorted = keys.toList()
-      ..sort((a, b) {
-        final la = _systemsGroupingLabels[a] ?? a;
-        final lb = _systemsGroupingLabels[b] ?? b;
-        return la.toLowerCase().compareTo(lb.toLowerCase());
-      });
-
-    if (!mounted) return;
-    setState(() {
-      _systemsGroupingOptions = sorted;
-
-      // Nach Änderungen (insb. CSV-Import) immer ungegruppt starten.
-      // Zusätzlich ungültigen Gruppierungs-Key absichern.
-      if (_systemsGroupingKey != null &&
-          (_systemsGroupingKey!.isEmpty ||
-              !_systemsGroupingOptions.contains(_systemsGroupingKey))) {
-        _systemsGroupingKey = null;
-      }
-    });
   }
 
   void _refreshSystemsPages() {
@@ -375,17 +341,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       debugPrint('CSV-Import abgeschlossen: ${anlagen.length} Anlagen gefunden');
 
-      // Debug: Zeige Details der importierten Anlagen (inkl. Parent-LfdNummer)
-      for (final anlage in anlagen) {
-        debugPrint(
-          'Importierte Anlage: ${anlage.name}, '
-          'Lfd=${anlage.params['lfdNummer']}, '
-          'ParentLfd=${anlage.params['__parentLfdNummer']}, '
-          'Building: ${anlage.buildingId}, Floor: ${anlage.floorId}, '
-          'Discipline: ${anlage.discipline.label}, MarkerType: ${anlage.markerType}',
-        );
-      }
-
       // Anlagen in Datenbank speichern (mit hierarchischer Struktur)
       // WICHTIG: Es werden nur neue Anlagen hinzugefügt (wenn lfdNummer nicht existiert)
       // Bestehende Anlagen werden nicht gelöscht, um Datenverlust zu vermeiden
@@ -395,81 +350,73 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       int errorCount = 0;
       final List<String> failedRows = [];
       bool floorsAdded = false;
-      final Map<String, String> lfdToId = {}; // lfdNummer -> finale DB-ID (für parentId)
+      // Einmalig alle lfdNummern laden (statt pro Zeile die komplette Anlagenliste)
+      final lfdToId = await dbService.getLfdNummerToIdMap(_building.id);
+      final floorIdByName = <String, String>{
+        for (final f in _building.floors)
+          f.name.toLowerCase(): f.id,
+        for (final f in _building.floors)
+          if (f.pdfName != null && f.pdfName!.isNotEmpty)
+            f.pdfName!.toLowerCase(): f.id,
+      };
+      final pendingInserts = <Anlage>[];
+
       for (final anlage in anlagen) {
           try {
             // Etage auflösen/erstellen falls in CSV angegeben
             String resolvedFloorId = anlage.floorId;
             final etageName = (anlage.params['Etage'] ?? anlage.params['__etageName'])?.toString();
             if (etageName != null && etageName.isNotEmpty) {
-              // Suche nach Etage mit diesem Namen
-              var floor = _building.floors.firstWhere(
-                (f) => f.name.toLowerCase() == etageName.toLowerCase() || 
-                       (f.pdfName != null && f.pdfName!.toLowerCase() == etageName.toLowerCase()),
-                orElse: () => FloorPlan(id: '', name: ''),
-              );
-              
-              if (floor.id.isEmpty) {
-                // Neue Etage erstellen (ohne PDF)
+              final etageKey = etageName.toLowerCase();
+              var floorId = floorIdByName[etageKey];
+              if (floorId == null) {
                 final newId = 'floor_${DateTime.now().millisecondsSinceEpoch}_${etageName.replaceAll(' ', '_')}';
-                floor = FloorPlan(id: newId, name: etageName);
+                final floor = FloorPlan(id: newId, name: etageName);
                 _building.floors.add(floor);
+                floorIdByName[etageKey] = newId;
                 floorsAdded = true;
-                debugPrint('Neue Etage erstellt: $etageName (ID: $newId)');
+                floorId = newId;
               }
-              resolvedFloorId = floor.id;
+              resolvedFloorId = floorId;
             }
 
             // Prüfe, ob eine lfdNummer in den Params vorhanden ist
-            final lfdNummer = anlage.params['lfdNummer']?.toString();
+            final lfdNummer = anlage.params['lfdNummer']?.toString().trim();
             if (lfdNummer != null && lfdNummer.isNotEmpty) {
-              // Suche nach bestehender Anlage mit derselben lfdNummer
-              final existingAnlage = await dbService.getAnlageByLfdNummer(lfdNummer, _building.id);
-              if (existingAnlage != null) {
-                // Anlage mit dieser lfdNummer existiert bereits - überspringen
+              final existingId = lfdToId[lfdNummer];
+              if (existingId != null) {
                 skippedCount++;
-                debugPrint('Anlage übersprungen (existiert bereits): ${anlage.name} (lfd Nummer: $lfdNummer)');
-                // ID für parentId-Auflösung trotzdem speichern
-                lfdToId[lfdNummer] = existingAnlage.id;
-              } else {
-                // parentId über __parentLfdNummer auflösen (Bauteil)
-                final parentLfd = anlage.params['__parentLfdNummer']?.toString();
-                String? resolvedParentId;
-                if (parentLfd != null && parentLfd.isNotEmpty) {
-                  resolvedParentId = lfdToId[parentLfd];
-                  resolvedParentId ??= (await dbService.getAnlageByLfdNummer(parentLfd, _building.id))?.id;
-                }
-
-                final cleanedParams = Map<String, dynamic>.from(anlage.params);
-                cleanedParams.remove('__parentLfdNummer');
-                cleanedParams.remove('__etageName');
-
-                final toInsert = Anlage(
-                  id: anlage.id,
-                  parentId: resolvedParentId,
-                  name: anlage.name,
-                  params: cleanedParams,
-                  floorId: resolvedFloorId,
-                  buildingId: anlage.buildingId,
-                  isMarker: anlage.isMarker,
-                  markerInfo: anlage.markerInfo,
-                  markerType: anlage.markerType,
-                  discipline: anlage.discipline,
-                );
-
-                // Neue Anlage einfügen
-                await dbService.insertAnlage(toInsert);
-                savedCount++;
-                debugPrint('Anlage gespeichert: ${anlage.name} (lfd Nummer: $lfdNummer, ID: ${anlage.id}, Floor: $resolvedFloorId)');
-
-                lfdToId[lfdNummer] = anlage.id;
+                continue;
               }
+
+              final parentLfd = anlage.params['__parentLfdNummer']?.toString().trim();
+              String? resolvedParentId;
+              if (parentLfd != null && parentLfd.isNotEmpty) {
+                resolvedParentId = lfdToId[parentLfd];
+              }
+
+              final cleanedParams = Map<String, dynamic>.from(anlage.params);
+              cleanedParams.remove('__parentLfdNummer');
+              cleanedParams.remove('__etageName');
+
+              pendingInserts.add(Anlage(
+                id: anlage.id,
+                parentId: resolvedParentId,
+                name: anlage.name,
+                params: cleanedParams,
+                floorId: resolvedFloorId,
+                buildingId: anlage.buildingId,
+                isMarker: anlage.isMarker,
+                markerInfo: anlage.markerInfo,
+                markerType: anlage.markerType,
+                discipline: anlage.discipline,
+              ));
+              lfdToId[lfdNummer] = anlage.id;
             } else {
-              // Keine lfdNummer vorhanden - normale Einfügung
               final cleanedParams = Map<String, dynamic>.from(anlage.params);
               cleanedParams.remove('__etageName');
-              
-              final toInsert = Anlage(
+
+              pendingInserts.add(Anlage(
                 id: anlage.id,
                 parentId: anlage.parentId,
                 name: anlage.name,
@@ -480,17 +427,24 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                 markerInfo: anlage.markerInfo,
                 markerType: anlage.markerType,
                 discipline: anlage.discipline,
-              );
-              
-              await dbService.insertAnlage(toInsert);
-              savedCount++;
-              debugPrint('Anlage gespeichert: ${anlage.name} (${anlage.id}, Floor: $resolvedFloorId)');
+              ));
             }
           } catch (e) {
             errorCount++;
             final info = '${anlage.name} (lfd: ${anlage.params['lfdNummer']}): $e';
             failedRows.add(info);
-            debugPrint('Fehler beim Speichern der Anlage $info');
+            debugPrint('Fehler beim Vorbereiten der Anlage $info');
+          }
+        }
+
+        if (pendingInserts.isNotEmpty) {
+          try {
+            await dbService.insertAnlagenBatch(pendingInserts);
+            savedCount = pendingInserts.length;
+          } catch (e) {
+            errorCount += pendingInserts.length;
+            failedRows.add('Batch-Speichern: $e');
+            debugPrint('Fehler beim Batch-Speichern: $e');
           }
         }
 
@@ -508,15 +462,16 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       // Disziplinen neu laden (wichtig, da Schema aktualisiert wurde)
       debugPrint('Lade Disziplinen neu...');
-      await _loadDisciplines(clearExpandedState: true);
+      await _loadDisciplines(
+        clearExpandedState: true,
+        refreshSystemsPages: true,
+      );
       // Nach Import immer zunächst alle Anlagen ungefiltert anzeigen.
       if (mounted) {
         setState(() {
-          _systemsGroupingKey = null;
+          _systemsGroupingMode = SystemsGroupingMode.none;
         });
       }
-      await _rebuildSystemsGroupingOptions();
-      // SystemsPages neu laden, damit importierte Anlagen angezeigt werden
       _refreshSystemsPages();
 
       // Erfolgsmeldung anzeigen (inkl. Fehleranzahl, falls vorhanden)
@@ -768,9 +723,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   void _onDisciplineExpanded(Disziplin? discipline) {
-    if (discipline != null) {
-      _lastExpandedDiscipline = discipline;
-    }
     // Falls gerade eine Auswahl aktiv ist, merken wir uns alle aktiven Disziplinen,
     // damit wir die zugehörigen SystemsPages nach dem State-Update sauber beenden können.
     final activeDisciplines = _systemsSelectionMode 
@@ -1290,76 +1242,152 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     }
   }
 
-  Future<void> _openAddAnlageDialogDirect(Disziplin discipline, {Map<String, dynamic>? initialParams}) async {
-    void openManual() {
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (_) => GenericAnlageDialog(
-          discipline: discipline,
-          buildingId: _building.id,
-          floorId: 'global',
-          existingAnlage: null,
-          index: null,
-          initialParams: initialParams,
-          onSave: (newAnlage, _) async {
-            final dbService = ref.read(databaseServiceProvider);
-            final existing = await dbService.getAnlageById(newAnlage.id);
-            if (existing != null) {
-              await dbService.updateAnlage(newAnlage);
-            } else {
-              await dbService.insertAnlage(newAnlage);
-            }
+  Future<void> _openAddAnlageForGroupContext() async {
+    final ctx = _groupSelectionContext;
+    if (ctx == null || !ctx.isSchemaItemLevel) return;
 
-            if (!mounted) return;
-            await _loadAllAnlagenForProgress();
-            _refreshSystemsPages();
-            _exitDisciplineSelectionMode(); // AppBar schließen nach Erstellung
-          },
-        ),
+    final roValue = ctx.groupValue.trim();
+    if (roValue.isEmpty) return;
+
+    await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+    final csvSettings = ref.read(csvSettingsProvider(_currentProject.id));
+    // Param-Key der Long-Press-Gruppe (Schema-Ebene aus CSV-Einstellungen).
+    final schemaItemKey = ctx.groupKey.trim().isNotEmpty
+        ? ctx.groupKey.trim()
+        : (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
+            csvSettings.resolveSchemaItemParamKey());
+
+    final dbService = ref.read(databaseServiceProvider);
+
+    Disziplin discipline = ctx.discipline;
+    try {
+      final disciplines =
+          await dbService.getDisciplinesByBuildingId(_building.id);
+      discipline = disciplines.firstWhere(
+        (d) => d.label == ctx.discipline.label,
+        orElse: () => ctx.discipline,
+      );
+    } catch (_) {}
+
+    List<Template> gewerkTemplates = const [];
+    if (_currentProject.id.isNotEmpty) {
+      gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+        dbService,
+        _currentProject.id,
+        gewerk: ctx.discipline.label,
       );
     }
 
-    if (_currentProject.id.isEmpty) {
-      openManual();
-      return;
-    }
+    final matchedTemplate = gewerkTemplates.isNotEmpty
+        ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, roValue)
+        : null;
 
-    // Direkter Dialog, funktioniert auch wenn das Gewerk zugeklappt ist (SystemsPageState ist dann null).
-    showModalBottomSheet<void>(
+    final schemaRo = TemplateService.resolveRevisionsobjektKeyForValue(
+          discipline,
+          roValue,
+          templates: gewerkTemplates,
+        ) ??
+        (matchedTemplate?.anlagentyp.trim().isNotEmpty == true
+            ? matchedTemplate!.anlagentyp.trim()
+            : roValue);
+
+    final parentTemplate = matchedTemplate ??
+        Template(
+          gewerk: ctx.discipline.label,
+          anlageBauteil: 'a',
+          anlagentyp: schemaRo,
+          bezeichnung: schemaRo,
+        );
+
+    final effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: discipline,
+      revisionsobjekt: schemaRo,
+      template: parentTemplate,
+      templatesForLookup: gewerkTemplates,
+    );
+
+    final params = TemplateService.buildEmptyParamsFromTemplate(parentTemplate.parameter);
+    if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
+      params[schemaItemKey] = roValue;
+    }
+    params['Revisionsobjekt'] = schemaRo;
+    params['Anlagentyp'] = schemaRo;
+    params.addAll(ctx.additionalParams);
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => TemplateAnlageDialog(
-        dbService: ref.read(databaseServiceProvider),
-        projectId: _currentProject.id,
-        discipline: discipline,
+      builder: (_) => GenericAnlageDialog(
+        discipline: effectiveDiscipline,
         buildingId: _building.id,
         floorId: 'global',
-        onCreate: (created) async {
-          final dbService = ref.read(databaseServiceProvider);
-          for (final anlage in created) {
-            final existing = await dbService.getAnlageById(anlage.id);
-            if (existing != null) {
-              await dbService.updateAnlage(anlage);
-            } else {
-              await dbService.insertAnlage(anlage);
-            }
+        existingAnlage: null,
+        index: null,
+        initialParams: params,
+        initialName: '',
+        initialRevisionsobjekt: schemaRo,
+        onSave: (newAnlage, _) async {
+          final existing = await dbService.getAnlageById(newAnlage.id);
+          if (existing != null) {
+            await dbService.updateAnlage(newAnlage);
+          } else {
+            await dbService.insertAnlage(newAnlage);
           }
 
           if (!mounted) return;
           await _loadAllAnlagenForProgress();
           _refreshSystemsPages();
-          _exitDisciplineSelectionMode(); // AppBar schließen nach Erstellung
+          _exitGroupSelectionMode();
         },
-        onCreateManual: openManual,
       ),
     );
+  }
+
+  void _enterGroupSelectionMode(
+    Disziplin discipline,
+    String groupKey,
+    String groupValue,
+    Map<String, dynamic> additionalParams, {
+    required bool isSchemaItemLevel,
+  }) {
+    if (_systemsSelectionMode) {
+      final activeDisciplines = _activeSelections.keys.toList();
+      for (final label in activeDisciplines) {
+        try {
+          final disc = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
+          _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
+        } catch (_) {}
+      }
+    }
+
+    setState(() {
+      _systemsSelectionMode = false;
+      _systemsSelectedCount = 0;
+      _activeSelections.clear();
+      _disciplineSelectionMode = false;
+      _selectedDisciplineLabels.clear();
+      _groupSelectionMode = true;
+      _groupSelectionContext = (
+        discipline: discipline,
+        groupKey: groupKey,
+        groupValue: groupValue,
+        additionalParams: additionalParams,
+        isSchemaItemLevel: isSchemaItemLevel,
+      );
+    });
+    _drawerIconController.forward();
+  }
+
+  void _exitGroupSelectionMode() {
+    setState(() {
+      _groupSelectionMode = false;
+      _groupSelectionContext = null;
+    });
+    _drawerIconController.reverse();
   }
 
   void _enterDisciplineSelectionMode(Disziplin discipline) {
@@ -1372,6 +1400,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
         } catch (_) {}
       }
+    }
+    if (_groupSelectionMode) {
+      _exitGroupSelectionMode();
     }
 
     setState(() {
@@ -1772,14 +1803,18 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final isTechnikTab = _tabController.index == 1;
     final inSystemsSelection = isTechnikTab && _systemsSelectionMode;
     final inDisciplineSelection = isTechnikTab && _disciplineSelectionMode;
+    final inGroupSelection = isTechnikTab && _groupSelectionMode;
 
-    final inSelectionMode = inFloorplansSelection || inSystemsSelection || inDisciplineSelection;
+    final inSelectionMode =
+        inFloorplansSelection || inSystemsSelection || inDisciplineSelection || inGroupSelection;
 
     String appBarTitle;
     if (inFloorplansSelection) {
       appBarTitle = '${_selectedFloorIndexes.length} ausgewählt';
     } else if (inSystemsSelection) {
       appBarTitle = '$_systemsSelectedCount ausgewählt';
+    } else if (inGroupSelection) {
+      appBarTitle = _groupSelectionContext?.groupValue ?? 'Gruppe';
     } else if (inDisciplineSelection) {
       appBarTitle = '${_selectedDisciplineLabels.length} ausgewählt';
     } else {
@@ -1833,6 +1868,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                     _drawerIconController.reverse();
                   } else if (inDisciplineSelection) {
                     _exitDisciplineSelectionMode();
+                  } else if (inGroupSelection) {
+                    _exitGroupSelectionMode();
                   }
                 } else {
                   Scaffold.of(innerContext).openDrawer();
@@ -1881,32 +1918,25 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                               Expanded(
                                 child: DropdownButtonHideUnderline(
                                   child: DropdownButton<String>(
-                                    value: _systemsGroupingKey ?? '',
+                                    value: _systemsGroupingMode.storageValue,
                                     icon: const Icon(Icons.arrow_drop_down, size: 18),
                                     isDense: true,
-                                    menuMaxHeight: MediaQuery.of(context).size.height * 0.5,
-                                    items: [
-                                      const DropdownMenuItem<String>(
-                                        value: '',
-                                        child: Text(
-                                          'Keine Gruppierung',
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      ..._systemsGroupingOptions.map(
-                                        (key) => DropdownMenuItem<String>(
-                                          value: key,
-                                          child: Text(
-                                            _systemsGroupingLabels[key] ?? key,
-                                            overflow: TextOverflow.ellipsis,
+                                    items: SystemsGroupingMode.values
+                                        .map(
+                                          (mode) => DropdownMenuItem<String>(
+                                            value: mode.storageValue,
+                                            child: Text(
+                                              mode.label,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                    ],
+                                        )
+                                        .toList(),
                                     onChanged: (value) {
                                       setState(() {
-                                        final newKey = (value == null || value.isEmpty) ? null : value;
-                                        _systemsGroupingKey = newKey;
+                                        _systemsGroupingMode =
+                                            SystemsGroupingModeX.fromStorage(value) ??
+                                                SystemsGroupingMode.none;
                                       });
                                     },
                                   ),
@@ -1962,20 +1992,27 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               _refreshSystemsPages();
             },
             onSchemaUpdated: () async {
-              // Disziplinen neu laden, nachdem das Schema bearbeitet wurde
-              await _loadDisciplines();
+              await _loadDisciplines(refreshSystemsPages: true);
             },
             onImportCsv: _importCsv,
-            isAnySelectionActive: () => _systemsSelectionMode,
-            systemsGroupingKey: _systemsGroupingKey,
-            onGroupLongPress: (discipline, groupKey, groupValue) {
-              setState(() {
-                _addAnlageFromGroupContext = (
-                  discipline: discipline,
-                  groupKey: groupKey,
-                  groupValue: groupValue,
-                );
-              });
+            isAnySelectionActive: () =>
+                _systemsSelectionMode || _groupSelectionMode || _disciplineSelectionMode,
+            systemsGroupingKey: _resolveSystemsGroupingParamKey(),
+            systemsSubGroupingKey: _resolveSystemsSubGroupingParamKey(),
+            systemsDisplayNameParamKey: _resolveSystemsDisplayNameParamKey(),
+            onGroupLongPress: (discipline, groupKey, groupValue, additionalParams) {
+              CsvSettings? csvSettings;
+              if (_currentProject.id.isNotEmpty) {
+                csvSettings = ref.read(csvSettingsProvider(_currentProject.id));
+              }
+              final isLeafCreateGroup = csvSettings?.isCreateLeafFromGroupKey(groupKey) ?? false;
+              _enterGroupSelectionMode(
+                discipline,
+                groupKey,
+                groupValue,
+                additionalParams,
+                isSchemaItemLevel: isLeafCreateGroup,
+              );
             },
           ),
         ],
@@ -2035,10 +2072,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   /// Erstellt elegante Floating Action Buttons rechts unten basierend auf dem Selection-Mode
   Widget? _buildFloatingActionButtons() {
-    final inSelectionMode = _isSelectionMode || _systemsSelectionMode || _disciplineSelectionMode;
+    final inSelectionMode = _isSelectionMode ||
+        _systemsSelectionMode ||
+        _disciplineSelectionMode ||
+        _groupSelectionMode;
     final inFloorplansSelection = _isSelectionMode && _tabController.index == 0;
     final inSystemsSelection = _systemsSelectionMode && _tabController.index == 1;
     final inDisciplineSelection = _disciplineSelectionMode && _tabController.index == 1;
+    final inGroupSelection = _groupSelectionMode && _tabController.index == 1;
 
     // Grundriss-Tab: Button zum Hochladen (wenn nicht im Selection Mode)
     if (_tabController.index == 0 && !inSelectionMode) {
@@ -2050,30 +2091,30 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
     }
 
-    // Technik-Tab: Button zum Hinzufügen (wenn nicht im Selection Mode, wie bei Grundrissen)
-    if (_tabController.index == 1 && !inSelectionMode && _disciplines.isNotEmpty) {
-      return FloatingActionButton(
-        onPressed: () async {
-          final ctx = _addAnlageFromGroupContext;
-          final d = ctx != null
-              ? ctx.discipline
-              : (_disciplines.length == 1 ? _disciplines.first : (_lastExpandedDiscipline ?? _disciplines.first));
-          final initialParams = ctx != null ? {ctx.groupKey: ctx.groupValue} : null;
-          setState(() => _addAnlageFromGroupContext = null);
-          await _openAddAnlageDialogDirect(d, initialParams: initialParams);
-        },
-        tooltip: 'Anlage hinzufügen',
-        backgroundColor: Colors.green,
-        child: const Icon(Icons.add, color: Colors.white),
-      );
-    }
-
     // Selection Mode: Zeige mehrere Buttons vertikal angeordnet
     if (inSelectionMode) {
       final List<Widget> buttons = [];
 
-      if (inDisciplineSelection) {
-        // Gewerk-Auswahl: Bearbeiten, Hinzufügen, Löschen
+      if (inGroupSelection) {
+        final ctx = _groupSelectionContext;
+        if (ctx != null && ctx.isSchemaItemLevel) {
+          var leafLabel = 'Eintrag';
+          if (_currentProject.id.isNotEmpty) {
+            leafLabel = ref
+                .read(csvSettingsProvider(_currentProject.id))
+                .resolveLeafLevelLabel();
+          }
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.add,
+              tooltip: '$leafLabel hinzufügen',
+              onPressed: _openAddAnlageForGroupContext,
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else if (inDisciplineSelection) {
+        // Gewerk-Auswahl: nur Bearbeiten und Löschen (kein neues Revisionsobjekt)
         if (_selectedDisciplineLabels.length == 1) {
           buttons.add(
             _buildFloatingActionButton(
@@ -2081,19 +2122,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               tooltip: 'Gewerk bearbeiten',
               onPressed: _editSelectedDiscipline,
               backgroundColor: Colors.blue,
-            ),
-          );
-          buttons.add(
-            _buildFloatingActionButton(
-              icon: Icons.add,
-              tooltip: 'Anlage hinzufügen',
-              onPressed: () async {
-                final d = _getSingleSelectedDiscipline();
-                if (d != null) {
-                  await _openAddAnlageDialogDirect(d);
-                }
-              },
-              backgroundColor: Colors.green,
             ),
           );
         }
@@ -2122,12 +2150,16 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             debugPrint('Disziplin $activeLabel nicht gefunden beim Prüfen auf Bauteile');
           }
           
-          // Zeige "Bauteil hinzufügen" Button nur, wenn mindestens eine Anlage (kein Bauteil) ausgewählt ist
-          if (!hasOnlyBauteile) {
+          final csvSettings = _currentProject.id.isNotEmpty
+              ? ref.read(csvSettingsProvider(_currentProject.id))
+              : null;
+          final showChildAdd = csvSettings?.allowsParentChildRows ?? false;
+          if (showChildAdd && !hasOnlyBauteile) {
+            final childLabel = csvSettings!.labelBauteil;
             buttons.add(
               _buildFloatingActionButton(
                 icon: Icons.add,
-                tooltip: 'Bauteil hinzufügen',
+                tooltip: '$childLabel hinzufügen',
                 onPressed: _openBulkAddBauteilForSystemsSelection,
                 backgroundColor: Colors.green,
               ),
@@ -3226,7 +3258,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                         ),
                       );
                       // Disziplinen neu laden, falls sie in den Einstellungen geändert wurden
-                      await _loadDisciplines();
+                      await _loadDisciplines(refreshSystemsPages: true);
                     },
                   ),
                 ],

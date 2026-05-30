@@ -10,9 +10,10 @@ import 'package:uuid/uuid.dart';
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/csv_settings_provider.dart';
 import '../../services/anlage_validation_service.dart';
-import '../../services/dropdown_csv_service.dart';
 import '../../services/ocr_service.dart';
+import '../../services/template_service.dart';
 import '../../utils/app_log.dart';
 import 'photo_manager.dart';
 import 'ocr_camera_page.dart';
@@ -98,6 +99,9 @@ class GenericAnlageDialog extends ConsumerStatefulWidget {
   final void Function(Anlage anlage, int? index) onSave;
   /// Optionale Vorbefüllung für neue Anlagen (z.B. Gruppierungsattribut aus Long-Press auf Gruppe).
   final Map<String, dynamic>? initialParams;
+  final String? initialName;
+  /// Revisionsobjekt (Ebene 2), dessen Eingabefelder-Schema verwendet werden soll.
+  final String? initialRevisionsobjekt;
 
   const GenericAnlageDialog({
     Key? key,
@@ -109,6 +113,8 @@ class GenericAnlageDialog extends ConsumerStatefulWidget {
     this.index,
     required this.onSave,
     this.initialParams,
+    this.initialName,
+    this.initialRevisionsobjekt,
   }) : super(key: key);
 
   @override
@@ -120,12 +126,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
   late PhotoManager _photoManager;
-  DropdownCsvData? _dropdownCsvData;
-  bool _isLoadingDropdownCsv = false;
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
   bool _isNameEditable = true;
-  late Disziplin _currentDiscipline; // Aktuelle Disziplin-Daten (frisch aus DB geladen)
+  late Disziplin _currentDiscipline;
+  String? _schemaItemParamKey;
+  String _leafLevelLabel = 'Anlage';
+  String _childLevelLabel = 'Bauteil';
   
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
@@ -139,17 +146,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
     _currentDiscipline = widget.discipline;
     _initData();
-    _loadDropdownCsv();
-  }
-
-  Future<void> _loadDropdownCsv() async {
-    setState(() => _isLoadingDropdownCsv = true);
-    final data = await DropdownCsvService.loadForBuilding(widget.buildingId);
-    if (!mounted) return;
-    setState(() {
-      _dropdownCsvData = data;
-      _isLoadingDropdownCsv = false;
-    });
   }
 
   Future<void> _initData() async {
@@ -197,7 +193,44 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           color: updatedDiscipline.color,
           schema: mergedSchema,
           groupingKey: updatedDiscipline.groupingKey,
+          revisionsobjektSchemas: updatedDiscipline.revisionsobjektSchemas,
         );
+      } else {
+        // Neuanlage: vom Aufrufer vorbereitetes RO-Schema + gespeicherte Einstellungen aus DB
+        final ro = widget.initialRevisionsobjekt?.trim() ?? '';
+        var mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
+          widget.discipline.revisionsobjektSchemas,
+        );
+        updatedDiscipline.revisionsobjektSchemas.forEach((key, fields) {
+          mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
+            mergedRoSchemas[key] ?? const [],
+            fields,
+          );
+        });
+
+        var baseDiscipline = Disziplin(
+          label: updatedDiscipline.label,
+          icon: updatedDiscipline.icon,
+          color: updatedDiscipline.color,
+          schema: updatedDiscipline.schema,
+          groupingKey: updatedDiscipline.groupingKey,
+          revisionsobjektSchemas: mergedRoSchemas,
+        );
+
+        if (ro.isNotEmpty) {
+          effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+            discipline: baseDiscipline,
+            revisionsobjekt: ro,
+          );
+          if (effectiveDiscipline.schema.length <=
+              baseDiscipline.globalSchemaFields.length) {
+            effectiveDiscipline = widget.discipline.withEffectiveSchema(
+              revisionsobjekt: ro,
+            );
+          }
+        } else {
+          effectiveDiscipline = baseDiscipline;
+        }
       }
 
       if (mounted) {
@@ -240,11 +273,108 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
     }
     
-    _nameController = TextEditingController(text: widget.existingAnlage?.name ?? '');
+    _nameController = TextEditingController(
+      text: widget.existingAnlage?.name ?? widget.initialName ?? '',
+    );
     _nameController.addListener(_updateValidationStatus);
 
     // Lade CSV-Einstellungen für Name-Bearbeitbarkeit und Vorbefüllung
     await _loadSettingsAndPrefill();
+    _applyEffectiveSchemaFromParams();
+    _applyRevisionsobjektPrefill();
+  }
+
+  void _setParamAndController(String key, String value) {
+    if (key.isEmpty || value.isEmpty) return;
+    _params[key] = value;
+    _prefilledFields.add(key);
+    if (!_controllers.containsKey(key)) {
+      _controllers[key] = TextEditingController(text: value);
+      _controllers[key]!.addListener(_updateValidationStatus);
+    } else {
+      _controllers[key]!.text = value;
+    }
+  }
+
+  void _applyRevisionsobjektPrefill() {
+    final ro = widget.initialRevisionsobjekt?.trim();
+    if (ro == null || ro.isEmpty) return;
+
+    final keys = <String>{
+      if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty)
+        _schemaItemParamKey!.trim(),
+      'Revisionsobjekt',
+      'Anlagentyp',
+    };
+
+    for (final field in _currentDiscipline.schema) {
+      final key = (field['key'] ?? '').toString();
+      final label = (field['label'] ?? '').toString().toLowerCase();
+      if (key.isEmpty) continue;
+      if (label.contains('revisionsobjekt') ||
+          label.contains('anlagentyp') ||
+          label == ro.toLowerCase()) {
+        keys.add(key);
+      }
+    }
+
+    for (final key in keys) {
+      _setParamAndController(key, ro);
+    }
+
+    // Neue Anlage (Ebene 3), kein Bauteil
+    if (widget.parentId == null) {
+      for (final field in _currentDiscipline.schema) {
+        final key = (field['key'] ?? '').toString();
+        final label = (field['label'] ?? '').toString().toLowerCase();
+        if (key.isEmpty) continue;
+        if (label.contains('bauteil') || label == 'a/b') {
+          _setParamAndController(key, 'A');
+        }
+      }
+    }
+  }
+
+  String? _resolveRevisionsobjektFromParams() {
+    if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty) {
+      final v = _params[_schemaItemParamKey]?.toString().trim();
+      if (v != null && v.isNotEmpty) return v;
+    }
+    for (final ro in _currentDiscipline.revisionsobjektNames) {
+      for (final entry in _params.entries) {
+        if (entry.value?.toString().trim() == ro) return ro;
+      }
+    }
+    const candidateKeys = ['Revisionsobjekt', 'Anlagentyp', 'Anlage'];
+    for (final key in candidateKeys) {
+      final value = _params[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  bool _isSchemaItemField(String key, String label) {
+    final paramKey = _schemaItemParamKey?.trim();
+    if (paramKey == null || paramKey.isEmpty) return false;
+    if (key == paramKey) return true;
+    return label.trim().toLowerCase() == paramKey.toLowerCase();
+  }
+
+  void _onSchemaDrivingParamChanged(String key, String label, String value) {
+    if (!_isSchemaItemField(key, label)) return;
+    if (value.trim().isEmpty) return;
+    _applyEffectiveSchemaFromParams();
+  }
+
+  void _applyEffectiveSchemaFromParams() {
+    if (!mounted) return;
+    final ro =
+        widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+            ? widget.initialRevisionsobjekt!.trim()
+            : _resolveRevisionsobjektFromParams();
+    setState(() {
+      _currentDiscipline = _currentDiscipline.withEffectiveSchema(revisionsobjekt: ro);
+    });
   }
 
   Future<void> _loadSettingsAndPrefill() async {
@@ -252,6 +382,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final dbService = ref.read(databaseServiceProvider);
       final projectId = await dbService.getProjectIdByBuildingId(widget.buildingId);
       if (projectId == null) return;
+
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      final csvSettings = ref.read(csvSettingsProvider(projectId));
+      _leafLevelLabel = csvSettings.resolveLeafLevelLabel();
+      _childLevelLabel = csvSettings.labelBauteil;
+      final roInit = widget.initialRevisionsobjekt?.trim();
+      _schemaItemParamKey = (roInit != null && roInit.isNotEmpty)
+          ? (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
+              csvSettings.resolveSchemaItemParamKey())
+          : csvSettings.resolveSchemaItemParamKey();
+      if (mounted) setState(() {});
 
       final prefs = await SharedPreferences.getInstance();
       final key = 'csv_settings_$projectId';
@@ -263,8 +404,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           _isNameEditable = settings['nameBearbeitbar'] as bool? ?? true;
         });
 
-        // Vorbefüllung nur bei Neuanlage
-        if (widget.existingAnlage == null) {
+        // Vorbefüllung nur bei Neuanlage ohne festes Revisionsobjekt
+        if (widget.existingAnlage == null &&
+            (widget.initialRevisionsobjekt == null ||
+                widget.initialRevisionsobjekt!.trim().isEmpty)) {
           // Suche Felder im Schema, die diesen Spalten entsprechen
           for (var field in _currentDiscipline.schema) {
             final fieldKey = field['key'];
@@ -272,38 +415,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
             // Vorbefüllung "Gewerk"
             if (field['label']?.toString().toLowerCase().contains('gewerk') == true) {
-              _params[fieldKey] = _currentDiscipline.label;
-              if (!_controllers.containsKey(fieldKey)) {
-                _controllers[fieldKey] = TextEditingController(text: _currentDiscipline.label);
-                _controllers[fieldKey]!.addListener(_updateValidationStatus);
-              } else {
-                _controllers[fieldKey]!.text = _currentDiscipline.label;
-              }
+              _setParamAndController(fieldKey.toString(), _currentDiscipline.label);
             }
 
-            // Vorbefüllung "Anlagentyp"
-            if (field['label']?.toString().toLowerCase().contains('anlagentyp') == true ||
-                field['label']?.toString().toLowerCase().contains('typ') == true) {
-              _params[fieldKey] = _currentDiscipline.label; // Standardmäßig das Gewerk als Typ
-              if (!_controllers.containsKey(fieldKey)) {
-                _controllers[fieldKey] = TextEditingController(text: _currentDiscipline.label);
-                _controllers[fieldKey]!.addListener(_updateValidationStatus);
-              } else {
-                _controllers[fieldKey]!.text = _currentDiscipline.label;
-              }
-            }
-
-            // Vorbefüllung "Anlage/Bauteil"
+            // Vorbefüllung "Anlage/Bauteil" (nur A/B-Kennung, nicht Revisionsobjekt)
             if (field['label']?.toString().toLowerCase().contains('bauteil') == true ||
                 field['label']?.toString().toLowerCase() == 'a/b') {
               final value = widget.parentId != null ? 'B' : 'A';
-              _params[fieldKey] = value;
-              if (!_controllers.containsKey(fieldKey)) {
-                _controllers[fieldKey] = TextEditingController(text: value);
-                _controllers[fieldKey]!.addListener(_updateValidationStatus);
-              } else {
-                _controllers[fieldKey]!.text = value;
-              }
+              _setParamAndController(fieldKey.toString(), value);
             }
           }
         }
@@ -1069,7 +1188,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final label = fieldDef['label'] as String;
       final type = (fieldDef['type'] ?? 'string').toString();
       final isEditable = fieldDef['editable'] ?? true;
-      final dropdownColumn = (fieldDef['dropdownColumn'] ?? '').toString().trim();
       
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
@@ -1151,6 +1269,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         if (wasEmpty && val.trim().isNotEmpty) {
           _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
         }
+        _onSchemaDrivingParamChanged(key, label, val);
         _updateValidationStatus();
       }
 
@@ -1167,13 +1286,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       if (type == 'dropdown' || type == 'select') {
         final inlineOptions = fieldDef['options'];
         List<String> options = const [];
-        final hasInlineOptions = inlineOptions is List && inlineOptions.isNotEmpty;
-        if (hasInlineOptions) {
+        if (inlineOptions is List && inlineOptions.isNotEmpty) {
           options = inlineOptions.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
         }
-        final data = _dropdownCsvData;
-        if (options.isEmpty && dropdownColumn.isNotEmpty && data != null) {
-          options = data.valuesByHeader[dropdownColumn] ?? const <String>[];
+        if (options.isEmpty && _isSchemaItemField(key, label)) {
+          options = _currentDiscipline.revisionsobjektNames;
         }
 
         String? currentValue = controller.text.trim().isEmpty ? null : controller.text.trim();
@@ -1209,35 +1326,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
               ),
             ),
-            if (!hasInlineOptions && _isLoadingDropdownCsv)
+            if (options.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Dropdown-Werte werden geladen …',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              )
-            else if (!hasInlineOptions && (data == null || data.error != null))
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  data?.error ?? 'Keine Dropdown-CSV importiert',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
-                ),
-              )
-            else if (!hasInlineOptions && dropdownColumn.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Keine Dropdown-Spalte konfiguriert (im Feld bearbeiten).',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
-                ),
-              )
-            else if (!hasInlineOptions && options.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Keine Werte in Spalte „$dropdownColumn“ gefunden.',
+                  'Keine Dropdown-Optionen definiert.',
                   style: TextStyle(fontSize: 12, color: Colors.orange[800]),
                 ),
               ),
@@ -1434,8 +1527,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.existingAnlage != null;
-    final isBauteilCreate = !isEdit && widget.parentId != null;
+    final isChildCreate = !isEdit && widget.parentId != null;
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
+    final dialogTitle = isEdit
+        ? '$_leafLevelLabel bearbeiten'
+        : (isChildCreate
+            ? 'Neues $_childLevelLabel erfassen'
+            : 'Neues $_leafLevelLabel erfassen');
+    final nameLabel = (widget.parentId != null ||
+            widget.existingAnlage?.parentId != null)
+        ? 'Name ($_childLevelLabel)'
+        : 'Name ($_leafLevelLabel)';
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
@@ -1490,9 +1592,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  isEdit
-                                      ? 'Anlage bearbeiten'
-                                      : (isBauteilCreate ? 'Neues Bauteil erfassen' : 'Neue Anlage erfassen'),
+                                  dialogTitle,
                                   style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w600,
@@ -1580,9 +1680,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                               color: _isNameEditable ? Colors.black87 : Colors.grey[600],
                             ),
                             decoration: InputDecoration(
-                              labelText: (widget.parentId != null || widget.existingAnlage?.parentId != null) 
-                                  ? 'Bauteilname' 
-                                  : 'Anlagenname',
+                              labelText: nameLabel,
                               labelStyle: TextStyle(
                                 color: Colors.grey[600],
                                 fontWeight: FontWeight.w500,

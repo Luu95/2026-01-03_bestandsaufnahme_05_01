@@ -6,6 +6,13 @@ import '../../models/disziplin_schnittstelle.dart';
 import '../../database/database_service.dart';
 import '../../services/template_service.dart';
 
+typedef TemplateFormProceedCallback = void Function({
+  required String selectedGewerk,
+  required String selectedAnlagentyp,
+  required Template parentTemplate,
+  required List<Template> childTemplates,
+});
+
 class TemplateAnlageDialog extends StatefulWidget {
   final DatabaseService dbService;
   final String projectId;
@@ -14,6 +21,9 @@ class TemplateAnlageDialog extends StatefulWidget {
   final String floorId;
   final void Function(List<Anlage> created) onCreate;
   final VoidCallback? onCreateManual;
+  final TemplateFormProceedCallback? onProceedToForm;
+  final String gewerkLevelLabel;
+  final String anlageLevelLabel;
 
   const TemplateAnlageDialog({
     Key? key,
@@ -24,6 +34,9 @@ class TemplateAnlageDialog extends StatefulWidget {
     required this.floorId,
     required this.onCreate,
     this.onCreateManual,
+    this.onProceedToForm,
+    this.gewerkLevelLabel = 'Gewerk',
+    this.anlageLevelLabel = 'Anlage',
   }) : super(key: key);
 
   @override
@@ -154,37 +167,36 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
               parameter: null,
             ));
 
+    final childTemplates =
+        matching.where((t) => t.anlageBauteil == 'b').toList();
+
+    if (widget.onProceedToForm != null) {
+      widget.onProceedToForm!(
+        selectedGewerk: gewerkForTemplate,
+        selectedAnlagentyp: selectedType.trim(),
+        parentTemplate: parentTemplate,
+        childTemplates: childTemplates,
+      );
+      Navigator.of(context).pop();
+      return;
+    }
+
     final parentId = _uuid.v4();
     final parentName = parentTemplate.bezeichnung.trim().isNotEmpty
         ? parentTemplate.bezeichnung.trim()
         : parentTemplate.anlagentyp.trim();
+    final disciplineWithSchema = widget.discipline.withEffectiveSchema(
+      revisionsobjekt: parentTemplate.anlagentyp.trim(),
+    );
+
     final parentParams = TemplateService.buildEmptyParamsFromTemplate(
       parentTemplate.parameter,
     );
-
-    // Disziplin mit Schema aus der Vorlage, damit die individuellen Attribute
-    // in der Parameterliste erscheinen (z.B. Brennstoff, Wasserart)
-    final schemaFromTemplate = TemplateService.getSchemaFromTemplateParameter(parentTemplate.parameter);
-    final mergedKeys = widget.discipline.schema
-        .map((f) => (f['key'] ?? '').toString())
-        .where((k) => k.isNotEmpty)
-        .toSet();
-    final additionalSchema = <Map<String, dynamic>>[];
-    for (final f in schemaFromTemplate) {
-      final k = (f['key'] ?? '').toString();
-      if (k.isNotEmpty && !mergedKeys.contains(k)) {
-        additionalSchema.add(Map<String, dynamic>.from(f));
-        mergedKeys.add(k);
-      }
+    final anlagentyp = parentTemplate.anlagentyp.trim();
+    if (anlagentyp.isNotEmpty) {
+      parentParams['Anlagentyp'] = anlagentyp;
+      parentParams['Revisionsobjekt'] = anlagentyp;
     }
-    final mergedSchema = [...widget.discipline.schema, ...additionalSchema];
-    final disciplineWithSchema = Disziplin(
-      label: widget.discipline.label,
-      icon: widget.discipline.icon,
-      color: widget.discipline.color,
-      schema: mergedSchema,
-      groupingKey: widget.discipline.groupingKey,
-    );
 
     final parent = Anlage(
       id: parentId,
@@ -199,31 +211,13 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       discipline: disciplineWithSchema,
     );
 
-    final children = matching
-        .where((t) => t.anlageBauteil == 'b')
+    final children = childTemplates
         .map((t) {
       final name = t.bezeichnung.trim().isNotEmpty
           ? t.bezeichnung.trim()
           : t.anlagentyp.trim();
-      final childSchemaFromTemplate = TemplateService.getSchemaFromTemplateParameter(t.parameter);
-      final childMergedKeys = disciplineWithSchema.schema
-          .map((f) => (f['key'] ?? '').toString())
-          .where((k) => k.isNotEmpty)
-          .toSet();
-      final childAdditionalSchema = <Map<String, dynamic>>[];
-      for (final f in childSchemaFromTemplate) {
-        final k = (f['key'] ?? '').toString();
-        if (k.isNotEmpty && !childMergedKeys.contains(k)) {
-          childAdditionalSchema.add(Map<String, dynamic>.from(f));
-          childMergedKeys.add(k);
-        }
-      }
-      final childDiscipline = Disziplin(
-        label: disciplineWithSchema.label,
-        icon: disciplineWithSchema.icon,
-        color: disciplineWithSchema.color,
-        schema: [...disciplineWithSchema.schema, ...childAdditionalSchema],
-        groupingKey: disciplineWithSchema.groupingKey,
+      final childDiscipline = disciplineWithSchema.withEffectiveSchema(
+        revisionsobjekt: t.anlagentyp.trim(),
       );
       return Anlage(
         id: _uuid.v4(),
@@ -314,7 +308,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
                   children: [
                     if (hasMultipleGewerke) ...[
                       Text(
-                        'Gewerk',
+                        widget.gewerkLevelLabel,
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -342,7 +336,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
                       const SizedBox(height: 16),
                     ],
                     Text(
-                      'Anlagentyp',
+                      widget.anlageLevelLabel,
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,

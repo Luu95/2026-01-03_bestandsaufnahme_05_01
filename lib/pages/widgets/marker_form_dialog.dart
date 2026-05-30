@@ -6,7 +6,6 @@ import '../../models/anlage.dart';
 import '../../models/marker.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../database/database_service.dart';
-import '../../services/dropdown_csv_service.dart';
 import 'photo_manager.dart';
 
 /// Bottom-Sheet zum Hinzufügen oder Bearbeiten eines Markers auf dem PDF-Grundriss.
@@ -56,9 +55,6 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
 
-  DropdownCsvData? _dropdownCsvData;
-  bool _isLoadingDropdownCsv = false;
-
   TabController? _tabController;
   final TextEditingController _existingSearchController = TextEditingController();
   String _existingQuery = '';
@@ -73,7 +69,6 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
     super.initState();
     _titleController = TextEditingController(text: widget.existing?.title ?? '');
     _loadAvailableDisciplines();
-    _loadDropdownCsv();
 
     if (_supportsExistingSelection) {
       _tabController = TabController(length: 2, vsync: this, initialIndex: 0)
@@ -112,16 +107,6 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
         _photoManager.updateImageFiles(files);
       }
     }
-  }
-
-  Future<void> _loadDropdownCsv() async {
-    setState(() => _isLoadingDropdownCsv = true);
-    final data = await DropdownCsvService.loadForBuilding(widget.buildingId);
-    if (!mounted) return;
-    setState(() {
-      _dropdownCsvData = data;
-      _isLoadingDropdownCsv = false;
-    });
   }
 
   Future<void> _loadAvailableDisciplines() async {
@@ -447,8 +432,6 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
       final label = fieldDef['label'] as String;
       final type = (fieldDef['type'] ?? 'string').toString();
       final editable = (fieldDef['editable'] ?? true) == true;
-      final dropdownColumn = (fieldDef['dropdownColumn'] ?? '').toString().trim();
-
       if (!_controllers.containsKey(key)) {
         final initial = widget.existing?.params?[key]?.toString() ?? '';
         _controllers[key] = TextEditingController(text: initial);
@@ -528,10 +511,11 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
           ),
         );
       } else if (type == 'dropdown') {
-        final data = _dropdownCsvData;
-        final options = (data != null && dropdownColumn.isNotEmpty)
-            ? (data.valuesByHeader[dropdownColumn] ?? const <String>[])
-            : const <String>[];
+        final inlineOptions = fieldDef['options'];
+        List<String> options = const [];
+        if (inlineOptions is List && inlineOptions.isNotEmpty) {
+          options = inlineOptions.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
+        }
 
         String? currentValue;
         if (_params.containsKey(key)) {
@@ -572,35 +556,11 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                 focusedBorder: InputBorder.none,
               ),
             ),
-            if (_isLoadingDropdownCsv)
+            if (options.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'Dropdown-Werte werden geladen …',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              )
-            else if (data == null || (data.error != null))
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  data?.error ?? 'Keine Dropdown-CSV importiert',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
-                ),
-              )
-            else if (dropdownColumn.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Keine Dropdown-Spalte konfiguriert (im Feld bearbeiten).',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
-                ),
-              )
-            else if (options.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Keine Werte in Spalte „$dropdownColumn“ gefunden.',
+                  'Keine Dropdown-Optionen definiert.',
                   style: TextStyle(fontSize: 12, color: Colors.orange[800]),
                 ),
               ),

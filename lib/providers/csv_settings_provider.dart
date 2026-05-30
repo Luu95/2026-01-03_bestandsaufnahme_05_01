@@ -4,8 +4,9 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/csv_hierarchy_level.dart';
+
 /// Ein explizites Paar: eine Spalte für den Attributnamen, eine für den Attributwert.
-/// Beim Import wird pro Zeile gelesen: params[wert(nameSpalte)] = wert(valueSpalte).
 class AttributeColumnPair {
   final int nameColumn;
   final int valueColumn;
@@ -28,11 +29,39 @@ class AttributeColumnPair {
   }
 }
 
+/// Dreiergruppe für Gewerkevorlagen: Attributname, Typ und Optionen.
+class AttributeTripletColumn {
+  final int nameColumn;
+  final int typeColumn;
+  final int optionsColumn;
+
+  const AttributeTripletColumn({
+    required this.nameColumn,
+    required this.typeColumn,
+    required this.optionsColumn,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'nameColumn': nameColumn,
+        'typeColumn': typeColumn,
+        'optionsColumn': optionsColumn,
+      };
+
+  factory AttributeTripletColumn.fromJson(Map<String, dynamic> json) {
+    return AttributeTripletColumn(
+      nameColumn: json['nameColumn'] as int? ?? 0,
+      typeColumn: json['typeColumn'] as int? ?? 0,
+      optionsColumn: json['optionsColumn'] as int? ?? 0,
+    );
+  }
+}
+
 class CsvSettings {
-  final int lfdNummerSpalte;
-  final int nameSpalte;
-  final int gewerkSpalte;
+  final HierarchyLevelConfig level1;
+  final HierarchyLevelConfig level2;
+  final HierarchyLevelConfig level3;
   final int? etageSpalte;
+  /// Legacy: A/B-Spalte für alte CSV-Formate (optional).
   final int? anlageBauteilSpalte;
   final String delimiterMode;
   final String anlageKuerzel;
@@ -42,20 +71,20 @@ class CsvSettings {
   final String labelAnlage;
   final String labelBauteil;
   final List<AttributeColumnPair> attributeColumnPairs;
-  /// Spalten-Labels für Fotonummern beim Export (1–4). Leer = Spalte nicht verwendet.
   final String? foto1SpalteLabel;
   final String? foto2SpalteLabel;
   final String? foto3SpalteLabel;
   final String? foto4SpalteLabel;
-  /// Beim Anlagen-Import aus CSV gespeicherte Header-Zeile; für Export „wie Import“.
   final List<String> importHeaderRow;
-  /// Beim Export verwendeter Delimiter (z. B. ';' oder ','). Wird beim Import aus erkanntem Delimiter gesetzt.
   final String exportDelimiter;
+  final String groupingEtageParamKey;
+  final String groupingGewerkParamKey;
+  final String groupingAnlageParamKey;
 
   const CsvSettings({
-    required this.lfdNummerSpalte,
-    required this.nameSpalte,
-    required this.gewerkSpalte,
+    required this.level1,
+    required this.level2,
+    required this.level3,
     this.etageSpalte,
     this.anlageBauteilSpalte,
     required this.delimiterMode,
@@ -72,13 +101,175 @@ class CsvSettings {
     this.foto4SpalteLabel,
     this.importHeaderRow = const [],
     this.exportDelimiter = ';',
+    this.groupingEtageParamKey = '',
+    this.groupingGewerkParamKey = '',
+    this.groupingAnlageParamKey = '',
   });
+
+  /// Alle aktiven Ebenen in Reihenfolge (1 → 2 → 3).
+  List<HierarchyLevelConfig> get enabledLevelsOrdered {
+    final levels = <HierarchyLevelConfig>[];
+    if (level1.enabled) levels.add(level1);
+    if (level2.enabled) levels.add(level2);
+    if (level3.enabled) levels.add(level3);
+    return levels;
+  }
+
+  /// Unterste aktive Ebene = Blatt (ein CSV-Datensatz pro Zeile).
+  HierarchyLevelConfig? get leafLevel {
+    final levels = enabledLevelsOrdered;
+    return levels.isEmpty ? null : levels.last;
+  }
+
+  String? _headerLabelAt(int? columnIndex) {
+    if (columnIndex == null || columnIndex < 0 || columnIndex >= importHeaderRow.length) {
+      return null;
+    }
+    final label = importHeaderRow[columnIndex].trim();
+    return label.isEmpty ? null : label;
+  }
+
+  String resolveEtageGroupingParamKey() {
+    final override = groupingEtageParamKey.trim();
+    if (override.isNotEmpty) return override;
+    return _headerLabelAt(etageSpalte) ?? 'Etage';
+  }
+
+  /// Ob Ebene 1 bereits als Gewerk/Disziplin-Tab genutzt wird (keine Listen-Gruppierung nötig).
+  bool get level1IsDiscipline => level1.enabled && useDisciplineGrouping;
+
+  String resolveGewerkGroupingParamKey() {
+    final override = groupingGewerkParamKey.trim();
+    if (override.isNotEmpty) return override;
+    if (level1.enabled) return _headerLabelAt(level1.nameColumn) ?? labelGewerk;
+    return labelGewerk;
+  }
+
+  /// Gruppierungs-Key für den Listen-Header „Revisionsfeld“.
+  /// Null, wenn Ebene 1 bereits die Disziplin ist (sonst doppeltes „Brandschutz“).
+  String? resolveRevisionsfeldListGroupingParamKey() {
+    if (level1IsDiscipline) return null;
+    return resolveGewerkGroupingParamKey();
+  }
+
+  /// Param-Key für Untergruppierung (mittlere Ebene), wenn mindestens 2 Ebenen aktiv.
+  String? resolveAnlageGroupingParamKey() {
+    final override = groupingAnlageParamKey.trim();
+    if (override.isNotEmpty) return override;
+    final levels = enabledLevelsOrdered;
+    if (levels.length < 2) return null;
+    // 3 Ebenen: mittlere Ebene (2); 2 Ebenen: untere Ebene (2) = Schema-/Listen-Untergruppe
+    if (level2.enabled && levels.length >= 2) {
+      return _headerLabelAt(level2.nameColumn);
+    }
+    if (levels.length == 2 && level1.enabled && level3.enabled) {
+      if (level1IsDiscipline) return null;
+      return _headerLabelAt(level1.nameColumn);
+    }
+    return null;
+  }
+
+  String? resolveNameParamKey() {
+    final leaf = leafLevel;
+    if (leaf == null) return null;
+    return _headerLabelAt(leaf.nameColumn);
+  }
+
+  /// Param-Key der Ebene, deren Wert das Attribut-Schema bestimmt (Unterebene des Gewerks).
+  String? resolveSchemaItemParamKey() {
+    final override = groupingAnlageParamKey.trim();
+    if (override.isNotEmpty) return override;
+    // Gewerk = Tab (Ebene 1): Schema kommt immer von Ebene 2 (Revisionsobjekt)
+    if (level1IsDiscipline && level2.enabled) {
+      return _headerLabelAt(level2.nameColumn) ?? labelAnlage;
+    }
+    // Schema liegt auf Revisionsobjekt (Ebene 2), nicht auf historischer Bauteil-Ebene 3.
+    final fromRevisionsobjekt = resolveRevisionsobjektGroupingParamKey();
+    if (fromRevisionsobjekt != null && fromRevisionsobjekt.isNotEmpty) {
+      return fromRevisionsobjekt;
+    }
+    final fromGrouping = resolveAnlageGroupingParamKey();
+    if (fromGrouping != null && fromGrouping.isNotEmpty) return fromGrouping;
+    if (level2.enabled && enabledLevelsOrdered.length >= 2) {
+      return _headerLabelAt(level2.nameColumn) ?? labelAnlage;
+    }
+    if (level3.enabled && level1.enabled && !level1IsDiscipline) {
+      return _headerLabelAt(level3.nameColumn) ?? labelBauteil;
+    }
+    return _headerLabelAt(leafLevel?.nameColumn);
+  }
+
+  /// Param-Key für Untergruppierung (Revisionsobjekt-Gruppen in der Liste).
+  String? resolveRevisionsobjektGroupingParamKey() {
+    if (level1IsDiscipline && level2.enabled) {
+      final override = groupingAnlageParamKey.trim();
+      if (override.isNotEmpty) return override;
+      return _headerLabelAt(level2.nameColumn) ?? labelAnlage;
+    }
+    return resolveAnlageGroupingParamKey();
+  }
+
+  /// Anzeige-Label der Schema-Unterebene (CSV-Mapping Ebene 2 oder 3).
+  String resolveSchemaItemLevelLabel() {
+    if (level2.enabled && enabledLevelsOrdered.length >= 2) return labelAnlage;
+    if (level3.enabled) return labelBauteil;
+    return labelAnlage;
+  }
+
+  /// Anzeige-Label der untersten aktiven Ebene (= ein Datensatz in der App).
+  String resolveLeafLevelLabel() {
+    final n = enabledLevelsOrdered.length;
+    if (n <= 1) return labelGewerk;
+    if (n == 2) return labelAnlage;
+    return labelBauteil;
+  }
+
+  /// Ob aus der Listen-Gruppe mit diesem Param-Key ein neuer Blatt-Datensatz angelegt werden darf.
+  bool isCreateLeafFromGroupKey(String groupingParamKey) {
+    final gk = groupingParamKey.trim();
+    if (gk.isEmpty) return false;
+    final schemaKey = resolveSchemaItemParamKey()?.trim() ?? '';
+    if (schemaKey.isNotEmpty &&
+        gk.toLowerCase() == schemaKey.toLowerCase()) {
+      return true;
+    }
+    final levels = enabledLevelsOrdered;
+    if (levels.length == 2 && level2.enabled) {
+      final l2 = _headerLabelAt(level2.nameColumn)?.trim() ?? labelAnlage;
+      if (gk.toLowerCase() == l2.toLowerCase()) return true;
+    }
+    return false;
+  }
+
+  /// Untergeordnete Zeilen mit parentId (historisch Ebene 3 / labelBauteil).
+  bool get allowsParentChildRows =>
+      level3.enabled && enabledLevelsOrdered.length >= 3;
+
+  /// Nummer (1–3) der Ebene, unter der pro Eintrag ein Attribut-Schema liegt.
+  int? get schemaItemLevelNumber {
+    if (level2.enabled && enabledLevelsOrdered.length >= 2) return 2;
+    if (level3.enabled) return 3;
+    return null;
+  }
+
+  String get schemaDisciplineLevelLabel => labelGewerk;
+
+  // --- Legacy-Getter ---
+  int get gewerkSpalte => level1.nameColumn;
+  int get nameSpalte => leafLevel?.nameColumn ?? 1;
+  int get lfdNummerSpalte => leafLevel?.idColumn ?? 0;
+  int? get anlageEbeneSpalte =>
+      level2.enabled && enabledLevelsOrdered.length >= 2 ? level2.nameColumn : null;
 
   factory CsvSettings.defaults() {
     return const CsvSettings(
-      lfdNummerSpalte: 0,
-      nameSpalte: 1,
-      gewerkSpalte: 2,
+      level1: HierarchyLevelConfig(enabled: true, nameColumn: 2),
+      level2: HierarchyLevelConfig(enabled: false, nameColumn: 1),
+      level3: HierarchyLevelConfig(
+        enabled: true,
+        nameColumn: 1,
+        useIdColumn: false,
+      ),
       etageSpalte: null,
       anlageBauteilSpalte: null,
       delimiterMode: 'auto',
@@ -89,19 +280,15 @@ class CsvSettings {
       labelAnlage: 'Anlage',
       labelBauteil: 'Bauteil',
       attributeColumnPairs: [],
-      foto1SpalteLabel: null,
-      foto2SpalteLabel: null,
-      foto3SpalteLabel: null,
-      foto4SpalteLabel: null,
-      importHeaderRow: const [],
+      importHeaderRow: [],
       exportDelimiter: ';',
     );
   }
 
   CsvSettings copyWith({
-    int? lfdNummerSpalte,
-    int? nameSpalte,
-    int? gewerkSpalte,
+    HierarchyLevelConfig? level1,
+    HierarchyLevelConfig? level2,
+    HierarchyLevelConfig? level3,
     int? etageSpalte,
     int? anlageBauteilSpalte,
     String? delimiterMode,
@@ -118,13 +305,20 @@ class CsvSettings {
     String? foto4SpalteLabel,
     List<String>? importHeaderRow,
     String? exportDelimiter,
+    String? groupingEtageParamKey,
+    String? groupingGewerkParamKey,
+    String? groupingAnlageParamKey,
+    bool clearEtageSpalte = false,
+    bool clearAnlageBauteilSpalte = false,
   }) {
     return CsvSettings(
-      lfdNummerSpalte: lfdNummerSpalte ?? this.lfdNummerSpalte,
-      nameSpalte: nameSpalte ?? this.nameSpalte,
-      gewerkSpalte: gewerkSpalte ?? this.gewerkSpalte,
-      etageSpalte: etageSpalte ?? this.etageSpalte,
-      anlageBauteilSpalte: anlageBauteilSpalte ?? this.anlageBauteilSpalte,
+      level1: level1 ?? this.level1,
+      level2: level2 ?? this.level2,
+      level3: level3 ?? this.level3,
+      etageSpalte: clearEtageSpalte ? null : (etageSpalte ?? this.etageSpalte),
+      anlageBauteilSpalte: clearAnlageBauteilSpalte
+          ? null
+          : (anlageBauteilSpalte ?? this.anlageBauteilSpalte),
       delimiterMode: delimiterMode ?? this.delimiterMode,
       anlageKuerzel: anlageKuerzel ?? this.anlageKuerzel,
       bauteilKuerzel: bauteilKuerzel ?? this.bauteilKuerzel,
@@ -139,14 +333,17 @@ class CsvSettings {
       foto4SpalteLabel: foto4SpalteLabel ?? this.foto4SpalteLabel,
       importHeaderRow: importHeaderRow ?? this.importHeaderRow,
       exportDelimiter: exportDelimiter ?? this.exportDelimiter,
+      groupingEtageParamKey: groupingEtageParamKey ?? this.groupingEtageParamKey,
+      groupingGewerkParamKey: groupingGewerkParamKey ?? this.groupingGewerkParamKey,
+      groupingAnlageParamKey: groupingAnlageParamKey ?? this.groupingAnlageParamKey,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'lfdNummerSpalte': lfdNummerSpalte,
-      'nameSpalte': nameSpalte,
-      'gewerkSpalte': gewerkSpalte,
+      'level1': level1.toJson(),
+      'level2': level2.toJson(),
+      'level3': level3.toJson(),
       'etageSpalte': etageSpalte,
       'anlageBauteilSpalte': anlageBauteilSpalte,
       'delimiterMode': delimiterMode,
@@ -163,10 +360,20 @@ class CsvSettings {
       'foto4SpalteLabel': foto4SpalteLabel,
       'importHeaderRow': importHeaderRow,
       'exportDelimiter': exportDelimiter,
+      'groupingEtageParamKey': groupingEtageParamKey,
+      'groupingGewerkParamKey': groupingGewerkParamKey,
+      'groupingAnlageParamKey': groupingAnlageParamKey,
     };
   }
 
   factory CsvSettings.fromJson(Map<String, dynamic> json) {
+    if (json.containsKey('level1')) {
+      return _fromNewJson(json);
+    }
+    return _migrateFromLegacyJson(json);
+  }
+
+  static CsvSettings _fromNewJson(Map<String, dynamic> json) {
     final pairsRaw = json['attributeColumnPairs'];
     final List<AttributeColumnPair> pairs = [];
     if (pairsRaw is List) {
@@ -179,9 +386,15 @@ class CsvSettings {
       }
     }
     return CsvSettings(
-      lfdNummerSpalte: json['lfdNummerSpalte'] as int? ?? 0,
-      nameSpalte: json['nameSpalte'] as int? ?? 1,
-      gewerkSpalte: json['gewerkSpalte'] as int? ?? 2,
+      level1: HierarchyLevelConfig.fromJson(
+        json['level1'] is Map ? Map<String, dynamic>.from(json['level1'] as Map) : null,
+      ),
+      level2: HierarchyLevelConfig.fromJson(
+        json['level2'] is Map ? Map<String, dynamic>.from(json['level2'] as Map) : null,
+      ),
+      level3: HierarchyLevelConfig.fromJson(
+        json['level3'] is Map ? Map<String, dynamic>.from(json['level3'] as Map) : null,
+      ),
       etageSpalte: json['etageSpalte'] as int?,
       anlageBauteilSpalte: json['anlageBauteilSpalte'] as int?,
       delimiterMode: json['delimiterMode'] as String? ?? 'auto',
@@ -198,7 +411,49 @@ class CsvSettings {
       foto4SpalteLabel: json['foto4SpalteLabel'] as String?,
       importHeaderRow: _parseStringList(json['importHeaderRow']),
       exportDelimiter: json['exportDelimiter'] as String? ?? ';',
+      groupingEtageParamKey: json['groupingEtageParamKey'] as String? ?? '',
+      groupingGewerkParamKey: json['groupingGewerkParamKey'] as String? ?? '',
+      groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
     );
+  }
+
+  static CsvSettings _migrateFromLegacyJson(Map<String, dynamic> json) {
+    final gewerk = json['gewerkSpalte'] as int? ?? 2;
+    final name = json['nameSpalte'] as int? ?? 1;
+    final lfd = json['lfdNummerSpalte'] as int? ?? 0;
+    final anlageEbene = json['anlageEbeneSpalte'] as int?;
+    final useDiscipline = json['useDisciplineGrouping'] as bool? ?? true;
+
+    final HierarchyLevelConfig l1;
+    final HierarchyLevelConfig l2;
+    final HierarchyLevelConfig l3;
+
+    if (anlageEbene != null && anlageEbene != name) {
+      l1 = HierarchyLevelConfig(enabled: useDiscipline, nameColumn: gewerk);
+      l2 = HierarchyLevelConfig(enabled: true, nameColumn: anlageEbene);
+      l3 = HierarchyLevelConfig(
+        enabled: true,
+        nameColumn: name,
+        useIdColumn: true,
+        idColumn: lfd,
+      );
+    } else {
+      l1 = HierarchyLevelConfig(enabled: useDiscipline, nameColumn: gewerk);
+      l2 = const HierarchyLevelConfig(enabled: false, nameColumn: 1);
+      l3 = HierarchyLevelConfig(
+        enabled: true,
+        nameColumn: name,
+        useIdColumn: true,
+        idColumn: lfd,
+      );
+    }
+
+    return _fromNewJson({
+      ...json,
+      'level1': l1.toJson(),
+      'level2': l2.toJson(),
+      'level3': l3.toJson(),
+    });
   }
 
   static List<String> _parseStringList(dynamic raw) {
@@ -250,7 +505,4 @@ final csvSettingsProvider =
     StateNotifierProviderFamily<CsvSettingsNotifier, CsvSettings, String>(
   (ref, projectId) => CsvSettingsNotifier(projectId),
 );
-
-
-
 

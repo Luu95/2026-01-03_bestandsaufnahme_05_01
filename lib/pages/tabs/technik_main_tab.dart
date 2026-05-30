@@ -31,11 +31,22 @@ class TechnikMainTab extends StatefulWidget {
   final VoidCallback? onBauteilCreated;
   final VoidCallback? onAnlagenMoved;
   /// Wird bei Long-Press auf einen Gruppen-Header aufgerufen.
-  final void Function(Disziplin discipline, String groupingKey, String groupValue)? onGroupLongPress;
+  final void Function(
+    Disziplin discipline,
+    String groupingKey,
+    String groupValue,
+    Map<String, dynamic> additionalParams,
+  )? onGroupLongPress;
 
   /// Globaler Gruppierungs-Key für alle Anlagen-Listen (Etage, Raum, …).
   /// Wird im Gebäude-Header ausgewählt.
   final String? systemsGroupingKey;
+
+  /// Unter-Gruppierungs-Key (Revisionsobjekt) innerhalb der oberen Gruppierung.
+  final String? systemsSubGroupingKey;
+
+  /// Param-Key für Anzeigenamen einzelner Anlagen.
+  final String? systemsDisplayNameParamKey;
 
   const TechnikMainTab({
     Key? key,
@@ -59,17 +70,16 @@ class TechnikMainTab extends StatefulWidget {
     this.onAnlagenMoved,
     this.onGroupLongPress,
     this.systemsGroupingKey,
+    this.systemsSubGroupingKey,
+    this.systemsDisplayNameParamKey,
   }) : super(key: key);
 
   @override
   State<TechnikMainTab> createState() => _TechnikMainTabState();
 }
 
-class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAliveClientMixin {
+class _TechnikMainTabState extends State<TechnikMainTab> {
   final Set<String> _expandedDisciplines = {}; // Verfolgt alle geöffneten Disziplinen
-
-  @override
-  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -130,7 +140,6 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
     final disziplinen = widget.systemsPageKeys.keys.toList();
 
     // Wenn keine Disziplinen vorhanden sind, zeige leere Ansicht mit Buttons
@@ -182,19 +191,19 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
     // Bei genau einem Gewerk: Anlagen direkt anzeigen, ohne aufklappbaren Reiter
     if (disziplinen.length == 1) {
       final discipline = disziplinen.first;
-      return SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: SystemsPage(
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: SystemsPage(
           key: widget.systemsPageKeys[discipline],
           building: widget.building,
           floor: FloorPlan(id: 'global', name: 'Global'),
           discipline: discipline,
           groupingKey: widget.systemsGroupingKey,
+          subGroupingKey: widget.systemsSubGroupingKey,
+          displayNameParamKey: widget.systemsDisplayNameParamKey,
+          usePrimaryScroll: true,
           onSelectionChanged: (isActive, count) {
-            if (widget.onSelectionChanged != null) {
-              widget.onSelectionChanged!(isActive, count, discipline);
-            }
+            widget.onSelectionChanged?.call(isActive, count, discipline);
           },
           isAnySelectionActive: widget.isAnySelectionActive,
           onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
@@ -202,7 +211,6 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
           onBauteilCreated: widget.onBauteilCreated,
           onAnlagenMoved: widget.onAnlagenMoved,
           onGroupLongPress: widget.onGroupLongPress,
-          ),
         ),
       );
     }
@@ -365,38 +373,45 @@ class _TechnikMainTabState extends State<TechnikMainTab> with AutomaticKeepAlive
                   _saveExpandedState();
                 },
                 children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      // Feine Nuance für Anlagen-Bereich: sehr subtiler gräulicher Ton
-                      color: Color.lerp(
-                        Colors.grey[50]!,
-                        Color.lerp(discipline.color, Colors.grey.shade100, 0.2) ?? Colors.grey[50]!,
-                        0.1,
+                  if (isExpanded)
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Color.lerp(
+                          Colors.grey[50]!,
+                          Color.lerp(discipline.color, Colors.grey.shade100, 0.2) ??
+                              Colors.grey[50]!,
+                          0.1,
+                        ),
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(16),
+                          bottomRight: Radius.circular(16),
+                        ),
                       ),
-                      borderRadius: const BorderRadius.only(
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
+                      // Begrenzte Höhe + eigener Scroll: kein shrinkWrap über alle Anlagen
+                      child: SizedBox(
+                        height: MediaQuery.sizeOf(context).height * 0.55,
+                        child: SystemsPage(
+                          key: widget.systemsPageKeys[discipline],
+                          building: widget.building,
+                          floor: FloorPlan(id: 'global', name: 'Global'),
+                          discipline: discipline,
+                          groupingKey: widget.systemsGroupingKey,
+                          subGroupingKey: widget.systemsSubGroupingKey,
+                          displayNameParamKey: widget.systemsDisplayNameParamKey,
+                          usePrimaryScroll: true,
+                          onSelectionChanged: (isActive, count) {
+                            widget.onSelectionChanged?.call(isActive, count, discipline);
+                          },
+                          isAnySelectionActive: widget.isAnySelectionActive,
+                          onExitDisciplineSelectionMode:
+                              widget.onExitDisciplineSelectionMode,
+                          onAnlageCreated: widget.onAnlageCreated,
+                          onBauteilCreated: widget.onBauteilCreated,
+                          onAnlagenMoved: widget.onAnlagenMoved,
+                          onGroupLongPress: widget.onGroupLongPress,
+                        ),
                       ),
                     ),
-                    child: SystemsPage(
-                      key: widget.systemsPageKeys[discipline],
-                      building: widget.building,
-                      floor: FloorPlan(id: 'global', name: 'Global'),
-                      discipline: discipline,
-                      groupingKey: widget.systemsGroupingKey,
-                      onSelectionChanged: (isActive, count) {
-                        if (widget.onSelectionChanged != null) {
-                          widget.onSelectionChanged!(isActive, count, discipline);
-                        }
-                      },
-                      isAnySelectionActive: widget.isAnySelectionActive,
-                      onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
-                      onAnlageCreated: widget.onAnlageCreated,
-                      onBauteilCreated: widget.onBauteilCreated,
-                      onAnlagenMoved: widget.onAnlagenMoved,
-                      onGroupLongPress: widget.onGroupLongPress,
-                    ),
-                  ),
                 ],
               ),
             ),

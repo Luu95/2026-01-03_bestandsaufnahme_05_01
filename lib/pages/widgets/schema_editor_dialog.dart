@@ -6,20 +6,12 @@ class SchemaEditorWidget extends StatefulWidget {
   final List<Map<String, dynamic>> existingSchema;
   final ValueChanged<List<Map<String, dynamic>>> onSchemaChanged;
   final bool allowEditGlobal;
-  final String? dropdownCsvPath;
-  final List<String>? dropdownCsvHeaders;
-  final VoidCallback? onImportDropdownCsv;
-  final VoidCallback? onClearDropdownCsv;
   
   const SchemaEditorWidget({
     Key? key,
     required this.existingSchema,
     required this.onSchemaChanged,
     this.allowEditGlobal = false,
-    this.dropdownCsvPath,
-    this.dropdownCsvHeaders,
-    this.onImportDropdownCsv,
-    this.onClearDropdownCsv,
   }) : super(key: key);
 
   @override
@@ -65,7 +57,6 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
       backgroundColor: Colors.transparent,
       builder: (_) => AddSchemaFieldDialog(
         uuid: _uuid,
-        dropdownCsvHeaders: widget.dropdownCsvHeaders,
       ),
     );
     if (newField != null) {
@@ -85,7 +76,6 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
       builder: (_) => AddSchemaFieldDialog(
         uuid: _uuid,
         existingField: existingField,
-        dropdownCsvHeaders: widget.dropdownCsvHeaders,
       ),
     );
     if (editedField != null) {
@@ -951,12 +941,10 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
 class AddSchemaFieldDialog extends StatefulWidget {
   final Uuid uuid;
   final Map<String, dynamic>? existingField;
-  final List<String>? dropdownCsvHeaders;
   const AddSchemaFieldDialog({
     Key? key,
     required this.uuid,
     this.existingField,
-    this.dropdownCsvHeaders,
   }) : super(key: key);
 
   @override
@@ -965,14 +953,26 @@ class AddSchemaFieldDialog extends StatefulWidget {
 
 class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
   late final TextEditingController labelCtrl;
+  late final TextEditingController optionsCtrl;
   late String selectedType;
   late bool isEditable;
-  String? selectedDropdownColumn;
+
+  static String _optionsToText(dynamic raw) {
+    if (raw is! List) return '';
+    return raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).join('; ');
+  }
+
+  static List<String> _parseOptionsText(String text) {
+    if (text.trim().isEmpty) return [];
+    final split = text.contains(';') ? text.split(';') : text.split(',');
+    return split.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
 
   @override
   void initState() {
     super.initState();
     labelCtrl = TextEditingController(text: widget.existingField?['label'] ?? '');
+    optionsCtrl = TextEditingController(text: _optionsToText(widget.existingField?['options']));
     final fieldType = widget.existingField?['type'] ?? 'string';
     // Konvertiere alte Typen zu neuen: 'text' -> 'string', 'number' -> 'int'
     if (fieldType == 'text') {
@@ -988,18 +988,12 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
           : 'string';
     }
     isEditable = widget.existingField?['editable'] ?? true;
-
-    final existingDropdownColumn = widget.existingField?['dropdownColumn']?.toString().trim();
-    if (existingDropdownColumn != null && existingDropdownColumn.isNotEmpty) {
-      selectedDropdownColumn = existingDropdownColumn;
-    } else if (widget.dropdownCsvHeaders != null && widget.dropdownCsvHeaders!.isNotEmpty) {
-      selectedDropdownColumn = widget.dropdownCsvHeaders!.first;
-    }
   }
 
   @override
   void dispose() {
     labelCtrl.dispose();
+    optionsCtrl.dispose();
     super.dispose();
   }
 
@@ -1122,15 +1116,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                             child: Text('Dropdown', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
                           ),
                         ],
-                        onChanged: (v) => setState(() {
-                          selectedType = v!;
-                          if (selectedType != 'dropdown') return;
-                          if (selectedDropdownColumn == null &&
-                              widget.dropdownCsvHeaders != null &&
-                              widget.dropdownCsvHeaders!.isNotEmpty) {
-                            selectedDropdownColumn = widget.dropdownCsvHeaders!.first;
-                          }
-                        }),
+                        onChanged: (v) => setState(() => selectedType = v!),
                         decoration: InputDecoration(
                           labelText: 'Datentyp',
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
@@ -1142,58 +1128,20 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       ),
                       if (selectedType == 'dropdown') ...[
                         const SizedBox(height: 14),
-                        if (widget.dropdownCsvHeaders == null || widget.dropdownCsvHeaders!.isEmpty)
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.orange.withOpacity(0.25)),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(Icons.info_outline, size: 18, color: Colors.orange),
-                                SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    'Für Dropdown-Felder bitte zuerst eine Dropdown-CSV importieren (Tab „Eingabefelder“).',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          DropdownButtonFormField<String>(
-                            value: (selectedDropdownColumn != null &&
-                                    widget.dropdownCsvHeaders!.contains(selectedDropdownColumn))
-                                ? selectedDropdownColumn
-                                : widget.dropdownCsvHeaders!.first,
-                            dropdownColor: Colors.grey[50],
-                            items: widget.dropdownCsvHeaders!
-                                .map(
-                                  (h) => DropdownMenuItem(
-                                    value: h,
-                                    child: Text(
-                                      h,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(fontSize: 16, color: Colors.grey[900]),
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) => setState(() => selectedDropdownColumn = v),
-                            decoration: InputDecoration(
-                              labelText: 'Dropdown-Spalte (aus CSV)',
-                              contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-                              filled: true,
-                              fillColor: Colors.grey[50],
-                            ),
-                            style: TextStyle(fontSize: 16, color: Colors.grey[900]),
-                            isExpanded: true,
+                        TextField(
+                          controller: optionsCtrl,
+                          decoration: InputDecoration(
+                            labelText: 'Optionen (Semikolon-getrennt)',
+                            hintText: 'z. B. Gas; Öl; Holz',
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                            filled: true,
+                            fillColor: Colors.grey[50],
                           ),
+                          style: const TextStyle(fontSize: 16),
+                          minLines: 1,
+                          maxLines: 4,
+                        ),
                       ],
                       const SizedBox(height: 24),
                       Container(
@@ -1277,30 +1225,6 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       child: ElevatedButton(
                         onPressed: () {
                           if (labelCtrl.text.isEmpty) return;
-                          if (selectedType == 'dropdown') {
-                            final headers = widget.dropdownCsvHeaders ?? const <String>[];
-                            if (headers.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Bitte zuerst eine Dropdown-CSV importieren.'),
-                                  backgroundColor: Colors.orange,
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                              return;
-                            }
-                            final col = (selectedDropdownColumn ?? '').trim();
-                            if (col.isEmpty || !headers.contains(col)) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Bitte eine gültige Dropdown-Spalte auswählen.'),
-                                  backgroundColor: Colors.orange,
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                              return;
-                            }
-                          }
 
                           final result = <String, dynamic>{
                             'key': widget.existingField?['key'] ?? _generateKey(labelCtrl.text),
@@ -1309,11 +1233,12 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                             'editable': isEditable,
                           };
                           if (selectedType == 'dropdown') {
-                            result['dropdownColumn'] = selectedDropdownColumn;
+                            final options = _parseOptionsText(optionsCtrl.text);
+                            if (options.isNotEmpty) {
+                              result['options'] = options;
+                            }
                           }
-                          Navigator.of(context).pop({
-                            ...result,
-                          });
+                          Navigator.of(context).pop({...result});
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue[600],

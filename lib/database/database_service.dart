@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'package:drift/drift.dart';
+import 'package:flutter/material.dart' show Icons, Colors;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database.dart';
 import '../models/project.dart' as models;
@@ -13,9 +14,19 @@ import '../models/disziplin_schnittstelle.dart';
 
 //
 
+class _BuildingAnlagenListCache {
+  List<models.Anlage>? all;
+  final Map<String, List<models.Anlage>> byDiscipline = {};
+}
+
 class DatabaseService {
   final AppDatabase _db;
   final Map<String, Map<String, Disziplin>> _disciplinesCache = {};
+  final Map<String, _BuildingAnlagenListCache> _anlagenListCache = {};
+
+  void _invalidateAnlagenListCache(String buildingId) {
+    _anlagenListCache.remove(buildingId);
+  }
   
   Future<void> _markDisciplinesInitialized(String buildingId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -144,19 +155,9 @@ class DatabaseService {
   }
 
   Future<models.Building> _buildingRowToModel(BuildingDb row) async {
-    // Building ist hier die generierte Drift-Klasse
-    // Systems laden
-    final anlagenRows = await _db.getAnlagenByBuildingId(row.id);
-    final disciplinesMap = await _getDisciplinesMap(row.id);
-    final systemsMap = <String, List<models.Anlage>>{};
-    for (final anlageRow in anlagenRows) {
-      final discipline = Disziplin.fromJson(json.decode(anlageRow.discipline));
-      final label = discipline.label;
-      final currentDiscipline = disciplinesMap[label.toLowerCase()];
-      final anlage = _anlageRowToModelWithCurrentDiscipline(anlageRow, currentDiscipline);
-      systemsMap.putIfAbsent(label, () => []).add(anlage);
-    }
-    final systems = models.BuildingSystems(systems: systemsMap);
+    // Anlagen werden bei Bedarf über getAnlagenBy* geladen – nicht hier,
+    // sonst werden bei jedem Projekt-/Gebäude-Laden alle Anlagen des Gebäudes
+    // mit vollem JSON-Parsing in den Speicher geholt (sehr langsam bei Importen).
 
     // FloorPlans laden
     final floorPlanRows = await _db.getFloorPlansByBuildingId(row.id);
@@ -187,7 +188,7 @@ class DatabaseService {
       protectedMonument: row.protectedMonument,
       units: row.units,
       floorArea: row.floorArea,
-      systems: systems,
+      systems: models.BuildingSystems(),
       floors: floors,
     );
   }
@@ -340,7 +341,62 @@ class DatabaseService {
       color: base.color,
       schema: [...base.schema, ...additional],
       groupingKey: base.groupingKey,
+      revisionsobjektSchemas: base.revisionsobjektSchemas,
     );
+  }
+
+  /// Listen/Übersicht: Gebäude-Disziplin + Params, ohne Schema-Merge pro Zeile.
+  models.Anlage _anlageRowToModelLight(AnlageDb row, Disziplin? currentDiscipline) {
+    final discipline = currentDiscipline ??
+        Disziplin(
+          label: row.markerType,
+          icon: Icons.build,
+          color: Colors.blueGrey,
+          schema: const <Map<String, dynamic>>[],
+        );
+
+    final rawParams = json.decode(row.params);
+    final baseParams = rawParams is Map
+        ? Map<String, dynamic>.from(rawParams.map((k, v) => MapEntry(k.toString(), v)))
+        : <String, dynamic>{};
+    baseParams.remove('_validated');
+    baseParams.remove('_validatedAt');
+
+    Map<String, dynamic>? markerInfo;
+    if (row.isMarker && row.markerInfo != null) {
+      final decoded = json.decode(row.markerInfo!);
+      markerInfo = decoded is Map
+          ? Map<String, dynamic>.from(decoded)
+          : {'data': decoded};
+    }
+
+    return models.Anlage(
+      id: row.id,
+      parentId: row.parentId,
+      name: row.name,
+      params: baseParams,
+      floorId: row.floorId ?? '',
+      buildingId: row.buildingId,
+      isMarker: row.isMarker,
+      markerInfo: markerInfo,
+      markerType: row.markerType,
+      discipline: discipline,
+    );
+  }
+
+  Future<List<models.Anlage>> _rowsToAnlagenList(
+    List<AnlageDb> rows,
+    String buildingId,
+  ) async {
+    if (rows.isEmpty) return [];
+    final disciplinesMap = await _getDisciplinesMap(buildingId);
+    return [
+      for (final row in rows)
+        _anlageRowToModelLight(
+          row,
+          disciplinesMap[row.markerType.toLowerCase()],
+        ),
+    ];
   }
 
   models.Anlage _anlageRowToModelWithCurrentDiscipline(AnlageDb row, Disziplin? currentDiscipline) {
@@ -382,8 +438,8 @@ class DatabaseService {
     );
   }
 
-  Future<void> insertAnlage(models.Anlage anlage) async {
-    await _db.insertAnlage(AnlagenCompanion.insert(
+  AnlagenCompanion _anlageCompanion(models.Anlage anlage) {
+    return AnlagenCompanion.insert(
       id: anlage.id,
       parentId: Value(anlage.parentId),
       name: anlage.name,
@@ -394,7 +450,39 @@ class DatabaseService {
       markerInfo: anlage.markerInfo != null ? Value(json.encode(anlage.markerInfo)) : const Value.absent(),
       markerType: anlage.markerType,
       discipline: json.encode(anlage.discipline.toJson()),
-    ));
+    );
+  }
+
+  Future<void> insertAnlage(models.Anlage anlage) async {
+    await _db.insertAnlage(_anlageCompanion(anlage));
+    _invalidateAnlagenListCache(anlage.buildingId);
+  }
+
+  /// Fügt viele Anlagen in einer Transaktion ein (deutlich schneller bei CSV-Import).
+  Future<void> insertAnlagenBatch(List<models.Anlage> anlagen) async {
+    if (anlagen.isEmpty) return;
+    final buildingId = anlagen.first.buildingId;
+    await _db.transaction(() async {
+      for (final anlage in anlagen) {
+        await _db.insertAnlage(_anlageCompanion(anlage));
+      }
+    });
+    _invalidateAnlagenListCache(buildingId);
+  }
+
+  /// LfdNummer → Anlagen-ID für ein Gebäude (ein DB-Lauf, nur Params-JSON).
+  Future<Map<String, String>> getLfdNummerToIdMap(String buildingId) async {
+    final rows = await _db.getAnlagenByBuildingId(buildingId);
+    final map = <String, String>{};
+    for (final row in rows) {
+      final rawParams = json.decode(row.params);
+      if (rawParams is! Map) continue;
+      final lfd = rawParams['lfdNummer']?.toString().trim();
+      if (lfd != null && lfd.isNotEmpty) {
+        map[lfd] = row.id;
+      }
+    }
+    return map;
   }
 
   Future<void> updateAnlage(models.Anlage anlage) async {
@@ -411,6 +499,7 @@ class DatabaseService {
         discipline: Value(json.encode(anlage.discipline.toJson())),
       ),
     );
+    _invalidateAnlagenListCache(anlage.buildingId);
   }
 
   /// Aktualisiert alle Anlagen einer Disziplin, wenn diese umbenannt wurde.
@@ -421,6 +510,7 @@ class DatabaseService {
       newLabel,
       json.encode(newDiscipline.toJson()),
     );
+    _invalidateAnlagenListCache(buildingId);
   }
 
   /// Verschiebt eine oder mehrere Anlagen (inkl. aller Kinder rekursiv).
@@ -468,21 +558,28 @@ class DatabaseService {
   }
 
   Future<List<models.Anlage>> getAnlagenByBuildingId(String buildingId) async {
+    final cache = _anlagenListCache[buildingId];
+    if (cache?.all != null) return cache!.all!;
+
     final rows = await _db.getAnlagenByBuildingId(buildingId);
-    final disciplinesMap = await _getDisciplinesMap(buildingId);
-    final anlagen = <models.Anlage>[];
-    for (final row in rows) {
-      final currentDiscipline = disciplinesMap[row.markerType.toLowerCase()];
-      anlagen.add(_anlageRowToModelWithCurrentDiscipline(row, currentDiscipline));
-    }
+    final anlagen = await _rowsToAnlagenList(rows, buildingId);
+    _anlagenListCache.putIfAbsent(buildingId, () => _BuildingAnlagenListCache()).all = anlagen;
     return anlagen;
   }
 
-  Future<List<models.Anlage>> getAnlagenByBuildingIdAndDiscipline(String buildingId, String disciplineLabel) async {
+  Future<List<models.Anlage>> getAnlagenByBuildingIdAndDiscipline(
+    String buildingId,
+    String disciplineLabel,
+  ) async {
+    final cache = _anlagenListCache[buildingId];
+    final cached = cache?.byDiscipline[disciplineLabel];
+    if (cached != null) return cached;
+
     final rows = await _db.getAnlagenByBuildingIdAndDiscipline(buildingId, disciplineLabel);
-    final disciplinesMap = await _getDisciplinesMap(buildingId);
-    final currentDiscipline = disciplinesMap[disciplineLabel.toLowerCase()];
-    return rows.map((row) => _anlageRowToModelWithCurrentDiscipline(row, currentDiscipline)).toList();
+    final anlagen = await _rowsToAnlagenList(rows, buildingId);
+    _anlagenListCache.putIfAbsent(buildingId, () => _BuildingAnlagenListCache())
+        .byDiscipline[disciplineLabel] = anlagen;
+    return anlagen;
   }
 
   Future<models.Anlage?> getAnlageById(String id) async {
@@ -495,38 +592,32 @@ class DatabaseService {
 
   Future<List<models.Anlage>> getAnlagenByParentId(String parentId) async {
     final rows = await _db.getAnlagenByParentId(parentId);
-    final anlagen = <models.Anlage>[];
-    for (final row in rows) {
-      final disciplinesMap = await _getDisciplinesMap(row.buildingId);
-      final currentDiscipline = disciplinesMap[row.markerType.toLowerCase()];
-      anlagen.add(_anlageRowToModelWithCurrentDiscipline(row, currentDiscipline));
-    }
-    return anlagen;
+    if (rows.isEmpty) return [];
+    return _rowsToAnlagenList(rows, rows.first.buildingId);
   }
 
   /// Findet eine Anlage anhand der laufenden Nummer (lfdNummer) und buildingId.
   /// Die lfdNummer wird in den Params als "lfdNummer" gespeichert.
   Future<models.Anlage?> getAnlageByLfdNummer(String lfdNummer, String buildingId) async {
-    final allAnlagen = await getAnlagenByBuildingId(buildingId);
-    for (final anlage in allAnlagen) {
-      final lfdNummerInParams = anlage.params['lfdNummer']?.toString();
-      if (lfdNummerInParams != null && lfdNummerInParams.trim() == lfdNummer.trim()) {
-        return anlage;
-      }
-    }
-    return null;
+    final id = (await getLfdNummerToIdMap(buildingId))[lfdNummer.trim()];
+    if (id == null) return null;
+    return getAnlageById(id);
   }
 
   /// Löscht eine Anlage und rekursiv alle ihre Kinder (Bauteile).
   Future<void> deleteAnlage(String id) async {
+    final row = await _db.getAnlageById(id);
+    final buildingId = row?.buildingId;
+
     // Zuerst alle Kinder (Bauteile) rekursiv löschen
     final children = await getAnlagenByParentId(id);
     for (final child in children) {
       await deleteAnlage(child.id); // Rekursiv löschen
     }
-    
+
     // Dann die Anlage selbst löschen
     await _db.deleteAnlage(id);
+    if (buildingId != null) _invalidateAnlagenListCache(buildingId);
   }
 
   // ========== DISZIPLINEN ==========
