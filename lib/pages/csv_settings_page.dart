@@ -3,8 +3,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:csv/csv.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,7 +49,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _labelGewerk = 'Gewerk';
   String _labelAnlage = 'Anlage';
   String _labelBauteil = 'Bauteil';
-  String _groupingEtageParamKey = '';
   String _groupingGewerkParamKey = '';
   String _groupingAnlageParamKey = '';
 
@@ -71,7 +68,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _labelGewerkCtrl;
   late final TextEditingController _labelAnlageCtrl;
   late final TextEditingController _labelBauteilCtrl;
-  late final TextEditingController _groupingEtageParamKeyCtrl;
   late final TextEditingController _groupingGewerkParamKeyCtrl;
   late final TextEditingController _groupingAnlageParamKeyCtrl;
   late final TextEditingController _foto1SpalteLabelCtrl;
@@ -123,7 +119,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelGewerkCtrl = TextEditingController(text: _labelGewerk);
     _labelAnlageCtrl = TextEditingController(text: _labelAnlage);
     _labelBauteilCtrl = TextEditingController(text: _labelBauteil);
-    _groupingEtageParamKeyCtrl = TextEditingController(text: _groupingEtageParamKey);
     _groupingGewerkParamKeyCtrl = TextEditingController(text: _groupingGewerkParamKey);
     _groupingAnlageParamKeyCtrl = TextEditingController(text: _groupingAnlageParamKey);
     _foto1SpalteLabelCtrl = TextEditingController(text: _foto1SpalteLabel ?? '');
@@ -145,7 +140,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelGewerkCtrl.dispose();
     _labelAnlageCtrl.dispose();
     _labelBauteilCtrl.dispose();
-    _groupingEtageParamKeyCtrl.dispose();
     _groupingGewerkParamKeyCtrl.dispose();
     _groupingAnlageParamKeyCtrl.dispose();
     _foto1SpalteLabelCtrl.dispose();
@@ -191,12 +185,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _labelBauteilCtrl.value = TextEditingValue(
         text: _labelBauteil,
         selection: TextSelection.collapsed(offset: _labelBauteil.length),
-      );
-    }
-    if (_groupingEtageParamKeyCtrl.text != _groupingEtageParamKey) {
-      _groupingEtageParamKeyCtrl.value = TextEditingValue(
-        text: _groupingEtageParamKey,
-        selection: TextSelection.collapsed(offset: _groupingEtageParamKey.length),
       );
     }
     if (_groupingGewerkParamKeyCtrl.text != _groupingGewerkParamKey) {
@@ -343,7 +331,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _foto2SpalteLabel = settings.foto2SpalteLabel;
         _foto3SpalteLabel = settings.foto3SpalteLabel;
         _foto4SpalteLabel = settings.foto4SpalteLabel;
-        _groupingEtageParamKey = settings.groupingEtageParamKey;
         _groupingGewerkParamKey = settings.groupingGewerkParamKey;
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
       });
@@ -431,7 +418,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         level1: _level1,
         level2: _level2,
         level3: _level3,
-        etageSpalte: _etageSpalte,
+        etageSpalte: current.etageSpalte,
         anlageBauteilSpalte: _anlageBauteilSpalte,
         delimiterMode: 'auto',
         anlageKuerzel: _anlageKuerzel,
@@ -447,7 +434,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         foto4SpalteLabel: _foto4SpalteLabel,
         importHeaderRow: current.importHeaderRow,
         exportDelimiter: current.exportDelimiter,
-        groupingEtageParamKey: _groupingEtageParamKey,
+        groupingEtageParamKey: current.groupingEtageParamKey,
         groupingGewerkParamKey: _groupingGewerkParamKey,
         groupingAnlageParamKey: _groupingAnlageParamKey,
       );
@@ -667,80 +654,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               _scheduleAutoSave();
             },
           ),
-          _buildConnector(),
-          SettingsCard(
-            color: Colors.cyan,
-            borderColor: Colors.cyan.shade200,
-            icon: Icons.layers,
-            iconColor: Colors.cyan,
-            title: 'Etage (optional)',
-            description: 'Separate Spalte, nicht Teil der Hierarchie-Ebenen.',
-            child: _buildToggleRow(
-              icon: Icons.layers,
-              label: 'Spalte für Etage?',
-              isActive: _etageSpalte != null,
-              onToggle: (val) {
-                setState(() {
-                  _etageSpalte = val ? _nextFreeIndex(_allReservedColumnIndices()) : null;
-                  if (val) _syncGroupingEtageKeyFromColumn();
-                });
-                _scheduleAutoSave();
-              },
-              child: _etageSpalte != null
-                  ? _buildColumnSelector(
-                      label: 'Spalte Etage',
-                      value: _etageSpalte!,
-                      onChanged: (v) {
-                        setState(() {
-                          _etageSpalte = v;
-                          _syncGroupingEtageKeyFromColumn();
-                        });
-                        _scheduleAutoSave();
-                      },
-                      csvHeaders: _mappingCsvHeaders,
-                    )
-                  : null,
-            ),
-          ),
           const SizedBox(height: 16),
           _buildCollapsibleAttributePairsSection(),
           const SizedBox(height: 16),
-          SettingsCard(
-            color: Colors.teal,
-            borderColor: Colors.teal.shade200,
-            icon: Icons.photo_library,
-            iconColor: Colors.teal,
-            title: 'Fotonummern-Spalten (Export)',
-            description: 'Spalten-Labels Ihrer CSV, in die beim Export die Fotonummern (1–4) geschrieben werden. Beim Import können diese Spalten leer sein. Leer lassen = Spalte nicht verwenden.',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildFotoSpalteField(
-                  'Fotonummer 1',
-                  _foto1SpalteLabelCtrl,
-                  (v) => setState(() { _foto1SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
-                ),
-                const SizedBox(height: 8),
-                _buildFotoSpalteField(
-                  'Fotonummer 2',
-                  _foto2SpalteLabelCtrl,
-                  (v) => setState(() { _foto2SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
-                ),
-                const SizedBox(height: 8),
-                _buildFotoSpalteField(
-                  'Fotonummer 3',
-                  _foto3SpalteLabelCtrl,
-                  (v) => setState(() { _foto3SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
-                ),
-                const SizedBox(height: 8),
-                _buildFotoSpalteField(
-                  'Fotonummer 4',
-                  _foto4SpalteLabelCtrl,
-                  (v) => setState(() { _foto4SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
-                ),
-              ],
-            ),
-          ),
+          _buildCollapsibleFotoSpaltenSection(),
           const SizedBox(height: 16),
           ExpansionTile(
             title: const Text('Begriffe der Ebenen anpassen'),
@@ -798,9 +715,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           const SizedBox(height: 12),
           _buildValidationWarning(),
           const SizedBox(height: 32),
-          // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
-          _buildBetaCsvLoader(forTemplate: false),
-          const SizedBox(height: 24),
           // Diskret: Alle Gewerke, Anlagen und Grundrisse löschen
           _buildBottomDeleteButton(
             title: 'Alle Daten löschen',
@@ -1144,9 +1058,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           const SizedBox(height: 24),
           _buildTemplateValidationWarning(),
           const SizedBox(height: 32),
-          // Beta-Funktion: Beispiel-CSV laden (ausgeblendet, nur als kleine Option)
-          _buildBetaCsvLoader(forTemplate: true),
-          const SizedBox(height: 24),
           // Diskret: Vorlagen für das Projekt löschen
           _buildBottomDeleteButton(
             title: 'Alle Vorlagen löschen',
@@ -1743,76 +1654,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-
-  /// Lädt nur die Header-Zeile einer CSV für die Vorschau
-  Future<void> _loadExampleCsvHeaders({required bool forTemplate}) async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-      );
-
-      if (result == null || result.files.single.path == null) return;
-
-      final file = File(result.files.single.path!);
-      final bytes = await file.readAsBytes();
-
-      // Encoding Erkennung (wie in CsvService)
-      String csvString;
-      try {
-        csvString = utf8.decode(bytes);
-      } catch (_) {
-        csvString = latin1.decode(bytes);
-      }
-
-      // Nur die erste Zeile parsen
-      final eolIndex = csvString.indexOf('\n');
-      final headerLine = eolIndex != -1 ? csvString.substring(0, eolIndex) : csvString;
-      
-      // Automatische Trennzeichen-Erkennung
-      String delimiter = ';';
-      if (headerLine.contains(',') && !headerLine.contains(';')) {
-        delimiter = ',';
-      } else if (headerLine.contains('\t')) {
-        delimiter = '\t';
-      }
-
-      final List<List<dynamic>> rows = CsvToListConverter(
-        fieldDelimiter: delimiter,
-        shouldParseNumbers: false,
-      ).convert(headerLine);
-
-      if (rows.isNotEmpty) {
-        setState(() {
-          if (forTemplate) {
-            _templateCsvHeaders = rows.first.map((e) => e.toString().trim()).toList();
-          } else {
-            _mappingCsvHeaders = rows.first.map((e) => e.toString().trim()).toList();
-          }
-        });
-        
-        if (mounted) {
-          final headers = forTemplate ? _templateCsvHeaders : _mappingCsvHeaders;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${headers!.length} Spalten erkannt. Dropdown-Modus aktiv.'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Lesen der CSV: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   Widget _buildFotoSpalteField(
     String label,
     TextEditingController controller,
@@ -1829,6 +1670,86 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       onChanged: onChanged,
+    );
+  }
+
+  Widget _buildCollapsibleFotoSpaltenSection() {
+    const color = Colors.teal;
+    final configuredCount = [
+      _foto1SpalteLabel,
+      _foto2SpalteLabel,
+      _foto3SpalteLabel,
+      _foto4SpalteLabel,
+    ].where((label) => (label?.trim().isNotEmpty ?? false)).length;
+    final subtitle = configuredCount == 0
+        ? 'Keine Spalten – zum Konfigurieren aufklappen'
+        : '$configuredCount Spalte${configuredCount == 1 ? '' : 'n'} konfiguriert';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.shade200, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          leading: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.photo_library, color: color, size: 24),
+          ),
+          title: const Text(
+            'Fotonummern-Spalten (Export)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+          children: [
+            Text(
+              'Spalten-Labels Ihrer CSV, in die beim Export die Fotonummern (1–4) geschrieben werden. '
+              'Beim Import können diese Spalten leer sein. Leer lassen = Spalte nicht verwenden.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 16),
+            _buildFotoSpalteField(
+              'Fotonummer 1',
+              _foto1SpalteLabelCtrl,
+              (v) => setState(() { _foto1SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+            ),
+            const SizedBox(height: 8),
+            _buildFotoSpalteField(
+              'Fotonummer 2',
+              _foto2SpalteLabelCtrl,
+              (v) => setState(() { _foto2SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+            ),
+            const SizedBox(height: 8),
+            _buildFotoSpalteField(
+              'Fotonummer 3',
+              _foto3SpalteLabelCtrl,
+              (v) => setState(() { _foto3SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+            ),
+            const SizedBox(height: 8),
+            _buildFotoSpalteField(
+              'Fotonummer 4',
+              _foto4SpalteLabelCtrl,
+              (v) => setState(() { _foto4SpalteLabel = v.isEmpty ? null : v; _scheduleAutoSave(); }),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2189,7 +2110,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     return n;
   }
 
-  /// Spalten der Hierarchie-Ebenen + Etage (ohne Attribut-Paare).
+  /// Spalten der Hierarchie-Ebenen (ohne Attribut-Paare).
   List<int> _mappingColumnIndices({int? excludeLevelNum}) {
     final used = <int>[];
     void addLevel(int levelNum, HierarchyLevelConfig level) {
@@ -2491,16 +2412,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  void _syncGroupingEtageKeyFromColumn() {
-    final headers = _mappingCsvHeaders;
-    final col = _etageSpalte;
-    if (headers == null || col == null || col < 0 || col >= headers.length) return;
-    final label = headers[col].trim();
-    if (label.isEmpty) return;
-    _groupingEtageParamKey = label;
-    _groupingEtageParamKeyCtrl.text = label;
-  }
-
   void _syncGroupingGewerkKeyFromColumn() {
     final headers = _mappingCsvHeaders;
     if (headers == null || !_level1.enabled) return;
@@ -2530,116 +2441,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       candidate++;
     }
     return candidate;
-  }
-
-  /// Beta-Funktion: Kleine Option ganz unten zum Laden einer Beispiel-CSV
-  Widget _buildBetaCsvLoader({required bool forTemplate}) {
-    final headers = forTemplate ? _templateCsvHeaders : _mappingCsvHeaders;
-    
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade100,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'BETA',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.orange.shade800,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Beispiel-CSV laden (optional)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _loadExampleCsvHeaders(forTemplate: forTemplate),
-                  icon: Icon(
-                    headers == null ? Icons.table_chart_outlined : Icons.refresh,
-                    size: 16,
-                  ),
-                  label: Text(
-                    headers == null ? 'CSV laden' : 'Neu laden',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.grey.shade700,
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                    side: BorderSide(color: Colors.grey.shade400),
-                  ),
-                ),
-              ),
-              if (headers != null) ...[
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      if (forTemplate) {
-                        _templateCsvHeaders = null;
-                      } else {
-                        _mappingCsvHeaders = null;
-                      }
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Dropdown-Modus deaktiviert'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.close, size: 16),
-                  label: const Text('Aus', style: TextStyle(fontSize: 12)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.grey.shade600,
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                    side: BorderSide(color: Colors.grey.shade400),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          if (headers != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              '${headers.length} Spalten geladen - Dropdowns aktiv',
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.green.shade700,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   /// Diskret: Button zum Löschen (flexibel für Daten oder Vorlagen)

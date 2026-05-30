@@ -38,8 +38,7 @@ class TechnikMainTab extends StatefulWidget {
     Map<String, dynamic> additionalParams,
   )? onGroupLongPress;
 
-  /// Globaler Gruppierungs-Key für alle Anlagen-Listen (Etage, Raum, …).
-  /// Wird im Gebäude-Header ausgewählt.
+  /// Gruppierungs-Key Ebene 2 (Revisionsfeld) aus CSV-Einstellungen.
   final String? systemsGroupingKey;
 
   /// Unter-Gruppierungs-Key (Revisionsobjekt) innerhalb der oberen Gruppierung.

@@ -23,7 +23,6 @@ import '../utils/app_log.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/csv_settings_provider.dart';
-import '../models/systems_grouping_mode.dart';
 import '../navigation/route_observer.dart';
 import 'widgets/generic_anlage_dialog.dart';
 
@@ -82,9 +81,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   List<Disziplin> _disciplines = [];
   bool _disciplineSelectionMode = false;
   final Set<String> _selectedDisciplineLabels = {};
-
-  /// Gruppierungsart für alle Anlagen im Technik-Tab (AppBar rechts).
-  SystemsGroupingMode _systemsGroupingMode = SystemsGroupingMode.none;
 
   bool _groupSelectionMode = false;
   ({
@@ -189,29 +185,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     });
   }
 
+  /// Ebene 2 (Revisionsfeld) – Ebene 1 ist das Gewerk-Tab, Ebene 3 die Untergruppierung.
   String? _resolveSystemsGroupingParamKey() {
-    if (_systemsGroupingMode == SystemsGroupingMode.none) return null;
-
-    if (_currentProject.id.isNotEmpty) {
-      final settings = ref.read(csvSettingsProvider(_currentProject.id));
-      switch (_systemsGroupingMode) {
-        case SystemsGroupingMode.etage:
-          return settings.resolveEtageGroupingParamKey();
-        case SystemsGroupingMode.revisionsfeld:
-          return settings.resolveRevisionsfeldListGroupingParamKey();
-        case SystemsGroupingMode.none:
-          return null;
-      }
-    }
-
-    switch (_systemsGroupingMode) {
-      case SystemsGroupingMode.etage:
-        return 'Etage';
-      case SystemsGroupingMode.revisionsfeld:
-        return 'Gewerk';
-      case SystemsGroupingMode.none:
-        return null;
-    }
+    if (_currentProject.id.isEmpty) return null;
+    final settings = ref.read(csvSettingsProvider(_currentProject.id));
+    return settings.resolveRevisionsfeldListGroupingParamKey();
   }
 
   String? _resolveSystemsSubGroupingParamKey() {
@@ -466,12 +444,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         clearExpandedState: true,
         refreshSystemsPages: true,
       );
-      // Nach Import immer zunächst alle Anlagen ungefiltert anzeigen.
-      if (mounted) {
-        setState(() {
-          _systemsGroupingMode = SystemsGroupingMode.none;
-        });
-      }
       _refreshSystemsPages();
 
       // Erfolgsmeldung anzeigen (inkl. Fehleranzahl, falls vorhanden)
@@ -1928,64 +1900,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           ),
           overflow: TextOverflow.ellipsis,
         ),
-        actions: inSelectionMode
-            ? [] // Buttons werden jetzt als Floating Action Buttons rechts unten angezeigt
-            : [
-                if (_tabController.index == 1)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.4,
-                        ),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[100],
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.view_list, size: 16, color: Colors.black54),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<String>(
-                                    value: _systemsGroupingMode.storageValue,
-                                    icon: const Icon(Icons.arrow_drop_down, size: 18),
-                                    isDense: true,
-                                    isExpanded: true,
-                                    items: SystemsGroupingMode.values
-                                        .map(
-                                          (mode) => DropdownMenuItem<String>(
-                                            value: mode.storageValue,
-                                            child: Text(
-                                              mode.label,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) {
-                                      setState(() {
-                                        _systemsGroupingMode =
-                                            SystemsGroupingModeX.fromStorage(value) ??
-                                                SystemsGroupingMode.none;
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+        actions: const [],
       ),
       body: TabBarView(
         controller: _tabController,
