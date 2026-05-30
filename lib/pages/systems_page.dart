@@ -576,14 +576,19 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         .where((a) => _selectedAnlagenIds.contains(a.id) && a.parentId == null)
         .toList();
 
-    // Wenn nur Bauteile ausgewählt sind, wird diese Methode nicht aufgerufen
-    // (Button wird nicht angezeigt), daher ist die Meldung obsolet
     if (selectedParents.isEmpty) {
       if (!mounted) return;
       return;
     }
 
+    // Hier nehmen wir die Anlage, die du gedrückt hältst (Eltern-Objekt)
     final firstParent = selectedParents.first;
+
+    // WICHTIG: Wir holen den Namen des Revisionsobjekts.
+    // Falls das Feld leer ist (historische Daten!), nehmen wir den Namen der Anlage selbst (z.B. "tragbare Handfeuerlöscher")
+    final roValue = firstParent.params['Revisionsobjekt']?.toString() ??
+        firstParent.params['Anlagentyp']?.toString() ??
+        firstParent.name; // Fallback auf den Anzeigenamen
 
     showModalBottomSheet<void>(
       context: context,
@@ -592,21 +597,26 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => GenericAnlageDialog(
-        discipline: widget.discipline,
+        // Disziplin und Felder des Parents an das Kind weitergeben
+        discipline: firstParent.discipline,
         buildingId: widget.building.id,
         floorId: widget.floor.id,
         parentId: firstParent.id,
         existingAnlage: null,
         index: null,
+        // Explizit, welches Revisionsobjekt-Schema geladen werden soll
+        initialRevisionsobjekt: roValue,
+        initialParams: {
+          'Revisionsobjekt': roValue,
+        },
         onSave: (createdBauteil, _) async {
           final copies = <Anlage>[];
 
           // 1) Das vom Dialog erstellte Objekt nutzen wir für den ersten Parent.
           copies.add(createdBauteil);
 
-          // 2) Für alle weiteren Parents neue Objekte erzeugen.
+          // 2) Für alle weiteren Parents neue Objekte erzeugen (falls mehrere ausgewählt wurden).
           if (selectedParents.length > 1) {
-            // Flache Kopie der Params. Falls photoPaths eine Liste ist, ebenfalls kopieren.
             final clonedParams = Map<String, dynamic>.from(createdBauteil.params);
             final pp = createdBauteil.params['photoPaths'];
             if (pp is List) {
@@ -626,7 +636,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
                   isMarker: false,
                   markerInfo: null,
                   markerType: widget.discipline.label,
-                  discipline: widget.discipline,
+                  // Kopien erben die Disziplin des Parents
+                  discipline: firstParent.discipline,
                 ),
               );
             }
@@ -652,7 +663,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             ),
           );
           widget.onBauteilCreated?.call();
-          _exitSelectionMode(); // AppBar schließen (Auswahlmodus beenden)
+          _exitSelectionMode(); // Auswahlmodus beenden
         },
       ),
     );

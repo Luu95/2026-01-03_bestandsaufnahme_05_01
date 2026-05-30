@@ -224,6 +224,19 @@ class CsvSettings {
     return labelBauteil;
   }
 
+  /// Label für neue Datensätze unter einem Revisionsobjekt (Long-Press Ebene 2 → Plus).
+  /// Nicht die Schema-Ebene (Ebene 2), sondern die darunter liegende Blatt-Ebene.
+  String resolveDatensatzUnderRevisionsobjektLabel() {
+    if (level3.enabled && enabledLevelsOrdered.length >= 3) {
+      return _headerLabelAt(level3.nameColumn) ?? labelBauteil;
+    }
+    final nameKey = resolveNameParamKey();
+    if (nameKey != null && nameKey.trim().isNotEmpty) {
+      return nameKey.trim();
+    }
+    return resolveLeafLevelLabel();
+  }
+
   /// Ob aus der Listen-Gruppe mit diesem Param-Key ein neuer Blatt-Datensatz angelegt werden darf.
   bool isCreateLeafFromGroupKey(String groupingParamKey) {
     final gk = groupingParamKey.trim();

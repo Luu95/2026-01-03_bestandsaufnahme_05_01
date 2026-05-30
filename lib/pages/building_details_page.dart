@@ -2137,9 +2137,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         if (ctx != null && ctx.isSchemaItemLevel) {
           var leafLabel = 'Eintrag';
           if (_currentProject.id.isNotEmpty) {
-            leafLabel = ref
-                .read(csvSettingsProvider(_currentProject.id))
-                .resolveLeafLevelLabel();
+            final csv = ref.read(csvSettingsProvider(_currentProject.id));
+            leafLabel = csv.resolveDatensatzUnderRevisionsobjektLabel();
           }
           buttons.add(
             _buildFloatingActionButton(

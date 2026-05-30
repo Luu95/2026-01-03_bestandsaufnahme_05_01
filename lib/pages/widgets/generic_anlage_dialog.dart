@@ -134,6 +134,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   String? _schemaItemParamKey;
   String _leafLevelLabel = 'Anlage';
   String _childLevelLabel = 'Bauteil';
+  String? _dialogSubtitle;
+  String? _dialogContextLine;
   
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
@@ -449,9 +451,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
       await ref.read(csvSettingsProvider(projectId).notifier).load();
       final csvSettings = ref.read(csvSettingsProvider(projectId));
-      _leafLevelLabel = csvSettings.resolveLeafLevelLabel();
       _childLevelLabel = csvSettings.labelBauteil;
       final roInit = widget.initialRevisionsobjekt?.trim();
+      if (roInit != null && roInit.isNotEmpty) {
+        _leafLevelLabel = csvSettings.resolveDatensatzUnderRevisionsobjektLabel();
+        _dialogSubtitle = roInit;
+        _dialogContextLine = widget.discipline.label;
+      } else {
+        _leafLevelLabel = csvSettings.resolveLeafLevelLabel();
+        _dialogSubtitle = null;
+        _dialogContextLine = null;
+      }
       _schemaItemParamKey = (roInit != null && roInit.isNotEmpty)
           ? (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
               csvSettings.resolveSchemaItemParamKey())
@@ -1674,15 +1684,41 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                     letterSpacing: -0.3,
                                   ),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  widget.discipline.label,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.grey[600],
+                                if (_dialogSubtitle != null) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _dialogSubtitle!,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[800],
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ),
+                                  if (_dialogContextLine != null &&
+                                      _dialogContextLine!.trim().isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _dialogContextLine!,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ] else ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    widget.discipline.label,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
