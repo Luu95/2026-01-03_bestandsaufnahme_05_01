@@ -12,8 +12,6 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
-import 'backup_storage_service.dart';
-import '../models/backup_run_result.dart';
 import '../models/csv_hierarchy_level.dart';
 import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
@@ -1292,190 +1290,7 @@ class CsvService {
     }
   }
 
-  /// Erstellt ein lokales Backup (ZIP mit CSV + Fotos).
-  /// Gibt den absoluten Pfad der gespeicherten Datei zurück.
-  static Future<String> createLocalBackup({
-    required String projectId,
-    required DatabaseService dbService,
-    PhotoExportStructure structure = PhotoExportStructure.allInOne,
-    String? targetDirectory,
-    String? storageUri,
-    String? includeBuildingId,
-  }) async {
-    final project = await dbService.getProjectById(projectId);
-    if (project == null) {
-      throw Exception('Projekt nicht gefunden');
-    }
-
-    final allAnlagen = await dbService.getAnlagenForProject(
-      projectId,
-      includeBuildingId: includeBuildingId,
-    );
-
-    if (allAnlagen.isEmpty) {
-      throw Exception('Keine Anlagen zum Backup vorhanden');
-    }
-
-    final zipFile = await _buildAnlagenZipFile(
-      anlagen: allAnlagen,
-      projectId: projectId,
-      structure: structure,
-    );
-
-    final zipBytes = await zipFile.readAsBytes();
-    if (await zipFile.exists()) {
-      await zipFile.delete();
-    }
-
-    final timestamp = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .split('.')
-        .first;
-    final safeName = _sanitizeFileName(project.name);
-    final fileName = 'backup_${safeName}_$timestamp.zip';
-
-    return _saveBackupBytes(
-      bytes: zipBytes,
-      fileName: fileName,
-      preferredDirectory: targetDirectory,
-      storageUri: storageUri,
-    );
-  }
-
-  /// Erstellt Backups für alle Projekte mit Anlagen im Zielordner.
-  static Future<BackupRunResult> createAllProjectsBackup({
-    required DatabaseService dbService,
-    required String targetDirectory,
-    String? storageUri,
-    PhotoExportStructure structure = PhotoExportStructure.allInOne,
-  }) async {
-    final projects = await dbService.getAllProjects();
-    return createProjectsBackup(
-      dbService: dbService,
-      targetDirectory: targetDirectory,
-      storageUri: storageUri,
-      projectIds: projects.map((p) => p.id).toList(),
-      structure: structure,
-    );
-  }
-
-  /// Erstellt Backups für die angegebenen Projekte.
-  static Future<BackupRunResult> createProjectsBackup({
-    required DatabaseService dbService,
-    required String targetDirectory,
-    required List<String> projectIds,
-    String? storageUri,
-    PhotoExportStructure structure = PhotoExportStructure.allInOne,
-    String? includeBuildingId,
-  }) async {
-    final savedPaths = <String>[];
-    final errors = <String>[];
-
-    for (final projectId in projectIds) {
-      final project = await dbService.getProjectById(projectId);
-      final projectName = project?.name ?? projectId;
-      try {
-        final path = await createLocalBackup(
-          projectId: projectId,
-          dbService: dbService,
-          structure: structure,
-          targetDirectory: targetDirectory,
-          storageUri: storageUri,
-          includeBuildingId: includeBuildingId,
-        );
-        savedPaths.add(path);
-      } catch (e) {
-        final message = '$projectName: $e';
-        errors.add(message);
-        debugPrint('Backup übersprungen – $message');
-      }
-    }
-
-    return BackupRunResult(savedPaths: savedPaths, errors: errors);
-  }
-
-  /// App-interner Backup-Ordner (auf Android immer beschreibbar).
-  static Future<String> defaultBackupDirectoryPath() async {
-    final dir = await _writableBackupDirectory();
-    return dir.path;
-  }
-
-  static Future<Directory> _writableBackupDirectory() async {
-    if (Platform.isAndroid || Platform.isIOS) {
-      final externalDir = await getExternalStorageDirectory();
-      if (externalDir != null) {
-        final dir = Directory('${externalDir.path}/Bestandsaufnahme');
-        if (!await dir.exists()) {
-          await dir.create(recursive: true);
-        }
-        return dir;
-      }
-    }
-
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docsDir.path}/Bestandsaufnahme');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
-  }
-
-  static Future<String> _saveBackupBytes({
-    required List<int> bytes,
-    required String fileName,
-    String? preferredDirectory,
-    String? storageUri,
-  }) async {
-    final safeFileName = _sanitizeFileName(fileName);
-
-    if (storageUri != null && storageUri.isNotEmpty) {
-      try {
-        return await BackupStorageService.writeBackupFile(
-          bytes: bytes,
-          fileName: safeFileName,
-          storageUri: storageUri,
-        );
-      } catch (e) {
-        debugPrint('Speichern über Ordner-Berechtigung fehlgeschlagen: $e');
-        rethrow;
-      }
-    }
-
-    if (preferredDirectory != null && preferredDirectory.isNotEmpty) {
-      try {
-        return await BackupStorageService.writeBackupFile(
-          bytes: bytes,
-          fileName: safeFileName,
-          filePath: preferredDirectory,
-        );
-      } catch (e) {
-        debugPrint('Speichern in $preferredDirectory fehlgeschlagen: $e');
-      }
-    }
-
-    final appDir = await _writableBackupDirectory();
-    final savedPath = await _writeBytesToDirectory(bytes, safeFileName, appDir.path);
-    debugPrint('Backup im App-Ordner gespeichert: $savedPath');
-    return savedPath;
-  }
-
-  static Future<String> _writeBytesToDirectory(
-    List<int> bytes,
-    String fileName,
-    String directory,
-  ) async {
-    final backupDir = Directory(directory);
-    if (!await backupDir.exists()) {
-      await backupDir.create(recursive: true);
-    }
-
-    final targetPath = path.join(backupDir.path, fileName);
-    await File(targetPath).writeAsBytes(bytes, flush: true);
-    debugPrint('Datei gespeichert: $targetPath');
-    return targetPath;
-  }
-
+  /// Speichert eine Export-Datei direkt auf dem Gerät (Datei-Dialog oder App-Ordner).
   static Future<String?> _deliverExportFile({
     required File file,
     required String fileName,
@@ -1495,14 +1310,49 @@ class CsvService {
     return null;
   }
 
-  /// Speichert eine Export-Datei direkt auf dem Gerät (Datei-Dialog oder Downloads).
   static Future<String?> saveFileToDevice({
     required File file,
     required String fileName,
   }) =>
       _saveFileToDevice(file: file, fileName: fileName);
 
-  /// Speichert eine Datei über den nativen Datei-Dialog oder im Downloads-Ordner.
+  static Future<Directory> _writableExportDirectory() async {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir != null) {
+        final dir = Directory('${externalDir.path}/Bestandsaufnahme');
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir;
+      }
+    }
+
+    final docsDir = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docsDir.path}/Bestandsaufnahme');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  static Future<String> _writeBytesToDirectory(
+    List<int> bytes,
+    String fileName,
+    String directory,
+  ) async {
+    final exportDir = Directory(directory);
+    if (!await exportDir.exists()) {
+      await exportDir.create(recursive: true);
+    }
+
+    final targetPath = path.join(exportDir.path, fileName);
+    await File(targetPath).writeAsBytes(bytes, flush: true);
+    debugPrint('Datei gespeichert: $targetPath');
+    return targetPath;
+  }
+
+  /// Speichert eine Datei über den nativen Datei-Dialog oder im App-Ordner.
   static Future<String?> _saveFileToDevice({
     required File file,
     required String fileName,
@@ -1521,7 +1371,8 @@ class CsvService {
       return null;
     } catch (e) {
       debugPrint('Speicher-Dialog fehlgeschlagen, speichere in App-Ordner: $e');
-      return _saveBackupBytes(bytes: bytes, fileName: fileName);
+      final appDir = await _writableExportDirectory();
+      return _writeBytesToDirectory(bytes, _sanitizeFileName(fileName), appDir.path);
     }
   }
 

@@ -13,7 +13,6 @@ import 'providers/settings_provider.dart';
 import 'pages/building_details_page.dart';
 import 'navigation/route_observer.dart';
 import 'theme/app_theme.dart';
-import 'widgets/auto_backup_watcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,7 +58,7 @@ class MyApp extends ConsumerWidget {
           child: child ?? const SizedBox.shrink(),
         );
       },
-      home: const AutoBackupWatcher(child: RootPage()),
+      home: const RootPage(),
     );
   }
 }
