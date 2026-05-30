@@ -1256,6 +1256,15 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         ? ctx.groupKey.trim()
         : (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
             csvSettings.resolveSchemaItemParamKey());
+    final rawSchemaOverride = ctx.additionalParams['__schemaOverride'];
+    final schemaOverride = rawSchemaOverride is List
+        ? rawSchemaOverride
+            .whereType<Map>()
+            .map((f) => Map<String, dynamic>.from(f))
+            .toList()
+        : <Map<String, dynamic>>[];
+    final additionalParams = Map<String, dynamic>.from(ctx.additionalParams)
+      ..remove('__schemaOverride');
 
     final dbService = ref.read(databaseServiceProvider);
 
@@ -1294,17 +1303,42 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final parentTemplate = matchedTemplate ??
         Template(
           gewerk: ctx.discipline.label,
-          anlageBauteil: 'a',
+          anlageBauteil: '',
           anlagentyp: schemaRo,
           bezeichnung: schemaRo,
         );
 
-    final effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+    var effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
       discipline: discipline,
       revisionsobjekt: schemaRo,
       template: parentTemplate,
       templatesForLookup: gewerkTemplates,
     );
+    if (schemaOverride.isNotEmpty) {
+      final roSpecificSchema = schemaOverride
+          .where((f) => f['isGlobal'] != true)
+          .map((f) => Map<String, dynamic>.from(f))
+          .toList();
+      final mergedRoSchemas =
+          Map<String, List<Map<String, dynamic>>>.from(
+        effectiveDiscipline.revisionsobjektSchemas,
+      );
+      mergedRoSchemas[schemaRo] = TemplateService.mergeSchemaFieldLists(
+        mergedRoSchemas[schemaRo] ?? const [],
+        roSpecificSchema.isNotEmpty ? roSpecificSchema : schemaOverride,
+      );
+      effectiveDiscipline = Disziplin(
+        label: effectiveDiscipline.label,
+        icon: effectiveDiscipline.icon,
+        color: effectiveDiscipline.color,
+        schema: TemplateService.mergeSchemaFieldLists(
+          effectiveDiscipline.schema,
+          schemaOverride,
+        ),
+        groupingKey: effectiveDiscipline.groupingKey,
+        revisionsobjektSchemas: mergedRoSchemas,
+      );
+    }
 
     final params = TemplateService.buildEmptyParamsFromTemplate(parentTemplate.parameter);
     if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
@@ -1312,7 +1346,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     }
     params['Revisionsobjekt'] = schemaRo;
     params['Anlagentyp'] = schemaRo;
-    params.addAll(ctx.additionalParams);
+    params.addAll(additionalParams);
 
     if (!mounted) return;
     await showModalBottomSheet<void>(

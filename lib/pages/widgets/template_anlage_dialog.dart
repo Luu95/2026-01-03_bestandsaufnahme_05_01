@@ -158,14 +158,15 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
             t.anlagentyp.trim() == selectedType.trim())
         .toList();
     final gewerkForTemplate = (selectedGewerk ?? widget.discipline.label).trim();
-    final parentTemplate = matching
-        .firstWhere((t) => t.anlageBauteil == 'a', orElse: () => Template(
-              gewerk: gewerkForTemplate,
-              anlageBauteil: 'a',
-              anlagentyp: selectedType,
-              bezeichnung: selectedType,
-              parameter: null,
-            ));
+    final parentTemplate = matching.isNotEmpty
+        ? matching.first
+        : Template(
+            gewerk: gewerkForTemplate,
+            anlageBauteil: '',
+            anlagentyp: selectedType,
+            bezeichnung: selectedType,
+            parameter: null,
+          );
 
     final childTemplates =
         matching.where((t) => t.anlageBauteil == 'b').toList();

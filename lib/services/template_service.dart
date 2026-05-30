@@ -595,8 +595,8 @@ class TemplateService {
     final grouped = <String, Map<String, List<Template>>>{};
     
     for (final template in templates) {
-      if (template.anlageBauteil != 'a') continue; // Nur Anlagen (nicht Bauteile)
-      
+      if (template.anlagentyp.trim().isEmpty) continue;
+
       if (!grouped.containsKey(template.gewerk)) {
         grouped[template.gewerk] = <String, List<Template>>{};
       }
@@ -631,12 +631,11 @@ class TemplateService {
     return _paramsMapFromParameterJson(parameterString);
   }
 
-  /// Extrahiert eindeutige Anlagentypen aus einer Liste von Templates
-  /// Berücksichtigt nur Anlagen (anlageBauteil == 'a'), nicht Bauteile
+  /// Extrahiert eindeutige Anlagentypen/Revisionsobjekte aus Vorlagen (ohne a/b-Filter).
   static List<String> getAnlagentypenForGewerk(List<Template> templates) {
     final anlagentypen = <String>{};
     for (final template in templates) {
-      if (template.anlageBauteil == 'a' && template.anlagentyp.trim().isNotEmpty) {
+      if (template.anlagentyp.trim().isNotEmpty) {
         anlagentypen.add(template.anlagentyp.trim());
       }
     }
@@ -732,7 +731,6 @@ class TemplateService {
 
     if (templates != null) {
       for (final t in templates) {
-        if (t.anlageBauteil != 'a') continue;
         final typ = t.anlagentyp.trim();
         final bez = t.bezeichnung.trim();
         if (typ.toLowerCase() == v || bez.toLowerCase() == v) {
@@ -748,7 +746,6 @@ class TemplateService {
 
     if (templates != null) {
       for (final t in templates) {
-        if (t.anlageBauteil != 'a') continue;
         final typ = t.anlagentyp.trim().toLowerCase();
         if (typ.contains(v) || v.contains(typ)) {
           return discipline.resolveRevisionsobjektKey(t.anlagentyp.trim()) ??
@@ -769,7 +766,6 @@ class TemplateService {
 
     Template? partial;
     for (final t in templates) {
-      if (t.anlageBauteil != 'a') continue;
       final typ = t.anlagentyp.trim();
       final bez = t.bezeichnung.trim();
       if (typ.toLowerCase() == v || bez.toLowerCase() == v) return t;

@@ -399,7 +399,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   List<String> _revisionsobjekteForDiscipline(Disziplin d) {
     final names = <String>{};
     for (final t in _projectTemplates) {
-      if (t.gewerk.trim() == d.label.trim() && t.anlageBauteil == 'a') {
+      if (t.gewerk.trim() == d.label.trim()) {
         final typ = t.anlagentyp.trim();
         if (typ.isNotEmpty) names.add(typ);
       }

@@ -224,9 +224,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           );
           if (effectiveDiscipline.schema.length <=
               baseDiscipline.globalSchemaFields.length) {
-            effectiveDiscipline = widget.discipline.withEffectiveSchema(
+            final fromPassedDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+              discipline: widget.discipline,
               revisionsobjekt: ro,
             );
+            effectiveDiscipline = fromPassedDiscipline.schema.length >
+                    fromPassedDiscipline.globalSchemaFields.length
+                ? fromPassedDiscipline
+                : widget.discipline;
           }
         } else {
           effectiveDiscipline = baseDiscipline;
@@ -372,8 +377,23 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         widget.initialRevisionsobjekt?.trim().isNotEmpty == true
             ? widget.initialRevisionsobjekt!.trim()
             : _resolveRevisionsobjektFromParams();
+    if (ro == null || ro.trim().isEmpty) return;
+
+    final nextDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: _currentDiscipline,
+      revisionsobjekt: ro,
+    );
+
+    // Beim Erstellen aus einem Revisionsobjekt bringt der Aufrufer oft bereits
+    // das richtige effektive Schema mit. Dieses darf nicht durch ein erneutes
+    // withEffectiveSchema() auf reine Standardfelder reduziert werden.
+    if (nextDiscipline.schema.length <= nextDiscipline.globalSchemaFields.length &&
+        _currentDiscipline.legacyIndividualSchemaFields.isNotEmpty) {
+      return;
+    }
+
     setState(() {
-      _currentDiscipline = _currentDiscipline.withEffectiveSchema(revisionsobjekt: ro);
+      _currentDiscipline = nextDiscipline;
     });
   }
 

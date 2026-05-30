@@ -419,6 +419,10 @@ class SystemsAnlageList extends StatelessWidget {
                   parentGroupingKey.isNotEmpty) {
                 additional[parentGroupingKey] = parentGroupValue;
               }
+              final schemaOverride = _schemaOverrideFrom(subGroupAnlagen);
+              if (schemaOverride != null) {
+                additional['__schemaOverride'] = schemaOverride;
+              }
               onGroupLongPress!(subKey, subGroupKey, additional);
             }
           : null,
@@ -505,7 +509,14 @@ class SystemsAnlageList extends StatelessWidget {
 
     return GestureDetector(
       onLongPress: onGroupLongPress != null
-          ? () => onGroupLongPress!(effectiveGroupingKey, groupKey, const {})
+          ? () {
+              final additional = <String, dynamic>{};
+              final schemaOverride = _schemaOverrideFrom(groupAnlagen);
+              if (schemaOverride != null) {
+                additional['__schemaOverride'] = schemaOverride;
+              }
+              onGroupLongPress!(effectiveGroupingKey, groupKey, additional);
+            }
           : null,
       child: Container(
         margin: const EdgeInsets.only(bottom: 6),
@@ -646,5 +657,15 @@ class SystemsAnlageList extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  List<Map<String, dynamic>>? _schemaOverrideFrom(List<Anlage> items) {
+    for (final item in items) {
+      final schema = item.discipline.schema;
+      if (schema.isNotEmpty) {
+        return schema.map((f) => Map<String, dynamic>.from(f)).toList();
+      }
+    }
+    return null;
   }
 }
