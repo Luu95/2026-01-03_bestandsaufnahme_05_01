@@ -518,28 +518,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   Future<void> _takePhoto() async {
     if (!_photoManager.canAddPhoto) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Maximal 4 Fotos pro Anlage erlaubt'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
       return;
     }
-    
-    final success = await _photoManager.takePhoto();
-    if (!success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Maximal 4 Fotos pro Anlage erlaubt'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+
+    await _photoManager.takePhoto();
     setState(() {});
   }
 
@@ -550,15 +532,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   Future<void> _takePhotoForOcr() async {
     if (!_photoManager.canAddPhoto) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Maximal 4 Fotos pro Anlage erlaubt'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
       return;
     }
 
@@ -582,14 +555,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         await _performOcr(image);
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Öffnen der Kamera: $e'),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
+      // Kamera-Fehler ignorieren
     }
   }
 
@@ -606,9 +572,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       Navigator.of(context).pop(); // Lade-Dialog schließen
 
       if (results.isEmpty || (results['hersteller'] == null && results['baujahr'] == null)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Keine relevanten Daten auf dem Typenschild erkannt')),
-        );
         return;
       }
 
@@ -616,9 +579,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fehler bei der Texterkennung: $e')),
-      );
     }
   }
 

@@ -150,9 +150,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _attrPairGenEndCtrl.dispose();
     _templateAttrTripletGenStartCtrl.dispose();
     _templateAttrTripletGenEndCtrl.dispose();
-    // Speichere beim Verlassen der Seite, falls noch nicht gespeichert
-    _saveAllSettings();
     super.dispose();
+  }
+
+  Future<void> _leavePage() async {
+    _autoSaveTimer?.cancel();
+    if (mounted) {
+      await _saveAllSettings();
+    }
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   void _syncTextControllersFromState() {
@@ -411,6 +419,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   // Entferne die Hilfsfunktion für automatisches Schema aus Mapping
 
   Future<void> _saveCsvSettings() async {
+    if (!mounted) return;
     try {
       final notifier = ref.read(csvSettingsProvider(widget.projectId).notifier);
       final current = ref.read(csvSettingsProvider(widget.projectId));
@@ -459,8 +468,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   /// Speichert alle Einstellungen automatisch
   Future<void> _saveAllSettings() async {
-    if (_isSaving) return; // Verhindere gleichzeitige Speichervorgänge
-    
+    if (!mounted || _isSaving) return;
+
     _isSaving = true;
     try {
       await Future.wait([
@@ -469,29 +478,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _saveTemplateCsvSettings(),
         _saveGlobalSchema(),
       ]);
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Einstellungen gespeichert'),
-            duration: Duration(seconds: 1),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     } catch (e) {
       debugPrint('Fehler beim automatischen Speichern: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Speichern: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
     } finally {
-      _isSaving = false;
+      if (mounted) {
+        _isSaving = false;
+      }
     }
   }
 
@@ -499,11 +491,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   void _scheduleAutoSave() {
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(const Duration(seconds: 1), () {
+      if (!mounted) return;
       _saveAllSettings();
     });
   }
 
   Future<void> _saveDisciplines() async {
+    if (!mounted) return;
     _syncGlobalSchemaToDisciplines();
     final dbService = ref.read(databaseServiceProvider);
     await dbService.replaceDisciplines(widget.buildingId, _disciplines);
@@ -550,50 +544,59 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
-        appBar: AppBar(
-          title: const Text(
-            'CSV Einstellungen',
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
-          ),
-          backgroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: true,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black87),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          bottom: const TabBar(
-            tabs: [
-              Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
-              Tab(icon: Icon(Icons.schema), text: 'Eingabefelder'),
-              Tab(icon: Icon(Icons.table_view), text: 'Gewerkevorlagen'),
+    final theme = Theme.of(context);
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _leavePage();
+      },
+      child: DefaultTabController(
+        length: 3,
+        child: Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          appBar: AppBar(
+            title: const Text(
+              'CSV-Einstellungen',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            elevation: 0,
+            centerTitle: true,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new),
+              onPressed: _leavePage,
+            ),
+            bottom: const TabBar(
+              isScrollable: true,
+              tabs: [
+                Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
+                Tab(icon: Icon(Icons.schema), text: 'Eingabefelder'),
+                Tab(icon: Icon(Icons.table_view), text: 'Gewerkevorlagen'),
+              ],
+            ),
+            actions: [
+              if (_isSaving)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
             ],
           ),
-          actions: [
-            if (_isSaving)
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+          body: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : TabBarView(
+                  children: [
+                    _buildMappingTab(),
+                    _buildSchemaTab(),
+                    _buildTemplateTab(),
+                  ],
                 ),
-              ),
-          ],
         ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : TabBarView(
-                children: [
-                  _buildMappingTab(),
-                  _buildSchemaTab(),
-                  _buildTemplateTab(),
-                ],
-              ),
       ),
     );
   }
@@ -1248,30 +1251,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           final start = int.tryParse(_templateAttrTripletGenStartCtrl.text.trim());
                           final end = int.tryParse(_templateAttrTripletGenEndCtrl.text.trim());
                           if (start == null || end == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Bitte gültige Zahlen für erste und letzte Spalte eingeben.'),
-                              ),
-                            );
                             return;
                           }
                           if (start >= end) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Letzte Spalte muss größer als die erste sein.'),
-                              ),
-                            );
                             return;
                           }
                           final count = end - start + 1;
                           if (count % 3 != 0) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Spaltenanzahl im Bereich muss durch 3 teilbar sein (aktuell: $count).',
-                                ),
-                              ),
-                            );
                             return;
                           }
                           // Eingabe ist 1-basiert (wie Dropdown-Anzeige), intern 0-basiert speichern
@@ -1290,13 +1276,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                             _templateErsteSpalteAttributDefinitionen = startIndex;
                           });
                           _scheduleAutoSave();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                '${triplets.length} Dreiergruppen generiert (Spalten $start–$end).',
-                              ),
-                            ),
-                          );
                         },
                       ),
                     ],
@@ -1532,29 +1511,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _loadProjectTemplates(),
         ]);
         _syncGlobalSchemaToDisciplines();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$count Vorlagen erfolgreich importiert'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
       }
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Import: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     }
   }
 
@@ -1616,32 +1576,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Alle Vorlagen erfolgreich gelöscht'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
     } catch (e, stackTrace) {
       debugPrint('Fehler beim Löschen der Vorlagen: $e');
       debugPrint('Stack Trace: $stackTrace');
       
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Löschen: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
     }
   }
 
@@ -1966,30 +1906,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
                           final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
                           if (start == null || end == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Bitte gültige Zahlen für erste und letzte Spalte eingeben.'),
-                              ),
-                            );
                             return;
                           }
                           if (start >= end) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Letzte Spalte muss größer als die erste sein.'),
-                              ),
-                            );
                             return;
                           }
                           final count = end - start + 1;
                           if (count.isOdd) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Spaltenanzahl im Bereich muss gerade sein (aktuell: $count).',
-                                ),
-                              ),
-                            );
                             return;
                           }
                           final pairs = <AttributeColumnPair>[];
@@ -1998,9 +1921,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           }
                           setState(() => _attributeColumnPairs = pairs);
                           _scheduleAutoSave();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${pairs.length} Paare generiert (Spalten $start–$end).')),
-                          );
                         },
                       ),
                     ],
@@ -2685,18 +2605,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           }
         }
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              remainingDisciplines.isEmpty && remainingAnlagen.isEmpty
-                  ? '$anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse gelöscht'
-                  : '$anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse gelöscht. Bitte App neu starten, um Änderungen zu sehen.',
-            ),
-            backgroundColor: remainingDisciplines.isEmpty && remainingAnlagen.isEmpty ? Colors.green : Colors.orange,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-        
         // Seite schließen, damit beim nächsten Öffnen alles neu geladen wird
         if (mounted) {
           Navigator.of(context).pop();
@@ -2708,16 +2616,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Löschen: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
     }
   }
 }

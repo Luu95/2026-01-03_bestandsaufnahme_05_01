@@ -173,13 +173,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     // Validierung: Anlagen können nicht unter andere Anlagen
     if (_areAllAnlagen && _selectedParentId != null && _selectedParentId != 'root') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Anlagen können nicht unter andere Anlagen verschoben werden.'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
-        ),
-      );
       return;
     }
 
@@ -188,13 +181,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         (_selectedParentId == null ||
             _selectedParentId == 'root' ||
             !_potentialParents.any((p) => p.id == _selectedParentId))) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bauteile müssen einer Anlage zugeordnet werden.'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
-        ),
-      );
       return;
     }
 
@@ -283,25 +269,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
       if (mounted) {
         Navigator.of(context).pop(true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${widget.anlagenToMove.length} Element(e) verschoben',
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim Verschieben: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
         setState(() {
           _isMoving = false;
         });

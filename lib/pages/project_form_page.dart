@@ -45,9 +45,6 @@ class _ProjectFormPageState extends State<ProjectFormPage> {
     final customer = _customerController.text.trim();
 
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Der Projektname darf nicht leer sein.')),
-      );
       return;
     }
 

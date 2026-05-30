@@ -113,10 +113,10 @@ class DatabaseService {
     final existingIds = existingBuildings.map((b) => b.id).toSet();
     final newIds = project.buildings.map((b) => b.id).toSet();
 
-    // Lösche entfernte Gebäude
+    // Lösche entfernte Gebäude (Soft-Delete)
     for (final existing in existingBuildings) {
       if (!newIds.contains(existing.id)) {
-        await deleteBuilding(existing.id);
+        await softDeleteBuilding(existing.id);
       }
     }
 
@@ -130,8 +130,47 @@ class DatabaseService {
     }
   }
 
-  Future<void> deleteProject(String id) async {
+  Future<void> softDeleteProject(String id) async {
+    final buildings = await _db.getBuildingsByProjectId(id);
+    for (final building in buildings) {
+      await softDeleteBuilding(building.id);
+    }
+    await _db.softDeleteProject(id);
+  }
+
+  Future<void> restoreProject(String id) async {
+    await _db.restoreProject(id);
+    final deletedBuildings = await _db.getDeletedBuildingsByProjectId(id);
+    for (final building in deletedBuildings) {
+      await restoreBuilding(building.id);
+    }
+  }
+
+  Future<void> permanentlyDeleteProject(String id) async {
     await _db.deleteProject(id);
+  }
+
+  Future<List<models.Project>> getDeletedProjects() async {
+    final projectRows = await _db.getDeletedProjects();
+    final projects = <models.Project>[];
+
+    for (final row in projectRows) {
+      final buildings = await getDeletedBuildingsByProjectId(row.id);
+      projects.add(models.Project(
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        customer: row.customer,
+        buildings: buildings,
+      ));
+    }
+
+    return projects;
+  }
+
+  /// @deprecated Verwende [softDeleteProject] für sicheres Löschen.
+  Future<void> deleteProject(String id) async {
+    await softDeleteProject(id);
   }
 
   // ========== BUILDINGS ==========
@@ -273,8 +312,56 @@ class DatabaseService {
     }
   }
 
-  Future<void> deleteBuilding(String id) async {
+  Future<void> softDeleteBuilding(String id) async {
+    final anlagen = await _db.getAnlagenByBuildingId(id);
+    for (final anlage in anlagen) {
+      await softDeleteAnlage(anlage.id);
+    }
+    await _db.softDeleteBuilding(id);
+    _invalidateAnlagenListCache(id);
+    _disciplinesCache.remove(id);
+  }
+
+  Future<void> restoreBuilding(String id) async {
+    await _db.restoreBuilding(id);
+    final deletedAnlagen = await _db.getDeletedAnlagenByBuildingId(id);
+    for (final anlage in deletedAnlagen) {
+      await _db.restoreAnlage(anlage.id);
+    }
+    _invalidateAnlagenListCache(id);
+  }
+
+  Future<void> permanentlyDeleteBuilding(String id) async {
     await _db.deleteBuilding(id);
+    _invalidateAnlagenListCache(id);
+    _disciplinesCache.remove(id);
+  }
+
+  Future<List<models.Building>> getDeletedBuildingsByProjectId(String projectId) async {
+    final buildingRows = await _db.getDeletedBuildingsByProjectId(projectId);
+    final buildings = <models.Building>[];
+
+    for (final row in buildingRows) {
+      buildings.add(await _buildingRowToModel(row));
+    }
+
+    return buildings;
+  }
+
+  Future<List<models.Building>> getDeletedBuildings() async {
+    final buildingRows = await _db.getDeletedBuildings();
+    final buildings = <models.Building>[];
+
+    for (final row in buildingRows) {
+      buildings.add(await _buildingRowToModel(row));
+    }
+
+    return buildings;
+  }
+
+  /// @deprecated Verwende [softDeleteBuilding] für sicheres Löschen.
+  Future<void> deleteBuilding(String id) async {
+    await softDeleteBuilding(id);
   }
 
   // ========== FLOOR PLANS ==========
@@ -557,6 +644,33 @@ class DatabaseService {
     }
   }
 
+  Future<List<models.Anlage>> getAnlagenForProject(
+    String projectId, {
+    String? includeBuildingId,
+  }) async {
+    final buildingRows = await _db.getBuildingsByProjectId(projectId);
+    final allAnlagen = <models.Anlage>[];
+    final seenIds = <String>{};
+
+    for (final row in buildingRows) {
+      for (final anlage in await getAnlagenByBuildingId(row.id)) {
+        if (seenIds.add(anlage.id)) {
+          allAnlagen.add(anlage);
+        }
+      }
+    }
+
+    if (includeBuildingId != null && includeBuildingId.isNotEmpty) {
+      for (final anlage in await getAnlagenByBuildingId(includeBuildingId)) {
+        if (seenIds.add(anlage.id)) {
+          allAnlagen.add(anlage);
+        }
+      }
+    }
+
+    return allAnlagen;
+  }
+
   Future<List<models.Anlage>> getAnlagenByBuildingId(String buildingId) async {
     final cache = _anlagenListCache[buildingId];
     if (cache?.all != null) return cache!.all!;
@@ -604,20 +718,59 @@ class DatabaseService {
     return getAnlageById(id);
   }
 
-  /// Löscht eine Anlage und rekursiv alle ihre Kinder (Bauteile).
-  Future<void> deleteAnlage(String id) async {
-    final row = await _db.getAnlageById(id);
-    final buildingId = row?.buildingId;
-
-    // Zuerst alle Kinder (Bauteile) rekursiv löschen
+  Future<void> softDeleteAnlage(String id) async {
     final children = await getAnlagenByParentId(id);
     for (final child in children) {
-      await deleteAnlage(child.id); // Rekursiv löschen
+      await softDeleteAnlage(child.id);
+    }
+    await _db.softDeleteAnlage(id);
+    final row = await _db.getAnlageByIdIncludingDeleted(id);
+    if (row != null) _invalidateAnlagenListCache(row.buildingId);
+  }
+
+  Future<void> restoreAnlage(String id) async {
+    await _db.restoreAnlage(id);
+    final row = await _db.getAnlageByIdIncludingDeleted(id);
+    if (row != null) _invalidateAnlagenListCache(row.buildingId);
+  }
+
+  Future<void> permanentlyDeleteAnlage(String id) async {
+    final row = await _db.getAnlageByIdIncludingDeleted(id);
+    final buildingId = row?.buildingId;
+
+    final childrenRows = await _db.getAnlagenByParentIdIncludingDeleted(id);
+    for (final childRow in childrenRows) {
+      await permanentlyDeleteAnlage(childRow.id);
     }
 
-    // Dann die Anlage selbst löschen
     await _db.deleteAnlage(id);
     if (buildingId != null) _invalidateAnlagenListCache(buildingId);
+  }
+
+  Future<List<models.Anlage>> getDeletedAnlagen() async {
+    final rows = await _db.getDeletedAnlagen();
+    if (rows.isEmpty) return [];
+
+    final byBuilding = <String, List<AnlageDb>>{};
+    for (final row in rows) {
+      byBuilding.putIfAbsent(row.buildingId, () => []).add(row);
+    }
+
+    final result = <models.Anlage>[];
+    for (final entry in byBuilding.entries) {
+      result.addAll(await _rowsToAnlagenList(entry.value, entry.key));
+    }
+    return result;
+  }
+
+  /// Löscht eine Anlage und rekursiv alle ihre Kinder (Bauteile) – Soft-Delete.
+  Future<void> deleteAnlage(String id) async {
+    await softDeleteAnlage(id);
+  }
+
+  /// Hartes Löschen einer Anlage inkl. Kinder (nur Papierkorb / endgültig löschen).
+  Future<void> hardDeleteAnlage(String id) async {
+    await permanentlyDeleteAnlage(id);
   }
 
   // ========== DISZIPLINEN ==========
@@ -698,10 +851,20 @@ class DatabaseService {
 
   // ========== PROJECT ID ==========
 
-  /// Ermittelt die projectId für ein gegebenes buildingId
+  /// Ermittelt die projectId für ein gegebenes buildingId (nur aktive Gebäude)
   Future<String?> getProjectIdByBuildingId(String buildingId) async {
     final building = await _db.getBuildingById(buildingId);
     return building?.projectId;
+  }
+
+  Future<String?> getProjectIdByBuildingIdIncludingDeleted(String buildingId) async {
+    final building = await _db.getBuildingByIdIncludingDeleted(buildingId);
+    return building?.projectId;
+  }
+
+  Future<String?> getProjectNameByIdIncludingDeleted(String projectId) async {
+    final project = await _db.getProjectByIdIncludingDeleted(projectId);
+    return project?.name;
   }
 
   // ========== TEMPLATES ==========

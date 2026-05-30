@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfx/pdfx.dart';
 import 'package:path/path.dart' as path;
 import 'package:share_plus/share_plus.dart';
+import '../services/csv_service.dart';
 import '../database/database_service.dart';
 import '../utils/app_log.dart';
 
@@ -509,6 +510,37 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     if (_isLoading || _isExporting) return;
     if (_pageImages.isEmpty || _pdfPageWidth <= 0 || _pdfPageHeight <= 0) return;
 
+    final destination = await showDialog<ExportDestination>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Speicherort wählen'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.share, color: Colors.blue),
+              title: const Text('Teilen'),
+              subtitle: const Text('Per E-Mail, Messenger etc. versenden'),
+              onTap: () => Navigator.of(context).pop(ExportDestination.share),
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: Colors.green),
+              title: const Text('Auf Gerät speichern'),
+              subtitle: const Text('In Dateien oder Downloads ablegen'),
+              onTap: () => Navigator.of(context).pop(ExportDestination.saveToDevice),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Abbrechen'),
+          ),
+        ],
+      ),
+    );
+    if (destination == null) return;
+
     setState(() => _isExporting = true);
     try {
       final doc = pw.Document();
@@ -572,26 +604,34 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
       final bytes = await doc.save();
       final tempDir = await getTemporaryDirectory();
-      final outFile = File(
-        path.join(tempDir.path, '${safeBase}_mit_markern_$timestamp.pdf'),
-      );
+      final fileName = '${safeBase}_mit_markern_$timestamp.pdf';
+      final outFile = File(path.join(tempDir.path, fileName));
       await outFile.writeAsBytes(bytes, flush: true);
 
       if (!mounted) return;
-      await Share.shareXFiles(
-        [XFile(outFile.path)],
-        text: 'Grundriss mit Markern',
-        subject: 'Grundriss-Export',
-      );
+      if (destination == ExportDestination.saveToDevice) {
+        final savedPath = await CsvService.saveFileToDevice(
+          file: outFile,
+          fileName: fileName,
+        );
+        if (savedPath != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Gespeichert unter:\n$savedPath'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } else {
+        await Share.shareXFiles(
+          [XFile(outFile.path)],
+          text: 'Grundriss mit Markern',
+          subject: 'Grundriss-Export',
+        );
+      }
     } catch (e, stackTrace) {
       appLog('Fehler beim Grundriss-PDF-Export', error: e, stackTrace: stackTrace);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Export fehlgeschlagen: $e'),
-          duration: const Duration(seconds: 3),
-        ),
-      );
     } finally {
       if (!mounted) return;
       setState(() => _isExporting = false);
@@ -793,14 +833,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
     await _saveAnlagenForDisziplin(updatedAnlage.discipline);
     await _loadAllAnlagen();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Anlage als Marker hinzugefügt'),
-        duration: Duration(seconds: 2),
-      ),
-    );
   }
 
   void _showEditMarkerDialog(Anlage a) {
@@ -835,14 +867,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
             await _saveAnlagenForDisziplin(a.discipline);
             await _loadAllAnlagen();
-
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Marker vom Grundriss entfernt (Anlage bleibt erhalten)'),
-                duration: Duration(seconds: 2),
-              ),
-            );
           },
           onSave: (Marker updatedMarker) async {
             setState(() {

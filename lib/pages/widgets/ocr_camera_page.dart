@@ -99,9 +99,6 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
     } catch (e) {
       debugPrint('OCR Camera: Fehler beim Aufnehmen: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fehler beim Aufnehmen des Fotos: $e')),
-        );
         setState(() {
           _isCapturing = false;
         });

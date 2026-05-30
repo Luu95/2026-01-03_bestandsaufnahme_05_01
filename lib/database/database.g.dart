@@ -31,8 +31,19 @@ class $ProjectsTable extends Projects
   late final GeneratedColumn<String> customer = GeneratedColumn<String>(
       'customer', aliasedName, false,
       type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _isDeletedMeta =
+      const VerificationMeta('isDeleted');
   @override
-  List<GeneratedColumn> get $columns => [id, name, description, customer];
+  late final GeneratedColumn<bool> isDeleted = GeneratedColumn<bool>(
+      'is_deleted', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_deleted" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, name, description, customer, isDeleted];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -68,6 +79,10 @@ class $ProjectsTable extends Projects
     } else if (isInserting) {
       context.missing(_customerMeta);
     }
+    if (data.containsKey('is_deleted')) {
+      context.handle(_isDeletedMeta,
+          isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta));
+    }
     return context;
   }
 
@@ -85,6 +100,8 @@ class $ProjectsTable extends Projects
           .read(DriftSqlType.string, data['${effectivePrefix}description'])!,
       customer: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}customer'])!,
+      isDeleted: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_deleted'])!,
     );
   }
 
@@ -99,11 +116,13 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
   final String name;
   final String description;
   final String customer;
+  final bool isDeleted;
   const ProjectDb(
       {required this.id,
       required this.name,
       required this.description,
-      required this.customer});
+      required this.customer,
+      required this.isDeleted});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -111,6 +130,7 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
     map['name'] = Variable<String>(name);
     map['description'] = Variable<String>(description);
     map['customer'] = Variable<String>(customer);
+    map['is_deleted'] = Variable<bool>(isDeleted);
     return map;
   }
 
@@ -120,6 +140,7 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
       name: Value(name),
       description: Value(description),
       customer: Value(customer),
+      isDeleted: Value(isDeleted),
     );
   }
 
@@ -131,6 +152,7 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
       name: serializer.fromJson<String>(json['name']),
       description: serializer.fromJson<String>(json['description']),
       customer: serializer.fromJson<String>(json['customer']),
+      isDeleted: serializer.fromJson<bool>(json['isDeleted']),
     );
   }
   @override
@@ -141,16 +163,22 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
       'name': serializer.toJson<String>(name),
       'description': serializer.toJson<String>(description),
       'customer': serializer.toJson<String>(customer),
+      'isDeleted': serializer.toJson<bool>(isDeleted),
     };
   }
 
   ProjectDb copyWith(
-          {String? id, String? name, String? description, String? customer}) =>
+          {String? id,
+          String? name,
+          String? description,
+          String? customer,
+          bool? isDeleted}) =>
       ProjectDb(
         id: id ?? this.id,
         name: name ?? this.name,
         description: description ?? this.description,
         customer: customer ?? this.customer,
+        isDeleted: isDeleted ?? this.isDeleted,
       );
   ProjectDb copyWithCompanion(ProjectsCompanion data) {
     return ProjectDb(
@@ -159,6 +187,7 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
       description:
           data.description.present ? data.description.value : this.description,
       customer: data.customer.present ? data.customer.value : this.customer,
+      isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
     );
   }
 
@@ -168,13 +197,14 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('description: $description, ')
-          ..write('customer: $customer')
+          ..write('customer: $customer, ')
+          ..write('isDeleted: $isDeleted')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, description, customer);
+  int get hashCode => Object.hash(id, name, description, customer, isDeleted);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -182,7 +212,8 @@ class ProjectDb extends DataClass implements Insertable<ProjectDb> {
           other.id == this.id &&
           other.name == this.name &&
           other.description == this.description &&
-          other.customer == this.customer);
+          other.customer == this.customer &&
+          other.isDeleted == this.isDeleted);
 }
 
 class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
@@ -190,12 +221,14 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
   final Value<String> name;
   final Value<String> description;
   final Value<String> customer;
+  final Value<bool> isDeleted;
   final Value<int> rowid;
   const ProjectsCompanion({
     this.id = const Value.absent(),
     this.name = const Value.absent(),
     this.description = const Value.absent(),
     this.customer = const Value.absent(),
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProjectsCompanion.insert({
@@ -203,6 +236,7 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
     required String name,
     required String description,
     required String customer,
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -213,6 +247,7 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
     Expression<String>? name,
     Expression<String>? description,
     Expression<String>? customer,
+    Expression<bool>? isDeleted,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -220,6 +255,7 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (customer != null) 'customer': customer,
+      if (isDeleted != null) 'is_deleted': isDeleted,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -229,12 +265,14 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
       Value<String>? name,
       Value<String>? description,
       Value<String>? customer,
+      Value<bool>? isDeleted,
       Value<int>? rowid}) {
     return ProjectsCompanion(
       id: id ?? this.id,
       name: name ?? this.name,
       description: description ?? this.description,
       customer: customer ?? this.customer,
+      isDeleted: isDeleted ?? this.isDeleted,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -254,6 +292,9 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
     if (customer.present) {
       map['customer'] = Variable<String>(customer.value);
     }
+    if (isDeleted.present) {
+      map['is_deleted'] = Variable<bool>(isDeleted.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -267,6 +308,7 @@ class ProjectsCompanion extends UpdateCompanion<ProjectDb> {
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('customer: $customer, ')
+          ..write('isDeleted: $isDeleted, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -357,6 +399,16 @@ class $BuildingsTable extends Buildings
   late final GeneratedColumn<double> floorArea = GeneratedColumn<double>(
       'floor_area', aliasedName, false,
       type: DriftSqlType.double, requiredDuringInsert: true);
+  static const VerificationMeta _isDeletedMeta =
+      const VerificationMeta('isDeleted');
+  @override
+  late final GeneratedColumn<bool> isDeleted = GeneratedColumn<bool>(
+      'is_deleted', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_deleted" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -371,7 +423,8 @@ class $BuildingsTable extends Buildings
         renovationYears,
         protectedMonument,
         units,
-        floorArea
+        floorArea,
+        isDeleted
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -468,6 +521,10 @@ class $BuildingsTable extends Buildings
     } else if (isInserting) {
       context.missing(_floorAreaMeta);
     }
+    if (data.containsKey('is_deleted')) {
+      context.handle(_isDeletedMeta,
+          isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta));
+    }
     return context;
   }
 
@@ -503,6 +560,8 @@ class $BuildingsTable extends Buildings
           .read(DriftSqlType.int, data['${effectivePrefix}units'])!,
       floorArea: attachedDatabase.typeMapping
           .read(DriftSqlType.double, data['${effectivePrefix}floor_area'])!,
+      isDeleted: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_deleted'])!,
     );
   }
 
@@ -526,6 +585,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
   final bool protectedMonument;
   final int units;
   final double floorArea;
+  final bool isDeleted;
   const BuildingDb(
       {required this.id,
       required this.projectId,
@@ -539,7 +599,8 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
       required this.renovationYears,
       required this.protectedMonument,
       required this.units,
-      required this.floorArea});
+      required this.floorArea,
+      required this.isDeleted});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -556,6 +617,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
     map['protected_monument'] = Variable<bool>(protectedMonument);
     map['units'] = Variable<int>(units);
     map['floor_area'] = Variable<double>(floorArea);
+    map['is_deleted'] = Variable<bool>(isDeleted);
     return map;
   }
 
@@ -574,6 +636,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
       protectedMonument: Value(protectedMonument),
       units: Value(units),
       floorArea: Value(floorArea),
+      isDeleted: Value(isDeleted),
     );
   }
 
@@ -594,6 +657,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
       protectedMonument: serializer.fromJson<bool>(json['protectedMonument']),
       units: serializer.fromJson<int>(json['units']),
       floorArea: serializer.fromJson<double>(json['floorArea']),
+      isDeleted: serializer.fromJson<bool>(json['isDeleted']),
     );
   }
   @override
@@ -613,6 +677,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
       'protectedMonument': serializer.toJson<bool>(protectedMonument),
       'units': serializer.toJson<int>(units),
       'floorArea': serializer.toJson<double>(floorArea),
+      'isDeleted': serializer.toJson<bool>(isDeleted),
     };
   }
 
@@ -629,7 +694,8 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
           String? renovationYears,
           bool? protectedMonument,
           int? units,
-          double? floorArea}) =>
+          double? floorArea,
+          bool? isDeleted}) =>
       BuildingDb(
         id: id ?? this.id,
         projectId: projectId ?? this.projectId,
@@ -644,6 +710,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
         protectedMonument: protectedMonument ?? this.protectedMonument,
         units: units ?? this.units,
         floorArea: floorArea ?? this.floorArea,
+        isDeleted: isDeleted ?? this.isDeleted,
       );
   BuildingDb copyWithCompanion(BuildingsCompanion data) {
     return BuildingDb(
@@ -667,6 +734,7 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
           : this.protectedMonument,
       units: data.units.present ? data.units.value : this.units,
       floorArea: data.floorArea.present ? data.floorArea.value : this.floorArea,
+      isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
     );
   }
 
@@ -685,7 +753,8 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
           ..write('renovationYears: $renovationYears, ')
           ..write('protectedMonument: $protectedMonument, ')
           ..write('units: $units, ')
-          ..write('floorArea: $floorArea')
+          ..write('floorArea: $floorArea, ')
+          ..write('isDeleted: $isDeleted')
           ..write(')'))
         .toString();
   }
@@ -704,7 +773,8 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
       renovationYears,
       protectedMonument,
       units,
-      floorArea);
+      floorArea,
+      isDeleted);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -721,7 +791,8 @@ class BuildingDb extends DataClass implements Insertable<BuildingDb> {
           other.renovationYears == this.renovationYears &&
           other.protectedMonument == this.protectedMonument &&
           other.units == this.units &&
-          other.floorArea == this.floorArea);
+          other.floorArea == this.floorArea &&
+          other.isDeleted == this.isDeleted);
 }
 
 class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
@@ -738,6 +809,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
   final Value<bool> protectedMonument;
   final Value<int> units;
   final Value<double> floorArea;
+  final Value<bool> isDeleted;
   final Value<int> rowid;
   const BuildingsCompanion({
     this.id = const Value.absent(),
@@ -753,6 +825,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
     this.protectedMonument = const Value.absent(),
     this.units = const Value.absent(),
     this.floorArea = const Value.absent(),
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   BuildingsCompanion.insert({
@@ -769,6 +842,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
     required bool protectedMonument,
     required int units,
     required double floorArea,
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         projectId = Value(projectId),
@@ -797,6 +871,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
     Expression<bool>? protectedMonument,
     Expression<int>? units,
     Expression<double>? floorArea,
+    Expression<bool>? isDeleted,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -813,6 +888,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
       if (protectedMonument != null) 'protected_monument': protectedMonument,
       if (units != null) 'units': units,
       if (floorArea != null) 'floor_area': floorArea,
+      if (isDeleted != null) 'is_deleted': isDeleted,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -831,6 +907,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
       Value<bool>? protectedMonument,
       Value<int>? units,
       Value<double>? floorArea,
+      Value<bool>? isDeleted,
       Value<int>? rowid}) {
     return BuildingsCompanion(
       id: id ?? this.id,
@@ -846,6 +923,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
       protectedMonument: protectedMonument ?? this.protectedMonument,
       units: units ?? this.units,
       floorArea: floorArea ?? this.floorArea,
+      isDeleted: isDeleted ?? this.isDeleted,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -892,6 +970,9 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
     if (floorArea.present) {
       map['floor_area'] = Variable<double>(floorArea.value);
     }
+    if (isDeleted.present) {
+      map['is_deleted'] = Variable<bool>(isDeleted.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -914,6 +995,7 @@ class BuildingsCompanion extends UpdateCompanion<BuildingDb> {
           ..write('protectedMonument: $protectedMonument, ')
           ..write('units: $units, ')
           ..write('floorArea: $floorArea, ')
+          ..write('isDeleted: $isDeleted, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1304,6 +1386,16 @@ class $AnlagenTable extends Anlagen with TableInfo<$AnlagenTable, AnlageDb> {
   late final GeneratedColumn<String> discipline = GeneratedColumn<String>(
       'discipline', aliasedName, false,
       type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _isDeletedMeta =
+      const VerificationMeta('isDeleted');
+  @override
+  late final GeneratedColumn<bool> isDeleted = GeneratedColumn<bool>(
+      'is_deleted', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_deleted" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -1315,7 +1407,8 @@ class $AnlagenTable extends Anlagen with TableInfo<$AnlagenTable, AnlageDb> {
         isMarker,
         markerInfo,
         markerType,
-        discipline
+        discipline,
+        isDeleted
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1388,6 +1481,10 @@ class $AnlagenTable extends Anlagen with TableInfo<$AnlagenTable, AnlageDb> {
     } else if (isInserting) {
       context.missing(_disciplineMeta);
     }
+    if (data.containsKey('is_deleted')) {
+      context.handle(_isDeletedMeta,
+          isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta));
+    }
     return context;
   }
 
@@ -1417,6 +1514,8 @@ class $AnlagenTable extends Anlagen with TableInfo<$AnlagenTable, AnlageDb> {
           .read(DriftSqlType.string, data['${effectivePrefix}marker_type'])!,
       discipline: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}discipline'])!,
+      isDeleted: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_deleted'])!,
     );
   }
 
@@ -1437,6 +1536,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
   final String? markerInfo;
   final String markerType;
   final String discipline;
+  final bool isDeleted;
   const AnlageDb(
       {required this.id,
       this.parentId,
@@ -1447,7 +1547,8 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
       required this.isMarker,
       this.markerInfo,
       required this.markerType,
-      required this.discipline});
+      required this.discipline,
+      required this.isDeleted});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1467,6 +1568,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
     }
     map['marker_type'] = Variable<String>(markerType);
     map['discipline'] = Variable<String>(discipline);
+    map['is_deleted'] = Variable<bool>(isDeleted);
     return map;
   }
 
@@ -1488,6 +1590,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
           : Value(markerInfo),
       markerType: Value(markerType),
       discipline: Value(discipline),
+      isDeleted: Value(isDeleted),
     );
   }
 
@@ -1505,6 +1608,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
       markerInfo: serializer.fromJson<String?>(json['markerInfo']),
       markerType: serializer.fromJson<String>(json['markerType']),
       discipline: serializer.fromJson<String>(json['discipline']),
+      isDeleted: serializer.fromJson<bool>(json['isDeleted']),
     );
   }
   @override
@@ -1521,6 +1625,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
       'markerInfo': serializer.toJson<String?>(markerInfo),
       'markerType': serializer.toJson<String>(markerType),
       'discipline': serializer.toJson<String>(discipline),
+      'isDeleted': serializer.toJson<bool>(isDeleted),
     };
   }
 
@@ -1534,7 +1639,8 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
           bool? isMarker,
           Value<String?> markerInfo = const Value.absent(),
           String? markerType,
-          String? discipline}) =>
+          String? discipline,
+          bool? isDeleted}) =>
       AnlageDb(
         id: id ?? this.id,
         parentId: parentId.present ? parentId.value : this.parentId,
@@ -1546,6 +1652,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
         markerInfo: markerInfo.present ? markerInfo.value : this.markerInfo,
         markerType: markerType ?? this.markerType,
         discipline: discipline ?? this.discipline,
+        isDeleted: isDeleted ?? this.isDeleted,
       );
   AnlageDb copyWithCompanion(AnlagenCompanion data) {
     return AnlageDb(
@@ -1563,6 +1670,7 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
           data.markerType.present ? data.markerType.value : this.markerType,
       discipline:
           data.discipline.present ? data.discipline.value : this.discipline,
+      isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
     );
   }
 
@@ -1578,14 +1686,15 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
           ..write('isMarker: $isMarker, ')
           ..write('markerInfo: $markerInfo, ')
           ..write('markerType: $markerType, ')
-          ..write('discipline: $discipline')
+          ..write('discipline: $discipline, ')
+          ..write('isDeleted: $isDeleted')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, parentId, name, params, floorId,
-      buildingId, isMarker, markerInfo, markerType, discipline);
+      buildingId, isMarker, markerInfo, markerType, discipline, isDeleted);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1599,7 +1708,8 @@ class AnlageDb extends DataClass implements Insertable<AnlageDb> {
           other.isMarker == this.isMarker &&
           other.markerInfo == this.markerInfo &&
           other.markerType == this.markerType &&
-          other.discipline == this.discipline);
+          other.discipline == this.discipline &&
+          other.isDeleted == this.isDeleted);
 }
 
 class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
@@ -1613,6 +1723,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
   final Value<String?> markerInfo;
   final Value<String> markerType;
   final Value<String> discipline;
+  final Value<bool> isDeleted;
   final Value<int> rowid;
   const AnlagenCompanion({
     this.id = const Value.absent(),
@@ -1625,6 +1736,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
     this.markerInfo = const Value.absent(),
     this.markerType = const Value.absent(),
     this.discipline = const Value.absent(),
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   AnlagenCompanion.insert({
@@ -1638,6 +1750,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
     this.markerInfo = const Value.absent(),
     required String markerType,
     required String discipline,
+    this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -1657,6 +1770,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
     Expression<String>? markerInfo,
     Expression<String>? markerType,
     Expression<String>? discipline,
+    Expression<bool>? isDeleted,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1670,6 +1784,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
       if (markerInfo != null) 'marker_info': markerInfo,
       if (markerType != null) 'marker_type': markerType,
       if (discipline != null) 'discipline': discipline,
+      if (isDeleted != null) 'is_deleted': isDeleted,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1685,6 +1800,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
       Value<String?>? markerInfo,
       Value<String>? markerType,
       Value<String>? discipline,
+      Value<bool>? isDeleted,
       Value<int>? rowid}) {
     return AnlagenCompanion(
       id: id ?? this.id,
@@ -1697,6 +1813,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
       markerInfo: markerInfo ?? this.markerInfo,
       markerType: markerType ?? this.markerType,
       discipline: discipline ?? this.discipline,
+      isDeleted: isDeleted ?? this.isDeleted,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1734,6 +1851,9 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
     if (discipline.present) {
       map['discipline'] = Variable<String>(discipline.value);
     }
+    if (isDeleted.present) {
+      map['is_deleted'] = Variable<bool>(isDeleted.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1753,6 +1873,7 @@ class AnlagenCompanion extends UpdateCompanion<AnlageDb> {
           ..write('markerInfo: $markerInfo, ')
           ..write('markerType: $markerType, ')
           ..write('discipline: $discipline, ')
+          ..write('isDeleted: $isDeleted, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2778,6 +2899,7 @@ typedef $$ProjectsTableCreateCompanionBuilder = ProjectsCompanion Function({
   required String name,
   required String description,
   required String customer,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 typedef $$ProjectsTableUpdateCompanionBuilder = ProjectsCompanion Function({
@@ -2785,6 +2907,7 @@ typedef $$ProjectsTableUpdateCompanionBuilder = ProjectsCompanion Function({
   Value<String> name,
   Value<String> description,
   Value<String> customer,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 
@@ -2843,6 +2966,9 @@ class $$ProjectsTableFilterComposer
 
   ColumnFilters<String> get customer => $composableBuilder(
       column: $table.customer, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnFilters(column));
 
   Expression<bool> buildingsRefs(
       Expression<bool> Function($$BuildingsTableFilterComposer f) f) {
@@ -2907,6 +3033,9 @@ class $$ProjectsTableOrderingComposer
 
   ColumnOrderings<String> get customer => $composableBuilder(
       column: $table.customer, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ProjectsTableAnnotationComposer
@@ -2929,6 +3058,9 @@ class $$ProjectsTableAnnotationComposer
 
   GeneratedColumn<String> get customer =>
       $composableBuilder(column: $table.customer, builder: (column) => column);
+
+  GeneratedColumn<bool> get isDeleted =>
+      $composableBuilder(column: $table.isDeleted, builder: (column) => column);
 
   Expression<T> buildingsRefs<T extends Object>(
       Expression<T> Function($$BuildingsTableAnnotationComposer a) f) {
@@ -3000,6 +3132,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             Value<String> name = const Value.absent(),
             Value<String> description = const Value.absent(),
             Value<String> customer = const Value.absent(),
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ProjectsCompanion(
@@ -3007,6 +3140,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             name: name,
             description: description,
             customer: customer,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3014,6 +3148,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             required String name,
             required String description,
             required String customer,
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ProjectsCompanion.insert(
@@ -3021,6 +3156,7 @@ class $$ProjectsTableTableManager extends RootTableManager<
             name: name,
             description: description,
             customer: customer,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -3097,6 +3233,7 @@ typedef $$BuildingsTableCreateCompanionBuilder = BuildingsCompanion Function({
   required bool protectedMonument,
   required int units,
   required double floorArea,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 typedef $$BuildingsTableUpdateCompanionBuilder = BuildingsCompanion Function({
@@ -3113,6 +3250,7 @@ typedef $$BuildingsTableUpdateCompanionBuilder = BuildingsCompanion Function({
   Value<bool> protectedMonument,
   Value<int> units,
   Value<double> floorArea,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 
@@ -3245,6 +3383,9 @@ class $$BuildingsTableFilterComposer
 
   ColumnFilters<double> get floorArea => $composableBuilder(
       column: $table.floorArea, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnFilters(column));
 
   $$ProjectsTableFilterComposer get projectId {
     final $$ProjectsTableFilterComposer composer = $composerBuilder(
@@ -3399,6 +3540,9 @@ class $$BuildingsTableOrderingComposer
   ColumnOrderings<double> get floorArea => $composableBuilder(
       column: $table.floorArea, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnOrderings(column));
+
   $$ProjectsTableOrderingComposer get projectId {
     final $$ProjectsTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -3464,6 +3608,9 @@ class $$BuildingsTableAnnotationComposer
 
   GeneratedColumn<double> get floorArea =>
       $composableBuilder(column: $table.floorArea, builder: (column) => column);
+
+  GeneratedColumn<bool> get isDeleted =>
+      $composableBuilder(column: $table.isDeleted, builder: (column) => column);
 
   $$ProjectsTableAnnotationComposer get projectId {
     final $$ProjectsTableAnnotationComposer composer = $composerBuilder(
@@ -3611,6 +3758,7 @@ class $$BuildingsTableTableManager extends RootTableManager<
             Value<bool> protectedMonument = const Value.absent(),
             Value<int> units = const Value.absent(),
             Value<double> floorArea = const Value.absent(),
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               BuildingsCompanion(
@@ -3627,6 +3775,7 @@ class $$BuildingsTableTableManager extends RootTableManager<
             protectedMonument: protectedMonument,
             units: units,
             floorArea: floorArea,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3643,6 +3792,7 @@ class $$BuildingsTableTableManager extends RootTableManager<
             required bool protectedMonument,
             required int units,
             required double floorArea,
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               BuildingsCompanion.insert(
@@ -3659,6 +3809,7 @@ class $$BuildingsTableTableManager extends RootTableManager<
             protectedMonument: protectedMonument,
             units: units,
             floorArea: floorArea,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -4069,6 +4220,7 @@ typedef $$AnlagenTableCreateCompanionBuilder = AnlagenCompanion Function({
   Value<String?> markerInfo,
   required String markerType,
   required String discipline,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 typedef $$AnlagenTableUpdateCompanionBuilder = AnlagenCompanion Function({
@@ -4082,6 +4234,7 @@ typedef $$AnlagenTableUpdateCompanionBuilder = AnlagenCompanion Function({
   Value<String?> markerInfo,
   Value<String> markerType,
   Value<String> discipline,
+  Value<bool> isDeleted,
   Value<int> rowid,
 });
 
@@ -4141,6 +4294,9 @@ class $$AnlagenTableFilterComposer
   ColumnFilters<String> get discipline => $composableBuilder(
       column: $table.discipline, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnFilters(column));
+
   $$BuildingsTableFilterComposer get buildingId {
     final $$BuildingsTableFilterComposer composer = $composerBuilder(
         composer: this,
@@ -4197,6 +4353,9 @@ class $$AnlagenTableOrderingComposer
 
   ColumnOrderings<String> get discipline => $composableBuilder(
       column: $table.discipline, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isDeleted => $composableBuilder(
+      column: $table.isDeleted, builder: (column) => ColumnOrderings(column));
 
   $$BuildingsTableOrderingComposer get buildingId {
     final $$BuildingsTableOrderingComposer composer = $composerBuilder(
@@ -4255,6 +4414,9 @@ class $$AnlagenTableAnnotationComposer
   GeneratedColumn<String> get discipline => $composableBuilder(
       column: $table.discipline, builder: (column) => column);
 
+  GeneratedColumn<bool> get isDeleted =>
+      $composableBuilder(column: $table.isDeleted, builder: (column) => column);
+
   $$BuildingsTableAnnotationComposer get buildingId {
     final $$BuildingsTableAnnotationComposer composer = $composerBuilder(
         composer: this,
@@ -4309,6 +4471,7 @@ class $$AnlagenTableTableManager extends RootTableManager<
             Value<String?> markerInfo = const Value.absent(),
             Value<String> markerType = const Value.absent(),
             Value<String> discipline = const Value.absent(),
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AnlagenCompanion(
@@ -4322,6 +4485,7 @@ class $$AnlagenTableTableManager extends RootTableManager<
             markerInfo: markerInfo,
             markerType: markerType,
             discipline: discipline,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4335,6 +4499,7 @@ class $$AnlagenTableTableManager extends RootTableManager<
             Value<String?> markerInfo = const Value.absent(),
             required String markerType,
             required String discipline,
+            Value<bool> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AnlagenCompanion.insert(
@@ -4348,6 +4513,7 @@ class $$AnlagenTableTableManager extends RootTableManager<
             markerInfo: markerInfo,
             markerType: markerType,
             discipline: discipline,
+            isDeleted: isDeleted,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

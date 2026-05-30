@@ -519,12 +519,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
     if (objectsToMove.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Keine Anlagen ausgewählt'),
-          duration: Duration(seconds: 2),
-        ),
-      );
       return;
     }
 
@@ -557,12 +551,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       widget.onAnlagenMoved?.call();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${toMoveIds.length} Element(e) verschoben'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
     }
   }
 
@@ -654,14 +642,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           await _loadAnlagen();
 
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Bauteil zu ${selectedParents.length} Anlage${selectedParents.length > 1 ? 'n' : ''} hinzugefügt',
-              ),
-              duration: const Duration(seconds: 2),
-            ),
-          );
           widget.onBauteilCreated?.call();
           _exitSelectionMode(); // Auswahlmodus beenden
         },

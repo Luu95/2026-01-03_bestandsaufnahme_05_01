@@ -24,6 +24,7 @@ import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/csv_settings_provider.dart';
 import '../navigation/route_observer.dart';
+import '../theme/app_theme.dart';
 import 'widgets/generic_anlage_dialog.dart';
 
 // Import der Fullscreen-Version
@@ -36,7 +37,10 @@ import 'tabs/technik_main_tab.dart';
 
 // SystemsPage importieren
 import 'systems_page.dart';
+import 'app_settings_page.dart';
 import 'csv_settings_page.dart';
+import 'recycle_bin_page.dart';
+import 'widgets/confirm_delete_dialog.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
 void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
@@ -445,33 +449,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         refreshSystemsPages: true,
       );
       _refreshSystemsPages();
-
-      // Erfolgsmeldung anzeigen (inkl. Fehleranzahl, falls vorhanden)
-      if (mounted) {
-        String message = '$savedCount importiert';
-        if (skippedCount > 0) message += ', $skippedCount übersprungen';
-        if (errorCount > 0) {
-          message += ', $errorCount Fehler';
-          if (failedRows.isNotEmpty && failedRows.length <= 3) {
-            message += ' (${failedRows.join('; ')})';
-          } else if (failedRows.isNotEmpty) {
-            message += ' (Details im Log)';
-          }
-        } else {
-          message += ' – erfolgreich';
-        }
-        message += '.';
-        if (savedCount > 0 && errorCount == 0) {
-          message += ' Hinweis: Die Reihenfolge in der CSV bestimmt die Hierarchie (Anlage vor Bauteilen).';
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: errorCount > 0 ? Colors.orange : Colors.green,
-            duration: Duration(seconds: errorCount > 0 ? 6 : 3),
-          ),
-        );
-      }
     } catch (e, stackTrace) {
       debugPrint('CSV-Import Fehler: $e');
       debugPrint('Stack Trace: $stackTrace');
@@ -480,18 +457,49 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       if (mounted) {
         Navigator.of(context).pop();
       }
-
-      // Fehlermeldung anzeigen
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim CSV-Import: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
     }
+  }
+
+  Future<ExportDestination?> _showExportDestinationDialog() {
+    return showDialog<ExportDestination>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Speicherort wählen'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.share, color: Colors.blue),
+              title: const Text('Teilen'),
+              subtitle: const Text('Per E-Mail, Messenger etc. versenden'),
+              onTap: () => Navigator.of(context).pop(ExportDestination.share),
+            ),
+            ListTile(
+              leading: const Icon(Icons.save_alt, color: Colors.green),
+              title: const Text('Auf Gerät speichern'),
+              subtitle: const Text('In Dateien oder Downloads ablegen'),
+              onTap: () => Navigator.of(context).pop(ExportDestination.saveToDevice),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Abbrechen'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showExportSavedMessage(String savedPath) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Gespeichert unter:\n$savedPath'),
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   Future<void> _exportCsv() async {
@@ -529,6 +537,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       if (exportType == null) return;
 
+      final destination = await _showExportDestinationDialog();
+      if (destination == null) return;
+
       // Zeige Lade-Dialog
       showDialog(
         context: context,
@@ -551,38 +562,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       }
 
       if (anlagen.isEmpty) {
-        // Fehlermeldung anzeigen
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Keine Anlagen zum Exportieren vorhanden'),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
         return;
       }
 
       if (exportType == 'csv') {
         // Nur CSV exportieren
-        await CsvService.exportAnlagenCsvForDisciplines(
+        final savedPath = await CsvService.exportAnlagenCsvForDisciplines(
           anlagen: anlagen,
           projectId: _currentProject.id,
+          destination: destination,
         );
 
-        debugPrint('CSV-Export abgeschlossen');
-
-        // Erfolgsmeldung anzeigen
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${anlagen.length} Anlagen erfolgreich exportiert'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
+        if (savedPath != null) {
+          _showExportSavedMessage(savedPath);
         }
+
+        debugPrint('CSV-Export abgeschlossen');
       } else if (exportType == 'zip') {
         // ZIP mit Fotos exportieren - zeige Dialog für Ordnerstruktur
         final structure = await showDialog<PhotoExportStructure>(
@@ -633,10 +628,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         );
 
         // ZIP mit Fotos exportieren
-        await CsvService.exportAnlagenWithPhotos(
+        final savedPath = await CsvService.exportAnlagenWithPhotos(
           anlagen: anlagen,
           projectId: _currentProject.id,
           structure: structure,
+          destination: destination,
         );
 
         // Dialog schließen
@@ -644,18 +640,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           Navigator.of(context).pop();
         }
 
-        debugPrint('ZIP-Export abgeschlossen');
-
-        // Erfolgsmeldung anzeigen
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${anlagen.length} Anlagen mit Fotos erfolgreich exportiert'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
+        if (savedPath != null) {
+          _showExportSavedMessage(savedPath);
         }
+
+        debugPrint('ZIP-Export abgeschlossen');
       }
     } catch (e, stackTrace) {
       debugPrint('Export Fehler: $e');
@@ -664,17 +653,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       // Dialog schließen
       if (mounted) {
         Navigator.of(context).pop();
-      }
-
-      // Fehlermeldung anzeigen
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Fehler beim CSV-Export: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
       }
     }
   }
@@ -938,179 +916,65 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   Future<void> _deleteSelectedBuildingsInDrawer() async {
-    final count = _selectedBuildingIndexes.length;
-    if (count == 0) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.grey[300]!,
-                    width: 1,
-                  ),
-                ),
-                child: Icon(
-                  Icons.delete_outline,
-                  size: 28,
-                  color: Colors.grey[700],
-                ),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Gebäude löschen?',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[900],
-                  letterSpacing: -0.2,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Möchtest du $count ausgewählte Gebäude wirklich löschen?',
-                style: TextStyle(
-                  fontSize: 15,
-                  color: Colors.grey[700],
-                  height: 1.5,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Diese Aktion kann nicht rückgängig gemacht werden',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                  fontStyle: FontStyle.italic,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        side: BorderSide(
-                          color: Colors.grey[300]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Text(
-                        'Abbrechen',
-                        style: TextStyle(
-                          color: Colors.grey[700],
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey[800],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'Löschen',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (confirmed != true) return;
+    if (_selectedBuildingIndexes.isEmpty) return;
 
     final toDelete = _selectedBuildingIndexes.toList()..sort((a, b) => b.compareTo(a));
+    final buildingsToDelete = toDelete
+        .where((idx) => idx >= 0 && idx < _currentProject.buildings.length)
+        .map((idx) => _currentProject.buildings[idx])
+        .toList();
 
-    /*setState(() {
-      for (final idx in toDelete) {
-        if (idx >= 0 && idx < _currentProject.buildings.length) {
-          _currentProject.buildings.removeAt(idx);
-        }
-      }
-
-      if (_currentProject.buildings.isEmpty) {
-        _currentBuildingIndex = -1;
-        _building = Building(
-          id: '',
-          name: '',
-          address: '',
-          postalCode: '',
-          city: '',
-          type: '',
-          bgf: 0.0,
-          constructionYear: 0,
-          renovationYears: <int>[],
-          protectedMonument: false,
-          units: 0,
-          floorArea: 0.0,
-          envelope: Envelope(
-            walls: [],
-            roof: Roof(type: '', uValue: 0.0, area: 0.0, insulation: false),
-            floor: FloorSurface(type: '', uValue: 0.0, area: 0.0, insulated: false),
-            windows: [],
-          ),
-          systems: BuildingSystems(),
-          floors: <FloorPlan>[],
-        );
-      } else {
-        if (_currentBuildingIndex >= _currentProject.buildings.length) {
-          _currentBuildingIndex = _currentProject.buildings.length - 1;
-        }
-        if (_currentBuildingIndex >= 0) {
-          _building = _currentProject.buildings[_currentBuildingIndex];
-        }
-      }
-
-      _drawerIconController.reverse();
-      _buildingSelectionMode = false;
-      _selectedBuildingIndexes.clear();
-    });*/
+    for (final building in buildingsToDelete) {
+      final confirmed = await showConfirmDeleteDialog(
+        context,
+        itemType: 'Gebäude',
+        itemName: building.name,
+      );
+      if (!confirmed) return;
+    }
 
     await ref.read(projectsProvider.notifier).deleteBuildings(toDelete);
-    
+
     setState(() {
       _buildingSelectionMode = false;
       _selectedBuildingIndexes.clear();
     });
+  }
+
+  void _openRecycleBin() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const RecycleBinPage()),
+    );
+  }
+
+  Future<void> _deleteSelectedProjects() async {
+    if (_selectedProjectIndexes.isEmpty) return;
+
+    final projectsState = ref.read(projectsProvider);
+    final toDeleteProjects = _selectedProjectIndexes.toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    final projectsToDelete = toDeleteProjects
+        .where((idx) => idx >= 0 && idx < projectsState.projects.length)
+        .map((idx) => projectsState.projects[idx])
+        .toList();
+
+    for (final project in projectsToDelete) {
+      final confirmed = await showConfirmDeleteDialog(
+        context,
+        itemType: 'Projekt',
+        itemName: project.name,
+      );
+      if (!confirmed) return;
+    }
+
+    await ref.read(projectsProvider.notifier).deleteProjects(toDeleteProjects);
+
+    setState(() {
+      _projectSelectionMode = false;
+      _selectedProjectIndexes.clear();
+    });
+    if (mounted) Navigator.of(context).pop();
   }
 
   void _switchProject(int idx) {
@@ -1682,9 +1546,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       await dbService.deleteDiscipline(_building.id, label);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${labels.length == 1 ? labels.first : '${labels.length} Gewerke'} gelöscht')),
-    );
 
     await _loadDisciplines();
     _exitDisciplineSelectionMode();
@@ -1759,20 +1620,21 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         onDrawerChanged: _onDrawerChanged,
         appBar: AppBar(
           elevation: 0,
-          backgroundColor: Colors.white,
-          iconTheme: const IconThemeData(color: Colors.black87),
           title: const Text(
             'Keine Projekte vorhanden',
-            style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+            style: TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
-        body: const Center(
+        body: Center(
           child: Padding(
-            padding: EdgeInsets.all(24.0),
+            padding: const EdgeInsets.all(24.0),
             child: Text(
               'Es sind derzeit keine Projekte hinterlegt.\nLege über das Menü (☰) ein neues Projekt an.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, color: Colors.black54),
+              style: TextStyle(
+                fontSize: 16,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              ),
             ),
           ),
         ),
@@ -1785,20 +1647,21 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         onDrawerChanged: _onDrawerChanged,
         appBar: AppBar(
           elevation: 0,
-          backgroundColor: Color(0xFFEEEEEE),
-          iconTheme: const IconThemeData(color: Colors.black87),
           title: Text(
             '„${_currentProject.name}“: Keine Gebäude',
-            style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
-        body: const Center(
+        body: Center(
           child: Padding(
-            padding: EdgeInsets.all(24.0),
+            padding: const EdgeInsets.all(24.0),
             child: Text(
               'Dieses Projekt enthält momentan keine Gebäude.\nLege über das Menü (☰) ein neues Gebäude an.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, color: Colors.black54),
+              style: TextStyle(
+                fontSize: 16,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              ),
             ),
           ),
         ),
@@ -1829,23 +1692,23 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       appBarTitle = _building.name;
     }
 
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final onSurface = colorScheme.onSurface;
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        systemNavigationBarColor: Color(0xFFEEEEEE),
-        systemNavigationBarDividerColor: Color(0xFFEEEEEE),
-        systemNavigationBarIconBrightness: Brightness.dark,
-      ),
+      value: AppTheme.systemUiOverlayStyle(theme.brightness),
       child: Scaffold(
-        backgroundColor: Color(0xFFEEEEEE),
+        backgroundColor: theme.scaffoldBackgroundColor,
         drawer: _buildDrawer(context),
       onDrawerChanged: _onDrawerChanged,
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: inSelectionMode 
-            ? const Color(0xFF4B5563) // Edles, professionelles Grau statt Blau
-            : Colors.white,
+        backgroundColor: inSelectionMode
+            ? const Color(0xFF4B5563)
+            : theme.appBarTheme.backgroundColor,
         iconTheme: IconThemeData(
-          color: inSelectionMode ? Colors.white : Colors.black87,
+          color: inSelectionMode ? Colors.white : onSurface.withOpacity(0.87),
         ),
         leading: Builder(
           builder: (innerContext) {
@@ -1886,7 +1749,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               icon: AnimatedIcon(
                 icon: AnimatedIcons.menu_close,
                 progress: _drawerIconAnimation,
-                color: inSelectionMode ? Colors.white : Colors.black87,
+                color: inSelectionMode ? Colors.white : onSurface.withOpacity(0.87),
               ),
             );
           },
@@ -1895,7 +1758,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         title: Text(
           appBarTitle,
           style: TextStyle(
-            color: inSelectionMode ? Colors.white : Colors.black87,
+            color: inSelectionMode ? Colors.white : onSurface.withOpacity(0.87),
             fontWeight: FontWeight.w600,
           ),
           overflow: TextOverflow.ellipsis,
@@ -1975,8 +1838,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       bottomNavigationBar: SafeArea(
         child: Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFFEEEEEE),
+          decoration: BoxDecoration(
+            color: theme.scaffoldBackgroundColor,
           ),
           child: Padding(
             padding: EdgeInsets.only(
@@ -1993,8 +1856,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   indicator: const BoxDecoration(color: Colors.transparent),
                   indicatorSize: TabBarIndicatorSize.tab,
                   dividerColor: Colors.transparent,
-                  labelColor: Colors.black,
-                  unselectedLabelColor: Colors.black,
+                  labelColor: onSurface,
+                  unselectedLabelColor: onSurface,
                   labelStyle:
                   const TextStyle(fontSize: 9, fontWeight: FontWeight.w400),
                   unselectedLabelStyle: const TextStyle(fontSize: 9),
@@ -2376,6 +2239,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     required int index,
   }) {
     final isSelected = _tabController.index == index;
+    final surfaceColor = Theme.of(context).colorScheme.surface;
+
     return Tab(
       height: 60,
       child: Column(
@@ -2385,7 +2250,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           Container(
             padding: const EdgeInsets.all(6.0),
             decoration: BoxDecoration(
-              color: isSelected ? Colors.white : Colors.transparent,
+              color: isSelected ? surfaceColor : Colors.transparent,
               shape: BoxShape.circle,
             ),
             child: Icon(icon, size: 20),
@@ -2513,178 +2378,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                       color: Colors.transparent,
                       child: InkWell(
                         borderRadius: BorderRadius.circular(20),
-                        onTap: () async {
-                        if (_selectedProjectIndexes.isEmpty) return;
-                        final count = _selectedProjectIndexes.length;
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          barrierColor: Colors.black.withOpacity(0.5),
-                          builder: (ctx) => Dialog(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              constraints: const BoxConstraints(maxWidth: 400),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.1),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      Icons.delete_outline,
-                                      size: 48,
-                                      color: Colors.red[600],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 20),
-                                  Text(
-                                    'Projekte löschen?',
-                                    style: TextStyle(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.grey[900],
-                                      letterSpacing: -0.3,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'Möchtest du $count ausgewählte Projekt${count > 1 ? 'e' : ''} wirklich löschen?',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      color: Colors.grey[700],
-                                      height: 1.5,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.orange.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: Colors.orange.withOpacity(0.2),
-                                        width: 1,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.warning_amber_rounded,
-                                          size: 18,
-                                          color: Colors.orange[700],
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Flexible(
-                                          child: Text(
-                                            'Diese Aktion kann nicht rückgängig gemacht werden',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.orange[800],
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 24),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: OutlinedButton(
-                                          onPressed: () => Navigator.of(ctx).pop(false),
-                                          style: OutlinedButton.styleFrom(
-                                            padding: const EdgeInsets.symmetric(vertical: 14),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(12),
-                                            ),
-                                            side: BorderSide(
-                                              color: Colors.grey[300]!,
-                                              width: 1.5,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            'Abbrechen',
-                                            style: TextStyle(
-                                              color: Colors.grey[700],
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 15,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: ElevatedButton(
-                                          onPressed: () => Navigator.of(ctx).pop(true),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.red[600],
-                                            foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(vertical: 14),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(12),
-                                            ),
-                                            elevation: 2,
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(Icons.delete, size: 20),
-                                              const SizedBox(width: 8),
-                                              const Text(
-                                                'Löschen',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 15,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                        if (confirmed != true) return;
-
-                        final toDeleteProjects = _selectedProjectIndexes
-                            .toList()
-                          ..sort((a, b) => b.compareTo(a));
-
-                        // Lösche zuerst alle Gebäude in den Projekten
-                        final projectsState = ref.read(projectsProvider);
-                        for (var projIdx in toDeleteProjects) {
-                          if (projIdx >= 0 && projIdx < projectsState.projects.length) {
-                            final project = projectsState.projects[projIdx];
-                            if (project.buildings.isNotEmpty) {
-                              final buildingIndexes = List<int>.generate(project.buildings.length, (i) => i);
-                              await ref.read(projectsProvider.notifier).deleteBuildings(buildingIndexes);
-                            }
-                          }
-                        }
-                        
-                        await ref.read(projectsProvider.notifier).deleteProjects(toDeleteProjects);
-                        
-                        setState(() {
-                          _projectSelectionMode = false;
-                          _selectedProjectIndexes.clear();
-                        });
-                          Navigator.of(context).pop();
-                        },
+                        onTap: _deleteSelectedProjects,
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           child: const Icon(Icons.delete_outline,
@@ -2730,6 +2424,21 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           fontWeight: FontWeight.w600,
                           color: Colors.grey,
                           letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: _openRecycleBin,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          child: Icon(
+                            Icons.delete_outline,
+                            size: 22,
+                            color: Colors.grey[700],
+                          ),
                         ),
                       ),
                     ),
@@ -3193,6 +2902,26 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                     label: 'CSV exportieren',
                     color: Colors.blue,
                     onTap: () => _exportCsv(),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildActionButton(
+                    icon: Icons.tune_rounded,
+                    label: 'Allgemeine Einstellungen',
+                    color: Colors.indigo,
+                    onTap: () {
+                      final projects = ref.read(projectsProvider).projects;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => AppSettingsPage(
+                            projectId: projects.isNotEmpty ? _currentProject.id : null,
+                            buildingId: projects.isNotEmpty &&
+                                    _currentProject.buildings.isNotEmpty
+                                ? _building.id
+                                : null,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 8),
                   _buildActionButton(

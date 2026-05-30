@@ -136,7 +136,7 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
     }
   }
 
-  /// Löscht Projekte
+  /// Löscht Projekte (Soft-Delete → Papierkorb)
   Future<void> deleteProjects(List<int> indices) async {
     try {
       indices.sort((a, b) => b.compareTo(a));
@@ -234,12 +234,13 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
         selectedProjectIndex: selectedProjectIndex,
         selectedBuildingIndex: selectedBuildingIndex,
       );
+      await loadProjects();
     } catch (e) {
       // Fehlerbehandlung
     }
   }
 
-  /// Löscht Gebäude
+  /// Löscht Gebäude (Soft-Delete → Papierkorb)
   Future<void> deleteBuildings(List<int> indices) async {
     try {
       final project = state.selectedProject;
@@ -264,6 +265,7 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
       }
 
       await updateProject(project);
+      await loadProjects();
       state = state.copyWith(selectedBuildingIndex: selectedBuildingIndex);
     } catch (e) {
       // Fehlerbehandlung

@@ -157,25 +157,9 @@ Future<bool> updateDiscipline(
       appLog('Anlagen für Disziplin "${oldDiscipline.label}" auf "${newDiscipline.label}" aktualisiert.');
     }
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Disziplin "${newDiscipline.label}" wurde aktualisiert'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    }
     return true;
   } catch (e) {
     appLog('Fehler beim Aktualisieren der Disziplin', error: e);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Fehler beim Aktualisieren der Disziplin: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
     return false;
   }
 }

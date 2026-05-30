@@ -12,6 +12,8 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
+import 'backup_storage_service.dart';
+import '../models/backup_run_result.dart';
 import '../models/csv_hierarchy_level.dart';
 import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
@@ -28,6 +30,12 @@ enum PhotoExportStructure {
   byAnlage,   // Fotos in Ordnern pro Anlage
   byGewerk,   // Fotos in Ordnern pro Gewerk
   allInOne,   // Alle Fotos in einem Ordner
+}
+
+/// Ziel des Exports: Teilen oder direkt auf dem Gerät speichern.
+enum ExportDestination {
+  share,
+  saveToDevice,
 }
 
 class CsvService {
@@ -924,7 +932,7 @@ class CsvService {
   /// 
   /// CSV-Format:
   /// Name;BuildingId;FloorId;IsMarker;MarkerType;DisciplineLabel;Params;MarkerInfo
-  static Future<void> exportAnlagenToCsv(List<Anlage> anlagen) async {
+  static Future<String?> exportAnlagenToCsv(List<Anlage> anlagen) async {
     if (anlagen.isEmpty) {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
     }
@@ -971,11 +979,12 @@ class CsvService {
       final file = File('${directory.path}/anlagen_export_$timestamp.csv');
       await file.writeAsString(csvString);
 
-      // Datei teilen
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: 'Anlagen-Export',
-        subject: 'Anlagen CSV Export',
+      return _deliverExportFile(
+        file: file,
+        fileName: 'anlagen_export_$timestamp.csv',
+        destination: ExportDestination.share,
+        shareText: 'Anlagen-Export',
+        shareSubject: 'Anlagen CSV Export',
       );
     } catch (e) {
       throw Exception('Fehler beim CSV-Export: $e');
@@ -984,9 +993,10 @@ class CsvService {
 
   /// Exportiert Anlagen zu CSV – rein datengetrieben aus params (CSV-Import-Struktur).
   /// Spalten = alle vorkommenden Param-Keys (sortiert) + 4 Foto-Spalten.
-  static Future<void> exportAnlagenCsvForDisciplines({
+  static Future<String?> exportAnlagenCsvForDisciplines({
     required List<Anlage> anlagen,
     required String projectId,
+    ExportDestination destination = ExportDestination.share,
   }) async {
     if (anlagen.isEmpty) {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
@@ -1062,16 +1072,18 @@ class CsvService {
       // Temporäre Datei erstellen
       final directory = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final file = File('${directory.path}/anlagen_export_$timestamp.csv');
+      final fileName = 'anlagen_export_$timestamp.csv';
+      final file = File('${directory.path}/$fileName');
       await file.writeAsBytes(csvBytes);
 
       debugPrint('CSV-Export abgeschlossen: ${csvData.length - 1} Anlagen exportiert');
 
-      // Datei teilen
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: 'Anlagen-Export',
-        subject: 'Anlagen CSV Export',
+      return _deliverExportFile(
+        file: file,
+        fileName: fileName,
+        destination: destination,
+        shareText: 'Anlagen-Export',
+        shareSubject: 'Anlagen CSV Export',
       );
     } catch (e, stackTrace) {
       debugPrint('CSV-Export Fehler: $e');
@@ -1080,15 +1092,8 @@ class CsvService {
     }
   }
 
-  /// Exportiert Anlagen mit Fotos in ein ZIP-Archiv
-  /// 
-  /// Erstellt eine CSV-Datei mit 4 Fotonummern-Spalten (Format: 0001-9999)
-  /// und exportiert die Fotos in der gewählten Ordnerstruktur.
-  /// 
-  /// [anlagen]: Liste von Anlagen, die exportiert werden sollen
-  /// [projectId]: ProjectId
-  /// [structure]: Ordnerstruktur für die Fotos (Anlagen/Gewerke/Alle)
-  static Future<void> exportAnlagenWithPhotos({
+  /// Erstellt ein ZIP-Archiv mit CSV und Fotos. Gibt die temporäre ZIP-Datei zurück.
+  static Future<File> _buildAnlagenZipFile({
     required List<Anlage> anlagen,
     required String projectId,
     required PhotoExportStructure structure,
@@ -1097,185 +1102,189 @@ class CsvService {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
     }
 
-    try {
-      final csvSettings = await _loadCsvSettings(projectId);
-      final fotoLabels = [
-        csvSettings.foto1SpalteLabel,
-        csvSettings.foto2SpalteLabel,
-        csvSettings.foto3SpalteLabel,
-        csvSettings.foto4SpalteLabel,
-      ];
-      final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
+    final csvSettings = await _loadCsvSettings(projectId);
+    final fotoLabels = [
+      csvSettings.foto1SpalteLabel,
+      csvSettings.foto2SpalteLabel,
+      csvSettings.foto3SpalteLabel,
+      csvSettings.foto4SpalteLabel,
+    ];
+    final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
-      // Temporäres Verzeichnis für Export erstellen
-      final tempDir = await getTemporaryDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final exportDir = Directory('${tempDir.path}/anlagen_export_$timestamp');
-      await exportDir.create(recursive: true);
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final exportDir = Directory('${tempDir.path}/anlagen_export_$timestamp');
+    await exportDir.create(recursive: true);
 
-      // Globaler Zähler für Fotonummern (0001, 0002, etc.)
-      int fotoCounter = 1;
+    int fotoCounter = 1;
 
-      final orderedAnlagenForHeader = _orderAnlagenHierarchically(anlagen);
-      final attributePairs = csvSettings.attributeColumnPairs;
-      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
-      final hasImportStructure = importHeaderRow.isNotEmpty;
-      final rawDataColumnKeys =
-          hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagenForHeader);
-      final dataColumnKeys = rawDataColumnKeys.where((k) => !_isValidationParamKey(k.trim())).toList();
+    final orderedAnlagenForHeader = _orderAnlagenHierarchically(anlagen);
+    final attributePairs = csvSettings.attributeColumnPairs;
+    final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
+    final hasImportStructure = importHeaderRow.isNotEmpty;
+    final rawDataColumnKeys =
+        hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagenForHeader);
+    final dataColumnKeys = rawDataColumnKeys.where((k) => !_isValidationParamKey(k.trim())).toList();
 
-      // CSV-Daten erstellen
-      final csvData = <List<String>>[];
-      final headerRow = useFotoColumns
-          ? _buildExportHeader(dataColumnKeys, fotoLabels)
-          : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
-      csvData.add(headerRow);
-      final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
+    final csvData = <List<String>>[];
+    final headerRow = useFotoColumns
+        ? _buildExportHeader(dataColumnKeys, fotoLabels)
+        : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
+    csvData.add(headerRow);
+    final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
 
-      // Zähler für neue Anlagen ohne lfdNummer
-      int neueAnlagenZaehler = 1;
+    int neueAnlagenZaehler = 1;
 
-      // Fotos-Ordner erstellen basierend auf Struktur
-      Directory fotosDir = Directory('${exportDir.path}/fotos');
-      await fotosDir.create(recursive: true);
+    Directory fotosDir = Directory('${exportDir.path}/fotos');
+    await fotosDir.create(recursive: true);
 
-      // Map für Gewerk-Ordner (bei byGewerk)
-      final Map<String, Directory> gewerkDirs = {};
+    final Map<String, Directory> gewerkDirs = {};
+    final orderedAnlagen = orderedAnlagenForHeader;
 
-      // Hierarchisch anordnen: Parent-Anlage, dann Bauteile darunter
-      final orderedAnlagen = orderedAnlagenForHeader;
+    for (final anlage in orderedAnlagen) {
+      String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
+      if (lfdNummer.isEmpty) {
+        lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
+        neueAnlagenZaehler++;
+      }
 
-      // Verarbeite jede Anlage
-      for (final anlage in orderedAnlagen) {
-        // lfdNummer für Dateinamen holen
-        String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
-        if (lfdNummer.isEmpty) {
-          lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
-          neueAnlagenZaehler++;
-        }
+      final photoPaths = anlage.params['photoPaths'] as List<dynamic>?;
+      final fotoNumbers = <String>[];
 
-        // Fotos verarbeiten und Fotonummern sammeln
-        final photoPaths = anlage.params['photoPaths'] as List<dynamic>?;
-        final fotoNumbers = <String>[];
+      if (photoPaths != null && photoPaths.isNotEmpty) {
+        final maxFotos = photoPaths.length > 4 ? 4 : photoPaths.length;
 
-        if (photoPaths != null && photoPaths.isNotEmpty) {
-          final maxFotos = photoPaths.length > 4 ? 4 : photoPaths.length;
+        for (int i = 0; i < maxFotos; i++) {
+          final photoPath = photoPaths[i].toString();
+          final sourceFile = File(photoPath);
 
-          for (int i = 0; i < maxFotos; i++) {
-            final photoPath = photoPaths[i].toString();
-            final sourceFile = File(photoPath);
+          if (await sourceFile.exists()) {
+            final fotoNumber = fotoCounter.toString().padLeft(4, '0');
+            fotoNumbers.add(fotoNumber);
+            fotoCounter++;
 
-            if (await sourceFile.exists()) {
-              final fotoNumber = fotoCounter.toString().padLeft(4, '0');
-              fotoNumbers.add(fotoNumber);
-              fotoCounter++;
+            final extension = path.extension(photoPath);
+            final fileName = '$fotoNumber$extension';
 
-              final extension = path.extension(photoPath);
-              final fileName = '$fotoNumber$extension';
-
-              Directory targetDir;
-              switch (structure) {
-                case PhotoExportStructure.byAnlage:
-                  final safeName = _sanitizeFileName(anlage.name);
-                  final anlageDirName = '${lfdNummer}_$safeName';
-                  targetDir = Directory('${fotosDir.path}/$anlageDirName');
-                  await targetDir.create(recursive: true);
-                  break;
-                case PhotoExportStructure.byGewerk:
-                  final gewerkName = _sanitizeFileName(anlage.discipline.label);
-                  if (!gewerkDirs.containsKey(gewerkName)) {
-                    gewerkDirs[gewerkName] = Directory('${fotosDir.path}/$gewerkName');
-                    await gewerkDirs[gewerkName]!.create(recursive: true);
-                  }
-                  targetDir = gewerkDirs[gewerkName]!;
-                  break;
-                case PhotoExportStructure.allInOne:
-                  targetDir = fotosDir;
-                  break;
-              }
-
-              final targetFile = File('${targetDir.path}/$fileName');
-              await sourceFile.copy(targetFile.path);
+            Directory targetDir;
+            switch (structure) {
+              case PhotoExportStructure.byAnlage:
+                final safeName = _sanitizeFileName(anlage.name);
+                final anlageDirName = '${lfdNummer}_$safeName';
+                targetDir = Directory('${fotosDir.path}/$anlageDirName');
+                await targetDir.create(recursive: true);
+                break;
+              case PhotoExportStructure.byGewerk:
+                final gewerkName = _sanitizeFileName(anlage.discipline.label);
+                if (!gewerkDirs.containsKey(gewerkName)) {
+                  gewerkDirs[gewerkName] = Directory('${fotosDir.path}/$gewerkName');
+                  await gewerkDirs[gewerkName]!.create(recursive: true);
+                }
+                targetDir = gewerkDirs[gewerkName]!;
+                break;
+              case PhotoExportStructure.allInOne:
+                targetDir = fotosDir;
+                break;
             }
+
+            final targetFile = File('${targetDir.path}/$fileName');
+            await sourceFile.copy(targetFile.path);
           }
         }
+      }
 
-        // Datenzeile: in Import-Struktur oder Fallback datengetrieben.
-        final dataRow = hasImportStructure
-            ? _buildRowFromImportStructure(
-                anlage: anlage,
-                headerRow: dataColumnKeys,
-                attributePairs: attributePairs,
-                fotoLabels: fotoLabels,
-                fotoNumbers: fotoNumbers,
-              )
-            : <String>[
-                for (final key in dataColumnKeys)
-                  (useFotoColumns && _isFotoLabel(key, fotoLabels))
-                      ? _fotoNumberForLabel(key, fotoNumbers, fotoLabels)
-                      : _paramValueToCsvCell(anlage.params[key]),
-              ];
+      final dataRow = hasImportStructure
+          ? _buildRowFromImportStructure(
+              anlage: anlage,
+              headerRow: dataColumnKeys,
+              attributePairs: attributePairs,
+              fotoLabels: fotoLabels,
+              fotoNumbers: fotoNumbers,
+            )
+          : <String>[
+              for (final key in dataColumnKeys)
+                (useFotoColumns && _isFotoLabel(key, fotoLabels))
+                    ? _fotoNumberForLabel(key, fotoNumbers, fotoLabels)
+                    : _paramValueToCsvCell(anlage.params[key]),
+            ];
 
-        if (useFotoColumns) {
-          for (final i in appendedIndices) {
-            dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
-          }
-        } else {
-          for (int i = 0; i < 4; i++) {
-            dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
-          }
+      if (useFotoColumns) {
+        for (final i in appendedIndices) {
+          dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
         }
-
-        csvData.add(dataRow);
+      } else {
+        for (int i = 0; i < 4; i++) {
+          dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
+        }
       }
 
-      // CSV-Datei erstellen
-      final exportDelimiter = csvSettings.exportDelimiter.isNotEmpty
-          ? csvSettings.exportDelimiter
-          : _delimiter;
-      final csvString = ListToCsvConverter(
-        fieldDelimiter: exportDelimiter,
-        eol: '\n',
-      ).convert(csvData);
+      csvData.add(dataRow);
+    }
 
-      // UTF-8 BOM hinzufügen
-      final utf8Bom = [0xEF, 0xBB, 0xBF];
-      final csvBytes = utf8Bom + utf8.encode(csvString);
+    final exportDelimiter = csvSettings.exportDelimiter.isNotEmpty
+        ? csvSettings.exportDelimiter
+        : _delimiter;
+    final csvString = ListToCsvConverter(
+      fieldDelimiter: exportDelimiter,
+      eol: '\n',
+    ).convert(csvData);
 
-      final csvFile = File('${exportDir.path}/anlagen.csv');
-      await csvFile.writeAsBytes(csvBytes);
+    final utf8Bom = [0xEF, 0xBB, 0xBF];
+    final csvBytes = utf8Bom + utf8.encode(csvString);
 
-      // ZIP-Archiv erstellen
-      final archive = Archive();
-      
-      // CSV-Datei zum Archiv hinzufügen
-      final csvFileData = await csvFile.readAsBytes();
-      archive.addFile(ArchiveFile('anlagen.csv', csvFileData.length, csvFileData));
+    final csvFile = File('${exportDir.path}/anlagen.csv');
+    await csvFile.writeAsBytes(csvBytes);
 
-      // Fotos zum Archiv hinzufügen
-      await _addDirectoryToArchive(archive, fotosDir, 'fotos', structure);
+    final archive = Archive();
+    final csvFileData = await csvFile.readAsBytes();
+    archive.addFile(ArchiveFile('anlagen.csv', csvFileData.length, csvFileData));
 
-      // ZIP-Datei erstellen
-      final zipEncoder = ZipEncoder();
-      final zipBytes = zipEncoder.encode(archive);
-      if (zipBytes == null) {
-        throw Exception('Fehler beim Erstellen des ZIP-Archivs');
-      }
+    await _addDirectoryToArchive(archive, fotosDir, 'fotos', structure);
 
-      final zipFile = File('${tempDir.path}/anlagen_export_$timestamp.zip');
-      await zipFile.writeAsBytes(zipBytes);
+    final zipEncoder = ZipEncoder();
+    final zipBytes = zipEncoder.encode(archive);
+    if (zipBytes == null) {
+      throw Exception('Fehler beim Erstellen des ZIP-Archivs');
+    }
 
-      // Temporäres Verzeichnis aufräumen
-      await exportDir.delete(recursive: true);
+    final zipFile = File('${tempDir.path}/anlagen_export_$timestamp.zip');
+    await zipFile.writeAsBytes(zipBytes);
 
-      debugPrint('ZIP-Export abgeschlossen: ${anlagen.length} Anlagen, ${fotoCounter - 1} Fotos');
+    await exportDir.delete(recursive: true);
 
-      // ZIP-Datei teilen
-      await Share.shareXFiles(
-        [XFile(zipFile.path)],
-        text: 'Anlagen-Export mit Fotos',
-        subject: 'Anlagen ZIP Export',
+    debugPrint('ZIP erstellt: ${anlagen.length} Anlagen, ${fotoCounter - 1} Fotos');
+    return zipFile;
+  }
+
+  /// Exportiert Anlagen mit Fotos in ein ZIP-Archiv.
+  /// Gibt bei [ExportDestination.saveToDevice] den Speicherpfad zurück.
+  static Future<String?> exportAnlagenWithPhotos({
+    required List<Anlage> anlagen,
+    required String projectId,
+    required PhotoExportStructure structure,
+    ExportDestination destination = ExportDestination.share,
+  }) async {
+    try {
+      final zipFile = await _buildAnlagenZipFile(
+        anlagen: anlagen,
+        projectId: projectId,
+        structure: structure,
       );
+
+      final timestamp = path.basenameWithoutExtension(zipFile.path).replaceFirst('anlagen_export_', '');
+      try {
+        return await _deliverExportFile(
+          file: zipFile,
+          fileName: 'anlagen_export_$timestamp.zip',
+          destination: destination,
+          shareText: 'Anlagen-Export mit Fotos',
+          shareSubject: 'Anlagen ZIP Export',
+        );
+      } finally {
+        if (await zipFile.exists()) {
+          await zipFile.delete();
+        }
+      }
     } catch (e, stackTrace) {
       debugPrint('ZIP-Export Fehler: $e');
       debugPrint('Stack Trace: $stackTrace');
@@ -1283,7 +1292,240 @@ class CsvService {
     }
   }
 
-  /// Hilfsfunktion: Bereinigt Dateinamen (entfernt Sonderzeichen)
+  /// Erstellt ein lokales Backup (ZIP mit CSV + Fotos).
+  /// Gibt den absoluten Pfad der gespeicherten Datei zurück.
+  static Future<String> createLocalBackup({
+    required String projectId,
+    required DatabaseService dbService,
+    PhotoExportStructure structure = PhotoExportStructure.allInOne,
+    String? targetDirectory,
+    String? storageUri,
+    String? includeBuildingId,
+  }) async {
+    final project = await dbService.getProjectById(projectId);
+    if (project == null) {
+      throw Exception('Projekt nicht gefunden');
+    }
+
+    final allAnlagen = await dbService.getAnlagenForProject(
+      projectId,
+      includeBuildingId: includeBuildingId,
+    );
+
+    if (allAnlagen.isEmpty) {
+      throw Exception('Keine Anlagen zum Backup vorhanden');
+    }
+
+    final zipFile = await _buildAnlagenZipFile(
+      anlagen: allAnlagen,
+      projectId: projectId,
+      structure: structure,
+    );
+
+    final zipBytes = await zipFile.readAsBytes();
+    if (await zipFile.exists()) {
+      await zipFile.delete();
+    }
+
+    final timestamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .split('.')
+        .first;
+    final safeName = _sanitizeFileName(project.name);
+    final fileName = 'backup_${safeName}_$timestamp.zip';
+
+    return _saveBackupBytes(
+      bytes: zipBytes,
+      fileName: fileName,
+      preferredDirectory: targetDirectory,
+      storageUri: storageUri,
+    );
+  }
+
+  /// Erstellt Backups für alle Projekte mit Anlagen im Zielordner.
+  static Future<BackupRunResult> createAllProjectsBackup({
+    required DatabaseService dbService,
+    required String targetDirectory,
+    String? storageUri,
+    PhotoExportStructure structure = PhotoExportStructure.allInOne,
+  }) async {
+    final projects = await dbService.getAllProjects();
+    return createProjectsBackup(
+      dbService: dbService,
+      targetDirectory: targetDirectory,
+      storageUri: storageUri,
+      projectIds: projects.map((p) => p.id).toList(),
+      structure: structure,
+    );
+  }
+
+  /// Erstellt Backups für die angegebenen Projekte.
+  static Future<BackupRunResult> createProjectsBackup({
+    required DatabaseService dbService,
+    required String targetDirectory,
+    required List<String> projectIds,
+    String? storageUri,
+    PhotoExportStructure structure = PhotoExportStructure.allInOne,
+    String? includeBuildingId,
+  }) async {
+    final savedPaths = <String>[];
+    final errors = <String>[];
+
+    for (final projectId in projectIds) {
+      final project = await dbService.getProjectById(projectId);
+      final projectName = project?.name ?? projectId;
+      try {
+        final path = await createLocalBackup(
+          projectId: projectId,
+          dbService: dbService,
+          structure: structure,
+          targetDirectory: targetDirectory,
+          storageUri: storageUri,
+          includeBuildingId: includeBuildingId,
+        );
+        savedPaths.add(path);
+      } catch (e) {
+        final message = '$projectName: $e';
+        errors.add(message);
+        debugPrint('Backup übersprungen – $message');
+      }
+    }
+
+    return BackupRunResult(savedPaths: savedPaths, errors: errors);
+  }
+
+  /// App-interner Backup-Ordner (auf Android immer beschreibbar).
+  static Future<String> defaultBackupDirectoryPath() async {
+    final dir = await _writableBackupDirectory();
+    return dir.path;
+  }
+
+  static Future<Directory> _writableBackupDirectory() async {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir != null) {
+        final dir = Directory('${externalDir.path}/Bestandsaufnahme');
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir;
+      }
+    }
+
+    final docsDir = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docsDir.path}/Bestandsaufnahme');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  static Future<String> _saveBackupBytes({
+    required List<int> bytes,
+    required String fileName,
+    String? preferredDirectory,
+    String? storageUri,
+  }) async {
+    final safeFileName = _sanitizeFileName(fileName);
+
+    if (storageUri != null && storageUri.isNotEmpty) {
+      try {
+        return await BackupStorageService.writeBackupFile(
+          bytes: bytes,
+          fileName: safeFileName,
+          storageUri: storageUri,
+        );
+      } catch (e) {
+        debugPrint('Speichern über Ordner-Berechtigung fehlgeschlagen: $e');
+        rethrow;
+      }
+    }
+
+    if (preferredDirectory != null && preferredDirectory.isNotEmpty) {
+      try {
+        return await BackupStorageService.writeBackupFile(
+          bytes: bytes,
+          fileName: safeFileName,
+          filePath: preferredDirectory,
+        );
+      } catch (e) {
+        debugPrint('Speichern in $preferredDirectory fehlgeschlagen: $e');
+      }
+    }
+
+    final appDir = await _writableBackupDirectory();
+    final savedPath = await _writeBytesToDirectory(bytes, safeFileName, appDir.path);
+    debugPrint('Backup im App-Ordner gespeichert: $savedPath');
+    return savedPath;
+  }
+
+  static Future<String> _writeBytesToDirectory(
+    List<int> bytes,
+    String fileName,
+    String directory,
+  ) async {
+    final backupDir = Directory(directory);
+    if (!await backupDir.exists()) {
+      await backupDir.create(recursive: true);
+    }
+
+    final targetPath = path.join(backupDir.path, fileName);
+    await File(targetPath).writeAsBytes(bytes, flush: true);
+    debugPrint('Datei gespeichert: $targetPath');
+    return targetPath;
+  }
+
+  static Future<String?> _deliverExportFile({
+    required File file,
+    required String fileName,
+    required ExportDestination destination,
+    required String shareText,
+    required String shareSubject,
+  }) async {
+    if (destination == ExportDestination.saveToDevice) {
+      return _saveFileToDevice(file: file, fileName: fileName);
+    }
+
+    await Share.shareXFiles(
+      [XFile(file.path)],
+      text: shareText,
+      subject: shareSubject,
+    );
+    return null;
+  }
+
+  /// Speichert eine Export-Datei direkt auf dem Gerät (Datei-Dialog oder Downloads).
+  static Future<String?> saveFileToDevice({
+    required File file,
+    required String fileName,
+  }) =>
+      _saveFileToDevice(file: file, fileName: fileName);
+
+  /// Speichert eine Datei über den nativen Datei-Dialog oder im Downloads-Ordner.
+  static Future<String?> _saveFileToDevice({
+    required File file,
+    required String fileName,
+  }) async {
+    final bytes = await file.readAsBytes();
+    try {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Datei speichern',
+        fileName: fileName,
+        bytes: bytes,
+      );
+      if (savedPath != null) {
+        debugPrint('Export gespeichert: $savedPath');
+        return savedPath;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Speicher-Dialog fehlgeschlagen, speichere in App-Ordner: $e');
+      return _saveBackupBytes(bytes: bytes, fileName: fileName);
+    }
+  }
+
+
   static String _sanitizeFileName(String fileName) {
     // Ersetze ungültige Zeichen für Windows-Dateinamen
     return fileName

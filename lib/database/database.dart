@@ -15,6 +15,7 @@ class Projects extends Table {
   TextColumn get name => text()();
   TextColumn get description => text()();
   TextColumn get customer => text()();
+  BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -34,6 +35,7 @@ class Buildings extends Table {
   BoolColumn get protectedMonument => boolean()();
   IntColumn get units => integer()();
   RealColumn get floorArea => real()();
+  BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -63,6 +65,7 @@ class Anlagen extends Table {
   TextColumn get markerInfo => text().nullable()(); // JSON als String
   TextColumn get markerType => text()();
   TextColumn get discipline => text()(); // JSON als String
+  BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -116,7 +119,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(createConnection());
 
   @override
-  int get schemaVersion => 4; // v2: parentId, v3: disziplinen, v4: templates
+  int get schemaVersion => 5; // v5: isDeleted (Soft-Delete)
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -133,21 +136,75 @@ class AppDatabase extends _$AppDatabase {
         // Migration von Version 3 zu 4: Templates-Tabelle hinzufügen
         await migrator.createTable(templates);
       }
+      if (from < 5) {
+        await migrator.addColumn(projects, projects.isDeleted);
+        await migrator.addColumn(buildings, buildings.isDeleted);
+        await migrator.addColumn(anlagen, anlagen.isDeleted);
+      }
     },
   );
 
   // CRUD-Methoden für Projects
-  Future<List<ProjectDb>> getAllProjects() => select(projects).get();
-  Future<ProjectDb?> getProjectById(String id) => (select(projects)..where((p) => p.id.equals(id))).getSingleOrNull();
+  Future<List<ProjectDb>> getAllProjects() =>
+      (select(projects)..where((p) => p.isDeleted.equals(false))).get();
+
+  Future<List<ProjectDb>> getDeletedProjects() =>
+      (select(projects)..where((p) => p.isDeleted.equals(true))).get();
+
+  Future<ProjectDb?> getProjectById(String id) =>
+      (select(projects)..where((p) => p.id.equals(id) & p.isDeleted.equals(false)))
+          .getSingleOrNull();
+
+  Future<ProjectDb?> getProjectByIdIncludingDeleted(String id) =>
+      (select(projects)..where((p) => p.id.equals(id))).getSingleOrNull();
+
   Future<int> insertProject(ProjectsCompanion project) => into(projects).insert(project);
-  Future<int> updateProject(String id, ProjectsCompanion project) => (update(projects)..where((p) => p.id.equals(id))).write(project);
+  Future<int> updateProject(String id, ProjectsCompanion project) =>
+      (update(projects)..where((p) => p.id.equals(id))).write(project);
+
+  Future<int> softDeleteProject(String id) =>
+      (update(projects)..where((p) => p.id.equals(id)))
+          .write(const ProjectsCompanion(isDeleted: Value(true)));
+
+  Future<int> restoreProject(String id) =>
+      (update(projects)..where((p) => p.id.equals(id)))
+          .write(const ProjectsCompanion(isDeleted: Value(false)));
+
   Future<int> deleteProject(String id) => (delete(projects)..where((p) => p.id.equals(id))).go();
 
   // CRUD-Methoden für Buildings
-  Future<List<BuildingDb>> getBuildingsByProjectId(String projectId) => (select(buildings)..where((b) => b.projectId.equals(projectId))).get();
-  Future<BuildingDb?> getBuildingById(String id) => (select(buildings)..where((b) => b.id.equals(id))).getSingleOrNull();
+  Future<List<BuildingDb>> getBuildingsByProjectId(String projectId) =>
+      (select(buildings)
+            ..where((b) => b.projectId.equals(projectId) & b.isDeleted.equals(false)))
+          .get();
+
+  Future<List<BuildingDb>> getDeletedBuildings() =>
+      (select(buildings)..where((b) => b.isDeleted.equals(true))).get();
+
+  Future<List<BuildingDb>> getDeletedBuildingsByProjectId(String projectId) =>
+      (select(buildings)
+            ..where((b) => b.projectId.equals(projectId) & b.isDeleted.equals(true)))
+          .get();
+
+  Future<BuildingDb?> getBuildingById(String id) =>
+      (select(buildings)..where((b) => b.id.equals(id) & b.isDeleted.equals(false)))
+          .getSingleOrNull();
+
+  Future<BuildingDb?> getBuildingByIdIncludingDeleted(String id) =>
+      (select(buildings)..where((b) => b.id.equals(id))).getSingleOrNull();
+
   Future<int> insertBuilding(BuildingsCompanion building) => into(buildings).insert(building);
-  Future<int> updateBuilding(String id, BuildingsCompanion building) => (update(buildings)..where((b) => b.id.equals(id))).write(building);
+  Future<int> updateBuilding(String id, BuildingsCompanion building) =>
+      (update(buildings)..where((b) => b.id.equals(id))).write(building);
+
+  Future<int> softDeleteBuilding(String id) =>
+      (update(buildings)..where((b) => b.id.equals(id)))
+          .write(const BuildingsCompanion(isDeleted: Value(true)));
+
+  Future<int> restoreBuilding(String id) =>
+      (update(buildings)..where((b) => b.id.equals(id)))
+          .write(const BuildingsCompanion(isDeleted: Value(false)));
+
   Future<int> deleteBuilding(String id) => (delete(buildings)..where((b) => b.id.equals(id))).go();
 
   // CRUD-Methoden für FloorPlans
@@ -158,12 +215,42 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteFloorPlan(String id) => (delete(floorPlans)..where((f) => f.id.equals(id))).go();
 
   // CRUD-Methoden für Anlagen
-  Future<List<AnlageDb>> getAnlagenByBuildingId(String buildingId) => (select(anlagen)..where((a) => a.buildingId.equals(buildingId))).get();
+  Future<List<AnlageDb>> getAnlagenByBuildingId(String buildingId) =>
+      (select(anlagen)
+            ..where((a) => a.buildingId.equals(buildingId) & a.isDeleted.equals(false)))
+          .get();
+
+  Future<List<AnlageDb>> getDeletedAnlagen() =>
+      (select(anlagen)..where((a) => a.isDeleted.equals(true))).get();
+
+  Future<List<AnlageDb>> getDeletedAnlagenByBuildingId(String buildingId) =>
+      (select(anlagen)
+            ..where((a) => a.buildingId.equals(buildingId) & a.isDeleted.equals(true)))
+          .get();
+
   Future<List<AnlageDb>> getAnlagenByBuildingIdAndDiscipline(String buildingId, String disciplineLabel) {
-    return (select(anlagen)..where((a) => a.buildingId.equals(buildingId) & a.markerType.equals(disciplineLabel))).get();
+    return (select(anlagen)
+          ..where((a) =>
+              a.buildingId.equals(buildingId) &
+              a.markerType.equals(disciplineLabel) &
+              a.isDeleted.equals(false)))
+        .get();
   }
-  Future<AnlageDb?> getAnlageById(String id) => (select(anlagen)..where((a) => a.id.equals(id))).getSingleOrNull();
-  Future<List<AnlageDb>> getAnlagenByParentId(String parentId) => (select(anlagen)..where((a) => a.parentId.equals(parentId))).get();
+
+  Future<AnlageDb?> getAnlageById(String id) =>
+      (select(anlagen)..where((a) => a.id.equals(id) & a.isDeleted.equals(false)))
+          .getSingleOrNull();
+
+  Future<AnlageDb?> getAnlageByIdIncludingDeleted(String id) =>
+      (select(anlagen)..where((a) => a.id.equals(id))).getSingleOrNull();
+
+  Future<List<AnlageDb>> getAnlagenByParentId(String parentId) =>
+      (select(anlagen)
+            ..where((a) => a.parentId.equals(parentId) & a.isDeleted.equals(false)))
+          .get();
+
+  Future<List<AnlageDb>> getAnlagenByParentIdIncludingDeleted(String parentId) =>
+      (select(anlagen)..where((a) => a.parentId.equals(parentId))).get();
   Future<int> insertAnlage(AnlagenCompanion anlage) => into(anlagen).insert(anlage);
   Future<int> updateAnlage(String id, AnlagenCompanion anlage) => (update(anlagen)..where((a) => a.id.equals(id))).write(anlage);
   
@@ -176,6 +263,14 @@ class AppDatabase extends _$AppDatabase {
         discipline: Value(newDisciplineJson),
       ));
   }
+
+  Future<int> softDeleteAnlage(String id) =>
+      (update(anlagen)..where((a) => a.id.equals(id)))
+          .write(const AnlagenCompanion(isDeleted: Value(true)));
+
+  Future<int> restoreAnlage(String id) =>
+      (update(anlagen)..where((a) => a.id.equals(id)))
+          .write(const AnlagenCompanion(isDeleted: Value(false)));
 
   Future<int> deleteAnlage(String id) => (delete(anlagen)..where((a) => a.id.equals(id))).go();
   Future<int> deleteAnlagenByBuildingId(String buildingId) => (delete(anlagen)..where((a) => a.buildingId.equals(buildingId))).go();

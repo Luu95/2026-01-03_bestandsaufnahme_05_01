@@ -125,14 +125,6 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
         widget.onSchemaUpdated?.call();
       } catch (e) {
         debugPrint('Fehler beim Speichern der neuen Disziplin: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Fehler beim Speichern: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
       }
     }
   }

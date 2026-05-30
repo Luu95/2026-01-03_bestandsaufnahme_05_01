@@ -10,7 +10,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  fluttertoast: ^8.0.9  # Stelle sicher, dass dies die neueste Null-sichere Version ist
   cupertino_icons: ^1.0.8
   pdfx: ^2.9.1  # Überprüfe, ob diese Version Null-Sicherheit unterstützt
   pdf: ^3.11.3
@@ -27,6 +26,7 @@ dependencies:
   riverpod_annotation: ^2.3.3
   csv: ^6.0.0
   share_plus: ^10.0.0
+  permission_handler: ^11.3.1
   cross_file: ^0.3.4
   archive: ^3.4.0
   google_mlkit_text_recognition: ^0.11.0

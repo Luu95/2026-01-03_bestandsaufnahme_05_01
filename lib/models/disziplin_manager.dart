@@ -69,24 +69,6 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     if (addedCount > 0) {
       await _saveDisziplinen();
       setState(() {});
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$addedCount Standard-Disziplinen hinzugefügt'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Alle Standard-Disziplinen sind bereits vorhanden'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
     }
   }
 
@@ -97,14 +79,6 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
 
   Future<void> _editSchemaForDisziplin() async {
     if (disziplinen.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Keine Disziplinen vorhanden'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
       return;
     }
 

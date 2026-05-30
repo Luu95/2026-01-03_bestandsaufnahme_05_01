@@ -145,28 +145,10 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
 
   Future<void> _takePhoto() async {
     if (!_photoManager.canAddPhoto) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Maximal 4 Fotos pro Anlage erlaubt'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
       return;
     }
-    
-    final success = await _photoManager.takePhoto();
-    if (!success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Maximal 4 Fotos pro Anlage erlaubt'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+
+    await _photoManager.takePhoto();
     setState(() {});
   }
 

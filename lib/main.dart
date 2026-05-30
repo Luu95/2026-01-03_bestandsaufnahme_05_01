@@ -9,21 +9,14 @@ import 'database/database_service.dart';
 
 import 'providers/database_provider.dart';
 import 'providers/projects_provider.dart';
+import 'providers/settings_provider.dart';
 import 'pages/building_details_page.dart';
 import 'navigation/route_observer.dart';
+import 'theme/app_theme.dart';
+import 'widgets/auto_backup_watcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Setzt die Navigationsleiste auf die App-Hintergrundfarbe
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    systemNavigationBarColor: Color(0xFFEEEEEE),
-    systemNavigationBarDividerColor: Color(0xFFEEEEEE),
-    systemNavigationBarIconBrightness: Brightness.dark,
-  ));
-
-  // Optional: Aktiviert den Edge-to-Edge Modus für Android
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   
   // Datenbank initialisieren
   final database = db.AppDatabase();
@@ -43,20 +36,30 @@ void main() async {
 }
 
 /// MyApp: Einstiegspunkt für die Flutter‐App
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({Key? key}) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final themeMode = ref.watch(settingsProvider.select((settings) => settings.themeMode));
+
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Projekte & Gebäude',
       navigatorObservers: [routeObserver],
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSwatch(primarySwatch: Colors.lightBlue),
-        useMaterial3: true,
-      ),
-      home: const RootPage(),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: themeMode,
+      builder: (context, child) {
+        final brightness = Theme.of(context).brightness;
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: AppTheme.systemUiOverlayStyle(brightness),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+      home: const AutoBackupWatcher(child: RootPage()),
     );
   }
 }
