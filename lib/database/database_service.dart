@@ -601,25 +601,29 @@ class DatabaseService {
   }
 
   /// Verschiebt eine oder mehrere Anlagen (inkl. aller Kinder rekursiv).
-  /// Aktualisiert floorId, parentId, buildingId und/oder discipline.
+  /// Aktualisiert floorId, parentId, buildingId, discipline und optional params.
   Future<void> moveAnlagen(
     List<String> anlageIds, {
     String? newFloorId,
     String? newParentId,
     String? newBuildingId,
     Disziplin? newDiscipline,
+    void Function(Map<String, dynamic> params)? patchParams,
   }) async {
     for (final anlageId in anlageIds) {
       // Lade aktuelle Anlage
       final currentAnlage = await getAnlageById(anlageId);
       if (currentAnlage == null) continue;
 
+      final params = Map<String, dynamic>.from(currentAnlage.params);
+      patchParams?.call(params);
+
       // Erstelle aktualisierte Anlage
       final updatedAnlage = models.Anlage(
         id: currentAnlage.id,
         parentId: newParentId ?? currentAnlage.parentId,
         name: currentAnlage.name,
-        params: currentAnlage.params, // Behalte alle Parameter
+        params: params,
         floorId: newFloorId ?? currentAnlage.floorId,
         buildingId: newBuildingId ?? currentAnlage.buildingId,
         isMarker: currentAnlage.isMarker,
@@ -639,6 +643,7 @@ class DatabaseService {
           newParentId: anlageId, // Parent bleibt gleich (die verschobene Anlage)
           newBuildingId: newBuildingId,
           newDiscipline: newDiscipline,
+          patchParams: patchParams,
         );
       }
     }

@@ -36,6 +36,19 @@ enum ExportDestination {
   saveToDevice,
 }
 
+/// Ergebnis eines CSV-Imports inkl. erkannter Header/Delimiter für die UI.
+class CsvImportResult {
+  final List<Anlage> anlagen;
+  final List<String> importHeaderRow;
+  final String detectedDelimiter;
+
+  const CsvImportResult({
+    required this.anlagen,
+    required this.importHeaderRow,
+    required this.detectedDelimiter,
+  });
+}
+
 class CsvService {
   static const String _delimiter = ';';
   static const Uuid _uuid = Uuid();
@@ -154,47 +167,6 @@ class CsvService {
   static String _paramKeyForHeaderLabel(String label) {
     final trimmed = label.trim();
     return _headerLabelToCanonicalKey[trimmed] ?? trimmed;
-  }
-
-  static Future<void> _persistImportedHeaderRow(
-    String projectId,
-    List<String> headerRow,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'csv_settings_$projectId';
-    final raw = prefs.getString(key);
-    Map<String, dynamic> settings = {};
-    if (raw != null && raw.trim().isNotEmpty) {
-      try {
-        settings = Map<String, dynamic>.from(json.decode(raw) as Map);
-      } catch (_) {
-        settings = {};
-      }
-    }
-    settings['importHeaderRow'] = headerRow;
-    await prefs.setString(key, json.encode(settings));
-  }
-
-  static Future<void> _persistExportDelimiter(String projectId, String delimiter) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'csv_settings_$projectId';
-    final raw = prefs.getString(key);
-    Map<String, dynamic> settings = {};
-    if (raw != null && raw.trim().isNotEmpty) {
-      try {
-        settings = Map<String, dynamic>.from(json.decode(raw) as Map);
-      } catch (_) {
-        settings = {};
-      }
-    }
-    settings['exportDelimiter'] = delimiter;
-    await prefs.setString(key, json.encode(settings));
-  }
-
-  static List<String> _getImportHeaderRowFromSettings(Map<String, dynamic> csvSettings) {
-    final raw = csvSettings['importHeaderRow'];
-    if (raw is! List) return [];
-    return raw.map((e) => e.toString()).toList();
   }
 
   /// Parameter, die weder im Import-Header noch in festen Keys (lfdNummer, Etage, etc.) vorkommen,
@@ -397,27 +369,6 @@ class CsvService {
     await dbService.replaceDisciplines(buildingId, disciplines);
   }
 
-  /// Lädt die CSV-Einstellungen für ein bestimmtes Projekt.
-  static Future<CsvSettings> _loadCsvSettings(String projectId) async {
-    final cached = CsvSettingsCache.get(projectId);
-    if (cached != null) return cached;
-
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'csv_settings_$projectId';
-    final settingsJson = prefs.getString(key);
-
-    if (settingsJson != null) {
-      try {
-        final settings = json.decode(settingsJson) as Map<String, dynamic>;
-        return CsvSettings.fromJson(settings);
-      } catch (e) {
-        debugPrint('Fehler beim Laden der CSV-Einstellungen: $e');
-      }
-    }
-
-    return CsvSettings.defaults();
-  }
-
   static Future<List<Map<String, dynamic>>> _loadGlobalSchema(String projectId) async {
     final prefs = await SharedPreferences.getInstance();
     final key = 'global_schema_$projectId';
@@ -457,14 +408,14 @@ class CsvService {
   /// Disziplinen, die nicht in der CSV vorkommen, bleiben unverändert.
   /// 
   /// [buildingId]: BuildingId, dem die importierten Anlagen zugewiesen werden.
-  /// [projectId]: ProjectId, für die CSV-Einstellungen (projektbezogen).
-  /// 
-  /// Gibt eine Liste von Anlagen zurück, die dann in der Datenbank gespeichert werden können.
+  /// [csvSettings]: CSV-Einstellungen aus Riverpod (Spaltenzuordnung, Delimiter, …).
+  ///
+  /// Gibt [CsvImportResult] zurück (Anlagen + erkannte Header/Delimiter für die UI).
   /// Die laufende Nummer wird in den Params als "lfdNummer" gespeichert.
-  static Future<List<Anlage>> importAnlagenCsvForDisciplines({
+  static Future<CsvImportResult> importAnlagenCsvForDisciplines({
     required DatabaseService dbService,
     required String buildingId,
-    required String projectId,
+    required CsvSettings csvSettings,
     String floorId = 'global',
   }) async {
     try {
@@ -492,8 +443,12 @@ class CsvService {
       final bytes = await file.readAsBytes();
       String csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
       
-      // CSV-Einstellungen für dieses Projekt laden
-      final settings = await _loadCsvSettings(projectId);
+      final projectId = await dbService.getProjectIdByBuildingId(buildingId);
+      if (projectId == null || projectId.isEmpty) {
+        throw Exception('Projekt für Gebäude nicht gefunden');
+      }
+
+      final settings = csvSettings;
       final enabledLevels = settings.enabledLevelsOrdered;
       final leafLevel = settings.leafLevel;
       if (leafLevel == null) {
@@ -545,8 +500,6 @@ class CsvService {
 
       // Header lesen (aus konfigurierter Zeile)
       final headerRow = csvData[headerRowIndex].map((e) => e.toString().trim()).toList();
-      await _persistImportedHeaderRow(projectId, headerRow);
-      await _persistExportDelimiter(projectId, delimiter);
 
       // Debug: Header ausgeben
       debugPrint('CSV Header: $headerRow');
@@ -555,16 +508,6 @@ class CsvService {
       final anlageKuerzel = _parseKuerzel(settings.anlageKuerzel, ['a', 'anlage']);
       final bauteilKuerzel = _parseKuerzel(settings.bauteilKuerzel, ['b', 'bauteil']);
 
-      debugPrint(
-        'CSV-Ebenen: aktiv=${enabledLevels.length}, '
-        'L1=${settings.level1.enabled}(${settings.level1.nameColumn}), '
-        'L2=${settings.level2.enabled}(${settings.level2.nameColumn}), '
-        'L3=${settings.level3.enabled}(${settings.level3.nameColumn}), '
-        'Blatt=${leafLevel.nameColumn}, Blatt-ID=${leafLevel.idColumn}, '
-        'etage=$etageIdx, anlageBauteil=$anlageBauteilIdx, '
-        'delimiter=$delimiter, anlageKuerzel=$anlageKuerzel, bauteilKuerzel=$bauteilKuerzel, '
-        'useDisciplineGrouping=$useDisciplineGrouping',
-      );
 
       // Datenzeilen: alle Zeilen nach der Header-Zeile
       var dataRows = csvData.sublist(headerRowIndex + 1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
@@ -587,7 +530,6 @@ class CsvService {
         throw Exception('Keine Datenzeilen gefunden');
       }
 
-      debugPrint('Anzahl Datenzeilen: ${dataRows.length}');
 
       // Schema ausschließlich aus CSV-Header aufbauen (keine festen Schemata aus der App).
       // Nur Spalten, die keine Attribut-Paare sind, werden als Schema-Felder übernommen.
@@ -624,9 +566,6 @@ class CsvService {
         });
       }
 
-      debugPrint('Vollständiges Schema aus CSV erstellt: $schemaFromCsv');
-
-      debugPrint('Erstelltes Schema: $schemaFromCsv');
 
       // Bestehende Disziplinen für dieses Gebäude laden
       final disciplineCache = await _loadPersistedDisciplines(dbService, buildingId);
@@ -909,7 +848,11 @@ class CsvService {
       }
 
       debugPrint('Insgesamt ${anlagen.length} Anlagen erstellt');
-      return anlagen;
+      return CsvImportResult(
+        anlagen: anlagen,
+        importHeaderRow: headerRow,
+        detectedDelimiter: delimiter,
+      );
     } catch (e, stackTrace) {
       debugPrint('CSV-Import Fehler: $e');
       debugPrint('Stack Trace: $stackTrace');
@@ -917,74 +860,11 @@ class CsvService {
     }
   }
 
-  /// Exportiert Anlagen zu einer CSV-Datei und teilt sie
-  /// 
-  /// CSV-Format:
-  /// Name;BuildingId;FloorId;IsMarker;MarkerType;DisciplineLabel;Params;MarkerInfo
-  static Future<String?> exportAnlagenToCsv(List<Anlage> anlagen) async {
-    if (anlagen.isEmpty) {
-      throw Exception('Keine Anlagen zum Exportieren vorhanden');
-    }
-
-    try {
-      // CSV-Daten erstellen
-      final csvData = <List<String>>[];
-
-      // Header-Zeile
-      csvData.add([
-        'Name',
-        'BuildingId',
-        'FloorId',
-        'IsMarker',
-        'MarkerType',
-        'DisciplineLabel',
-        'Params',
-        'MarkerInfo',
-      ]);
-
-      // Daten-Zeilen
-      for (final anlage in anlagen) {
-        csvData.add([
-          anlage.name,
-          anlage.buildingId,
-          anlage.floorId,
-          anlage.isMarker.toString(),
-          anlage.markerType,
-          anlage.discipline.label,
-          json.encode(anlage.params),
-          anlage.markerInfo != null ? json.encode(anlage.markerInfo) : '',
-        ]);
-      }
-
-      // CSV-String erstellen
-      final csvString = const ListToCsvConverter(
-        fieldDelimiter: _delimiter,
-        eol: '\n',
-      ).convert(csvData);
-
-      // Temporäre Datei erstellen
-      final directory = await getTemporaryDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final file = File('${directory.path}/anlagen_export_$timestamp.csv');
-      await file.writeAsString(csvString);
-
-      return _deliverExportFile(
-        file: file,
-        fileName: 'anlagen_export_$timestamp.csv',
-        destination: ExportDestination.share,
-        shareText: 'Anlagen-Export',
-        shareSubject: 'Anlagen CSV Export',
-      );
-    } catch (e) {
-      throw Exception('Fehler beim CSV-Export: $e');
-    }
-  }
-
   /// Exportiert Anlagen zu CSV – rein datengetrieben aus params (CSV-Import-Struktur).
   /// Spalten = alle vorkommenden Param-Keys (sortiert) + 4 Foto-Spalten.
   static Future<String?> exportAnlagenCsvForDisciplines({
     required List<Anlage> anlagen,
-    required String projectId,
+    required CsvSettings csvSettings,
     ExportDestination destination = ExportDestination.share,
   }) async {
     if (anlagen.isEmpty) {
@@ -992,7 +872,6 @@ class CsvService {
     }
 
     try {
-      final csvSettings = await _loadCsvSettings(projectId);
       final fotoLabels = [
         csvSettings.foto1SpalteLabel,
         csvSettings.foto2SpalteLabel,
@@ -1003,7 +882,7 @@ class CsvService {
 
       final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
       final attributePairs = csvSettings.attributeColumnPairs;
-      final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
+      final importHeaderRow = csvSettings.importHeaderRow;
       final hasImportStructure = importHeaderRow.isNotEmpty;
       final rawDataColumnKeys =
           hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagen);
@@ -1084,14 +963,13 @@ class CsvService {
   /// Erstellt ein ZIP-Archiv mit CSV und Fotos. Gibt die temporäre ZIP-Datei zurück.
   static Future<File> _buildAnlagenZipFile({
     required List<Anlage> anlagen,
-    required String projectId,
+    required CsvSettings csvSettings,
     required PhotoExportStructure structure,
   }) async {
     if (anlagen.isEmpty) {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
     }
 
-    final csvSettings = await _loadCsvSettings(projectId);
     final fotoLabels = [
       csvSettings.foto1SpalteLabel,
       csvSettings.foto2SpalteLabel,
@@ -1109,7 +987,7 @@ class CsvService {
 
     final orderedAnlagenForHeader = _orderAnlagenHierarchically(anlagen);
     final attributePairs = csvSettings.attributeColumnPairs;
-    final importHeaderRow = _getImportHeaderRowFromSettings(csvSettings.toJson());
+    final importHeaderRow = csvSettings.importHeaderRow;
     final hasImportStructure = importHeaderRow.isNotEmpty;
     final rawDataColumnKeys =
         hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagenForHeader);
@@ -1249,14 +1127,14 @@ class CsvService {
   /// Gibt bei [ExportDestination.saveToDevice] den Speicherpfad zurück.
   static Future<String?> exportAnlagenWithPhotos({
     required List<Anlage> anlagen,
-    required String projectId,
+    required CsvSettings csvSettings,
     required PhotoExportStructure structure,
     ExportDestination destination = ExportDestination.share,
   }) async {
     try {
       final zipFile = await _buildAnlagenZipFile(
         anlagen: anlagen,
-        projectId: projectId,
+        csvSettings: csvSettings,
         structure: structure,
       );
 
@@ -1290,7 +1168,7 @@ class CsvService {
     required String shareSubject,
   }) async {
     if (destination == ExportDestination.saveToDevice) {
-      return _saveFileToDevice(file: file, fileName: fileName);
+      return saveFileToDevice(file: file, fileName: fileName);
     }
 
     await Share.shareXFiles(
@@ -1300,12 +1178,6 @@ class CsvService {
     );
     return null;
   }
-
-  static Future<String?> saveFileToDevice({
-    required File file,
-    required String fileName,
-  }) =>
-      _saveFileToDevice(file: file, fileName: fileName);
 
   static Future<Directory> _writableExportDirectory() async {
     if (Platform.isAndroid || Platform.isIOS) {
@@ -1344,7 +1216,7 @@ class CsvService {
   }
 
   /// Speichert eine Datei über den nativen Datei-Dialog oder im App-Ordner.
-  static Future<String?> _saveFileToDevice({
+  static Future<String?> saveFileToDevice({
     required File file,
     required String fileName,
   }) async {

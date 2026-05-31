@@ -146,7 +146,7 @@ class CsvSettings {
   }
 
   /// Gruppierungs-Key für den Listen-Header „Revisionsfeld“.
-  /// Null, wenn Ebene 1 bereits die Disziplin ist (sonst doppeltes „Brandschutz“).
+  /// Null, wenn Ebene 1 bereits die Disziplin ist (sonst doppeltes Gewerk/Revisionsobjekt).
   String? resolveRevisionsfeldListGroupingParamKey() {
     if (level1IsDiscipline) return null;
     return resolveGewerkGroupingParamKey();
@@ -367,6 +367,50 @@ class CsvSettings {
     params[key.trim()] = value.trim();
   }
 
+  /// Liest Revisionsfeld (Ebene 1) aus gespeicherten Parametern.
+  String? revisionsfeldValueFromParams(Map<String, dynamic> params) {
+    final key = resolveRevisionsfeldListGroupingParamKey();
+    if (key == null || key.isEmpty) return null;
+    return readParamValue(params, key);
+  }
+
+  /// Liest Revisionsobjekt (Ebene 2) aus gespeicherten Parametern.
+  String? revisionsobjektValueFromParams(Map<String, dynamic> params) {
+    final key = resolveRevisionsobjektParamKey();
+    if (key == null || key.isEmpty) return null;
+    return readParamValue(
+      params,
+      key,
+      legacyKeys: legacySchemaItemParamKeys,
+    );
+  }
+
+  /// Schreibt Listen-Hierarchie Ebene 1+2 in die Parameter eines Blatt-Datensatzes.
+  void writeHierarchyLocationToParams(
+    Map<String, dynamic> params, {
+    String? revisionsfeld,
+    required String revisionsobjekt,
+  }) {
+    final ro = revisionsobjekt.trim();
+    if (ro.isEmpty) return;
+
+    final rfKey = resolveRevisionsfeldListGroupingParamKey();
+    final rf = revisionsfeld?.trim() ?? '';
+    if (rfKey != null && rfKey.isNotEmpty && rf.isNotEmpty) {
+      params[rfKey] = rf;
+    }
+
+    final roKey = resolveRevisionsobjektParamKey();
+    if (roKey != null && roKey.isNotEmpty) {
+      params[roKey] = ro;
+    }
+    writeSchemaItemToParams(params, ro);
+  }
+
+  /// Param-Key Revisionsobjekt (Listen-Ebene 2 unter Revisionsfeld).
+  String? resolveRevisionsobjektParamKey() =>
+      resolveRevisionsobjektGroupingParamKey() ?? resolveSchemaItemParamKey();
+
   /// Sammel-Disziplin, wenn Gewerk-Gruppierung deaktiviert ist.
   String resolveDefaultDisciplineLabel() =>
       useDisciplineGrouping ? labelGewerk : 'Allgemein';
@@ -399,6 +443,8 @@ class CsvSettings {
     if (abKey != null && abKey.isNotEmpty) keys.add(abKey);
     final schemaKey = resolveSchemaItemParamKey();
     if (schemaKey != null && schemaKey.isNotEmpty) keys.add(schemaKey);
+    final rfKey = resolveRevisionsfeldListGroupingParamKey();
+    if (rfKey != null && rfKey.isNotEmpty) keys.add(rfKey);
     return keys;
   }
 
@@ -629,34 +675,18 @@ class CsvSettings {
     return raw.map((e) => e.toString()).toList();
   }
 
-  /// Lädt projektbezogene CSV-Einstellungen (Cache → SharedPreferences → Defaults).
+  /// Lädt projektbezogene CSV-Einstellungen (SharedPreferences → Defaults).
   static Future<CsvSettings> loadForProject(String projectId) async {
-    final cached = CsvSettingsCache.get(projectId);
-    if (cached != null) return cached;
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('csv_settings_$projectId');
       if (raw != null && raw.trim().isNotEmpty) {
-        final settings = CsvSettings.fromJson(
+        return CsvSettings.fromJson(
           Map<String, dynamic>.from(json.decode(raw) as Map),
         );
-        CsvSettingsCache.set(projectId, settings);
-        return settings;
       }
     } catch (_) {}
-    final defaults = CsvSettings.defaults();
-    CsvSettingsCache.set(projectId, defaults);
-    return defaults;
-  }
-}
-
-class CsvSettingsCache {
-  static final Map<String, CsvSettings> _cache = {};
-
-  static CsvSettings? get(String projectId) => _cache[projectId];
-
-  static void set(String projectId, CsvSettings settings) {
-    _cache[projectId] = settings;
+    return CsvSettings.defaults();
   }
 }
 
@@ -673,16 +703,13 @@ class CsvSettingsNotifier extends StateNotifier<CsvSettings> {
       if (settingsJson != null) {
         final decoded = json.decode(settingsJson) as Map<String, dynamic>;
         state = CsvSettings.fromJson(decoded);
-        CsvSettingsCache.set(projectId, state);
         return;
       }
     } catch (_) {}
-    CsvSettingsCache.set(projectId, state);
   }
 
   Future<void> save(CsvSettings settings) async {
     state = settings;
-    CsvSettingsCache.set(projectId, state);
     final prefs = await SharedPreferences.getInstance();
     final key = 'csv_settings_$projectId';
     await prefs.setString(key, json.encode(settings.toJson()));

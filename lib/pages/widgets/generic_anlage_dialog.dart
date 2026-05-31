@@ -137,7 +137,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   String _childLevelLabel = '';
   String? _dialogSubtitle;
   String? _dialogContextLine;
-  
+  /// Gesperrte Verortung: Revisionsfeld und Revisionsobjekt (getrennte Werte).
+  final Map<String, String> _lockedLocationParams = {};
+  String? _revisionsfeldParamKey;
+  String? _revisionsobjektParamKey;
+
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
     setState(() {});
@@ -302,6 +306,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     if (!isNewFromRevisionsobjekt) {
       _applyEffectiveSchemaFromParams();
     }
+    _establishLocationLocks();
     _applyRevisionsobjektPrefill();
     if (widget.existingAnlage == null) {
       _finalizeSchemaForRevisionsobjekt();
@@ -325,6 +330,81 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     }
   }
 
+  void _establishLocationLocks() {
+    final csv = _csvSettings;
+    if (csv == null) return;
+
+    _revisionsfeldParamKey = csv.resolveRevisionsfeldListGroupingParamKey();
+    _revisionsobjektParamKey = csv.resolveRevisionsobjektParamKey();
+
+    final hasFixedLocation = widget.initialRevisionsobjekt?.trim().isNotEmpty == true ||
+        widget.parentId != null ||
+        widget.existingAnlage != null;
+    if (!hasFixedLocation) return;
+
+    final roValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+        ? widget.initialRevisionsobjekt!.trim()
+        : (widget.existingAnlage != null && _revisionsobjektParamKey != null
+            ? csv.revisionsobjektValueFromParams(widget.existingAnlage!.params)
+            : null);
+
+    if (_revisionsobjektParamKey != null &&
+        roValue != null &&
+        roValue.isNotEmpty) {
+      _lockedLocationParams[_revisionsobjektParamKey!] = roValue;
+      _setParamAndController(_revisionsobjektParamKey!, roValue);
+    }
+
+    String? rfKey = _revisionsfeldParamKey;
+    String? rf;
+    if (rfKey != null && rfKey.isNotEmpty && widget.initialParams != null) {
+      rf = widget.initialParams![rfKey]?.toString().trim();
+    }
+    rf ??= (rfKey != null && rfKey.isNotEmpty && widget.existingAnlage != null)
+        ? csv.revisionsfeldValueFromParams(widget.existingAnlage!.params)
+        : null;
+    if ((rf == null || rf.isEmpty) && widget.initialParams != null) {
+      for (final entry in widget.initialParams!.entries) {
+        if (entry.key.startsWith('__')) continue;
+        if (_revisionsobjektParamKey != null && entry.key == _revisionsobjektParamKey) {
+          continue;
+        }
+        final v = entry.value?.toString().trim() ?? '';
+        if (v.isNotEmpty && v != roValue) {
+          rfKey = entry.key;
+          rf = v;
+          break;
+        }
+      }
+    }
+    if (rfKey != null &&
+        rfKey.isNotEmpty &&
+        rf != null &&
+        rf.isNotEmpty &&
+        rf != roValue) {
+      _revisionsfeldParamKey = rfKey;
+      _lockedLocationParams[rfKey] = rf;
+      _setParamAndController(rfKey, rf);
+    }
+  }
+
+  bool _isLocationLocked(String key) => _lockedLocationParams.containsKey(key);
+
+  void _applyLockedLocationParams() {
+    for (final entry in _lockedLocationParams.entries) {
+      _params[entry.key] = entry.value;
+      if (_controllers.containsKey(entry.key)) {
+        _controllers[entry.key]!.text = entry.value;
+      }
+    }
+    final ro = _revisionsobjektParamKey != null
+        ? _lockedLocationParams[_revisionsobjektParamKey!]
+        : null;
+    if (ro != null && ro.isNotEmpty) {
+      _csvSettings?.writeSchemaItemToParams(_params, ro);
+    }
+  }
+
   void _applyRevisionsobjektPrefill() {
     final ro = widget.initialRevisionsobjekt?.trim();
     if (ro == null || ro.isEmpty) return;
@@ -332,6 +412,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final keys = <String>{
       if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty)
         _schemaItemParamKey!.trim(),
+      if (_revisionsobjektParamKey != null && _revisionsobjektParamKey!.trim().isNotEmpty)
+        _revisionsobjektParamKey!.trim(),
     };
 
     for (final field in _currentDiscipline.schema) {
@@ -344,6 +426,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     }
 
     for (final key in keys) {
+      if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) continue;
       _setParamAndController(key, ro);
     }
 
@@ -377,7 +460,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   }
 
   bool _isSchemaItemField(String key, String label) {
-    final paramKey = _schemaItemParamKey?.trim();
+    if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) return false;
+    final paramKey = _revisionsobjektParamKey ?? _schemaItemParamKey?.trim();
     if (paramKey == null || paramKey.isEmpty) return false;
     if (key == paramKey) return true;
     return label.trim().toLowerCase() == paramKey.toLowerCase();
@@ -1221,7 +1305,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
       final label = fieldDef['label'] as String;
       final type = (fieldDef['type'] ?? 'string').toString();
-      final isEditable = fieldDef['editable'] ?? true;
+      final isEditable = _isLocationLocked(key)
+          ? false
+          : (fieldDef['editable'] ?? true);
       
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
@@ -1442,6 +1528,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         const {'lfdNummer', 'photoPaths'};
     for (final key in _params.keys) {
       if (schemaKeys.contains(key)) continue;
+      if (_isLocationLocked(key)) continue;
       if (key.startsWith('__')) continue;
       if (key.startsWith('_')) continue; // interne/Validierungs-Felder nicht als Extra-Felder anzeigen
       if (reservedKeys.contains(key)) continue;
@@ -1845,6 +1932,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         // Wichtig: Alle Controller-Werte vor dem Speichern in _params übernehmen.
                         // Verhindert, dass Eingaben verloren gehen (z.B. bei Fokus-Wechsel ohne onChanged).
                         _syncControllersToParams();
+                        _applyLockedLocationParams();
 
                         // Erstelle Anlage
                         var anlage = Anlage(

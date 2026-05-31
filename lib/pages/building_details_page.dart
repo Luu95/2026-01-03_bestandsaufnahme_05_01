@@ -321,11 +321,20 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final importCsvSettings = _currentProject.id.isNotEmpty
           ? ref.read(csvSettingsProvider(_currentProject.id))
           : CsvSettings.defaults();
-      final anlagen = await CsvService.importAnlagenCsvForDisciplines(
+      final importResult = await CsvService.importAnlagenCsvForDisciplines(
         dbService: ref.read(databaseServiceProvider),
         buildingId: _building.id,
-        projectId: _currentProject.id,
+        csvSettings: importCsvSettings,
       );
+      if (_currentProject.id.isNotEmpty) {
+        await ref.read(csvSettingsProvider(_currentProject.id).notifier).save(
+              importCsvSettings.copyWith(
+                importHeaderRow: importResult.importHeaderRow,
+                exportDelimiter: importResult.detectedDelimiter,
+              ),
+            );
+      }
+      final anlagen = importResult.anlagen;
 
       debugPrint('CSV-Import abgeschlossen: ${anlagen.length} Anlagen gefunden');
 
@@ -571,11 +580,18 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         return;
       }
 
+      if (_currentProject.id.isNotEmpty) {
+        await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+      }
+      final csvSettings = _currentProject.id.isNotEmpty
+          ? ref.read(csvSettingsProvider(_currentProject.id))
+          : CsvSettings.defaults();
+
       if (exportType == 'csv') {
         // Nur CSV exportieren
         final savedPath = await CsvService.exportAnlagenCsvForDisciplines(
           anlagen: anlagen,
-          projectId: _currentProject.id,
+          csvSettings: csvSettings,
           destination: destination,
         );
 
@@ -636,7 +652,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         // ZIP mit Fotos exportieren
         final savedPath = await CsvService.exportAnlagenWithPhotos(
           anlagen: anlagen,
-          projectId: _currentProject.id,
+          csvSettings: csvSettings,
           structure: structure,
           destination: destination,
         );
@@ -1152,29 +1168,31 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       templatesForLookup: gewerkTemplates,
     );
 
-    // Sample-Anlage: nur RO-Schema-Maps mergen, nie gespeichertes Flat-Schema (Legacy-Bauteil).
+    Anlage? sampleAnlage;
     if (sampleAnlageId != null && sampleAnlageId.isNotEmpty) {
-      final sampleAnlage = await dbService.getAnlageById(sampleAnlageId);
-      if (sampleAnlage != null) {
-        final mergedRoSchemas =
-            Map<String, List<Map<String, dynamic>>>.from(
-          effectiveDiscipline.revisionsobjektSchemas,
+      sampleAnlage = await dbService.getAnlageById(sampleAnlageId);
+    }
+
+    // Sample-Anlage: nur RO-Schema-Maps mergen, nie gespeichertes Flat-Schema (Legacy-Bauteil).
+    if (sampleAnlage != null) {
+      final mergedRoSchemas =
+          Map<String, List<Map<String, dynamic>>>.from(
+        effectiveDiscipline.revisionsobjektSchemas,
+      );
+      sampleAnlage.discipline.revisionsobjektSchemas.forEach((key, fields) {
+        mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
+          mergedRoSchemas[key] ?? const [],
+          fields,
         );
-        sampleAnlage.discipline.revisionsobjektSchemas.forEach((key, fields) {
-          mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
-            mergedRoSchemas[key] ?? const [],
-            fields,
-          );
-        });
-        effectiveDiscipline = Disziplin(
-          label: effectiveDiscipline.label,
-          icon: effectiveDiscipline.icon,
-          color: effectiveDiscipline.color,
-          schema: effectiveDiscipline.schema,
-          groupingKey: effectiveDiscipline.groupingKey,
-          revisionsobjektSchemas: mergedRoSchemas,
-        );
-      }
+      });
+      effectiveDiscipline = Disziplin(
+        label: effectiveDiscipline.label,
+        icon: effectiveDiscipline.icon,
+        color: effectiveDiscipline.color,
+        schema: effectiveDiscipline.schema,
+        groupingKey: effectiveDiscipline.groupingKey,
+        revisionsobjektSchemas: mergedRoSchemas,
+      );
     }
 
     effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
@@ -1190,6 +1208,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       params[schemaItemKey] = roValue;
     }
     params.addAll(additionalParams);
+
+    if (sampleAnlage != null) {
+      final rfKey = csvSettings.resolveRevisionsfeldListGroupingParamKey();
+      if (rfKey != null && rfKey.isNotEmpty) {
+        final rf = csvSettings.readParamValue(sampleAnlage.params, rfKey);
+        if (rf != null && rf.isNotEmpty) params[rfKey] = rf;
+      }
+    }
 
     if (!mounted) return;
     await showModalBottomSheet<void>(

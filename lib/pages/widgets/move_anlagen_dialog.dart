@@ -5,13 +5,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
+import '../../providers/csv_settings_provider.dart';
+import '../../database/database_service.dart';
 import '../../providers/database_provider.dart';
+import '../../services/template_service.dart';
 
 class MoveAnlagenDialog extends ConsumerStatefulWidget {
   final List<Anlage> anlagenToMove;
   final String currentBuildingId;
   final String currentFloorId;
   final Disziplin currentDiscipline;
+  final String? projectId;
+
+  /// Param-Key Ebene 1 (Revisionsfeld), null wenn Gewerk = Tab.
+  final String? revisionsfeldGroupingKey;
+
+  /// Param-Key Ebene 2 (Revisionsobjekt).
+  final String? revisionsobjektGroupingKey;
 
   const MoveAnlagenDialog({
     Key? key,
@@ -19,6 +29,9 @@ class MoveAnlagenDialog extends ConsumerStatefulWidget {
     required this.currentBuildingId,
     required this.currentFloorId,
     required this.currentDiscipline,
+    this.projectId,
+    this.revisionsfeldGroupingKey,
+    this.revisionsobjektGroupingKey,
   }) : super(key: key);
 
   @override
@@ -32,10 +45,15 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   List<Anlage> _potentialParents = [];
   List<Disziplin> _availableDisciplines = [];
 
+  CsvSettings? _csvSettings;
+  String? _selectedRevisionsfeld;
+  String? _selectedRevisionsobjekt;
+  /// Revisionsfeld → bekannte Revisionsobjekte im Gebäude.
+  Map<String, Set<String>> _locationTargets = {};
+
   bool _isLoading = true;
   bool _isMoving = false;
 
-  // Prüfe, ob alle zu verschiebenden Elemente Anlagen (parentId == null) oder Bauteile sind
   bool get _areAllAnlagen {
     return widget.anlagenToMove.every((a) => a.parentId == null);
   }
@@ -44,18 +62,32 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     return widget.anlagenToMove.every((a) => a.parentId != null);
   }
 
+  bool get _hasHierarchyMove =>
+      _areAllAnlagen &&
+      widget.revisionsobjektGroupingKey != null &&
+      widget.revisionsobjektGroupingKey!.trim().isNotEmpty;
+
+  String get _revisionsfeldLabel {
+    final fromKey = widget.revisionsfeldGroupingKey?.trim();
+    if (fromKey != null && fromKey.isNotEmpty) return fromKey;
+    return _csvSettings?.labelGewerk ?? 'Revisionsfeld';
+  }
+
+  String get _revisionsobjektLabel {
+    final fromKey = widget.revisionsobjektGroupingKey?.trim();
+    if (fromKey != null && fromKey.isNotEmpty) return fromKey;
+    return _csvSettings?.resolveSchemaItemLevelLabel() ?? 'Revisionsobjekt';
+  }
+
   @override
   void initState() {
     super.initState();
     _selectedDiscipline = widget.currentDiscipline;
-    // Wenn es nur Anlagen sind, müssen sie auf Hauptebene bleiben (root)
-    // Wenn es nur Bauteile sind, müssen sie unter eine Anlage (kein root erlaubt)
     if (_areAllAnlagen) {
       _selectedParentId = 'root';
     } else if (_areAllBauteile) {
-      _selectedParentId = null; // Muss später eine Anlage ausgewählt werden
+      _selectedParentId = null;
     } else {
-      // Gemischt - nicht erlaubt, aber setze trotzdem root
       _selectedParentId = 'root';
     }
     _loadData();
@@ -64,49 +96,144 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   Future<void> _loadData() async {
     final db = ref.read(databaseServiceProvider);
 
-    // Verfügbare Disziplinen laden
+    if (widget.projectId != null && widget.projectId!.isNotEmpty) {
+      await ref.read(csvSettingsProvider(widget.projectId!).notifier).load();
+      _csvSettings = ref.read(csvSettingsProvider(widget.projectId!));
+    }
+
     final disciplines = await db.getDisciplinesByBuildingId(widget.currentBuildingId);
+
+    if (_hasHierarchyMove) {
+      await _loadHierarchyTargets(
+        db,
+        disciplines: disciplines,
+      );
+    }
 
     if (mounted) {
       setState(() {
         _availableDisciplines = disciplines;
         _isLoading = false;
       });
-      // Nur Parent-Liste laden, wenn es nicht gemischt ist
       if (_areAllAnlagen || _areAllBauteile) {
         await _loadPotentialParents();
       }
     }
   }
 
+  Future<void> _loadHierarchyTargets(
+    DatabaseService db, {
+    String? disciplineLabel,
+    List<Disziplin>? disciplines,
+  }) async {
+    final csv = _csvSettings;
+    final roKey = widget.revisionsobjektGroupingKey!.trim();
+    final rfKey = widget.revisionsfeldGroupingKey?.trim();
+    final label = disciplineLabel ?? _selectedDiscipline?.label ?? widget.currentDiscipline.label;
+
+    final allInScope = await db.getAnlagenByBuildingIdAndDiscipline(
+      widget.currentBuildingId,
+      label,
+    );
+
+    final targets = <String, Set<String>>{};
+    for (final anlage in allInScope) {
+      if (anlage.parentId != null) continue;
+      final ro = csv?.revisionsobjektValueFromParams(anlage.params) ??
+          anlage.params[roKey]?.toString().trim() ??
+          '';
+      if (ro.isEmpty) continue;
+
+      var rf = '';
+      if (rfKey != null && rfKey.isNotEmpty) {
+        rf = csv?.revisionsfeldValueFromParams(anlage.params) ??
+            anlage.params[rfKey]?.toString().trim() ??
+            '';
+      }
+      targets.putIfAbsent(rf, () => {}).add(ro);
+    }
+
+    final disciplineList = disciplines ?? _availableDisciplines;
+    final disciplineForNames = disciplineList.firstWhere(
+      (d) => d.label == label,
+      orElse: () => widget.currentDiscipline,
+    );
+    for (final ro in disciplineForNames.revisionsobjektNames) {
+      if (ro.trim().isEmpty) continue;
+      targets.putIfAbsent('', () => {}).add(ro.trim());
+    }
+
+    // Aktuelle Verortung der zu verschiebenden Elemente als Vorauswahl
+    String? initialRf;
+    String? initialRo;
+    if (widget.anlagenToMove.isNotEmpty) {
+      final first = widget.anlagenToMove.first;
+      initialRo = csv?.revisionsobjektValueFromParams(first.params) ??
+          first.params[roKey]?.toString().trim();
+      if (rfKey != null && rfKey.isNotEmpty) {
+        initialRf = csv?.revisionsfeldValueFromParams(first.params) ??
+            first.params[rfKey]?.toString().trim() ??
+            '';
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _locationTargets = targets;
+        _selectedRevisionsfeld = initialRf ?? '';
+        if (initialRo != null && initialRo.isNotEmpty) {
+          _selectedRevisionsobjekt = initialRo;
+        } else if (targets.isNotEmpty) {
+          final firstRf = targets.keys.first;
+          final ros = targets[firstRf];
+          if (ros != null && ros.isNotEmpty) {
+            _selectedRevisionsobjekt = ros.first;
+          }
+        }
+      });
+    }
+  }
+
+  List<String> get _sortedRevisionsfelder {
+    final keys = _locationTargets.keys.toList()
+      ..sort((a, b) {
+        if (a.isEmpty) return 1;
+        if (b.isEmpty) return -1;
+        return a.compareTo(b);
+      });
+    return keys;
+  }
+
+  List<String> get _revisionsobjekteForSelectedFeld {
+    final rf = _selectedRevisionsfeld ?? '';
+    final ros = _locationTargets[rf]?.toList() ?? [];
+    ros.sort((a, b) => a.compareTo(b));
+    return ros;
+  }
+
   Future<void> _loadPotentialParents() async {
     if (_selectedDiscipline == null) return;
 
     final db = ref.read(databaseServiceProvider);
-    // Lade alle Anlagen des Ziel-Gewerks und des aktuellen Stockwerks
     final allInScope = await db.getAnlagenByBuildingIdAndDiscipline(
       widget.currentBuildingId,
       _selectedDiscipline!.label,
     );
 
-    // Filtere nach aktuellem Stockwerk (bleibt gleich)
     final onFloor = (widget.currentFloorId == 'global')
         ? allInScope
         : allInScope.where((a) => a.floorId == widget.currentFloorId).toList();
 
-    // Filtere Zirkelbezüge (inkl. rekursiver Prüfung)
     final movingIds = widget.anlagenToMove.map((a) => a.id).toSet();
     final validParents = <Anlage>[];
 
     for (final potentialParent in onFloor) {
-      // Prüfe rekursiv, ob dieser Parent zu den zu verschiebenden gehört
       final wouldCreateCircular = await _wouldCreateCircularReference(
         potentialParent.id,
         movingIds,
       );
 
       if (!wouldCreateCircular && !movingIds.contains(potentialParent.id)) {
-        // Nur Haupt-Anlagen (ohne parentId) können Eltern sein
         if (potentialParent.parentId == null) {
           validParents.add(potentialParent);
         }
@@ -115,19 +242,16 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     setState(() {
       _potentialParents = validParents;
-      // Reset Parent, falls ungültig
       if (_areAllAnlagen) {
-        // Anlagen müssen immer auf Hauptebene bleiben
         _selectedParentId = 'root';
       } else if (_areAllBauteile) {
-        // Bauteile müssen unter eine Anlage - setze erste verfügbare, falls keine ausgewählt
         if (_selectedParentId == null ||
             _selectedParentId == 'root' ||
             !validParents.any((p) => p.id == _selectedParentId)) {
-          _selectedParentId = validParents.isNotEmpty ? validParents.first.id : null;
+          _selectedParentId =
+              validParents.isNotEmpty ? validParents.first.id : null;
         }
       }
-      // Bei gemischter Auswahl wird _selectedParentId nicht verwendet
     });
   }
 
@@ -135,22 +259,15 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     String potentialParentId,
     Set<String> movingIds,
   ) async {
-    // Prüfe direkt: Ist das Parent selbst in der zu verschiebenden Liste?
     if (movingIds.contains(potentialParentId)) return true;
 
-    // Rekursiv: Prüfe alle Vorfahren des potentialParent
     String? currentParentId = potentialParentId;
     final visited = <String>{};
-
     final db = ref.read(databaseServiceProvider);
 
     while (currentParentId != null && !visited.contains(currentParentId)) {
       visited.add(currentParentId);
-
-      // Ist dieser Vorfahre in der zu verschiebenden Liste?
       if (movingIds.contains(currentParentId)) return true;
-
-      // Lade Parent und gehe eine Ebene höher
       final parent = await db.getAnlageById(currentParentId);
       currentParentId = parent?.parentId;
     }
@@ -161,22 +278,62 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   bool _areSchemasCompatible(Disziplin source, Disziplin target) {
     final sourceKeys = source.schema.map((e) => e['key']).toSet();
     final targetKeys = target.schema.map((e) => e['key']).toSet();
-
-    // Prüfe, ob alle belegten Parameter im Ziel-Schema existieren
-    // (Vereinfacht: Hier könnte man auch eine Warnung statt Fehler zeigen)
     return targetKeys.containsAll(sourceKeys) ||
-        sourceKeys.intersection(targetKeys).length > 0;
+        sourceKeys.intersection(targetKeys).isNotEmpty;
+  }
+
+  bool get _canExecuteHierarchyMove {
+    if (!_hasHierarchyMove) return true;
+    final ro = _selectedRevisionsobjekt?.trim() ?? '';
+    if (ro.isEmpty) return false;
+    final rfKey = widget.revisionsfeldGroupingKey?.trim();
+    if (rfKey != null && rfKey.isNotEmpty) {
+      final rf = _selectedRevisionsfeld?.trim() ?? '';
+      if (rf.isEmpty) return false;
+    }
+    return true;
+  }
+
+  Disziplin _disciplineForMove() {
+    var discipline = _selectedDiscipline!;
+    final ro = _selectedRevisionsobjekt?.trim();
+    if (_hasHierarchyMove && ro != null && ro.isNotEmpty) {
+      discipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+        discipline: discipline,
+        revisionsobjekt: ro,
+      );
+    }
+    return discipline;
+  }
+
+  void Function(Map<String, dynamic> params)? _buildPatchParams() {
+    if (!_hasHierarchyMove) return null;
+    final csv = _csvSettings;
+    final ro = _selectedRevisionsobjekt?.trim();
+    if (csv == null || ro == null || ro.isEmpty) return null;
+
+    final rfKey = widget.revisionsfeldGroupingKey?.trim();
+    final rf = rfKey != null && rfKey.isNotEmpty
+        ? (_selectedRevisionsfeld?.trim() ?? '')
+        : null;
+
+    return (params) {
+      csv.writeHierarchyLocationToParams(
+        params,
+        revisionsfeld: rf,
+        revisionsobjekt: ro,
+      );
+    };
   }
 
   Future<void> _executeMove() async {
     if (_selectedDiscipline == null) return;
+    if (!_canExecuteHierarchyMove) return;
 
-    // Validierung: Anlagen können nicht unter andere Anlagen
     if (_areAllAnlagen && _selectedParentId != null && _selectedParentId != 'root') {
       return;
     }
 
-    // Validierung: Bauteile müssen unter eine Anlage
     if (_areAllBauteile &&
         (_selectedParentId == null ||
             _selectedParentId == 'root' ||
@@ -190,22 +347,18 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     try {
       final db = ref.read(databaseServiceProvider);
-      
-      // Bei gemischter Auswahl: Nur Gewerk ändern, Hierarchie bleibt unverändert
+      final targetDiscipline = _disciplineForMove();
+      final patchParams = _buildPatchParams();
+
       String? targetParentId;
       if (!_areAllAnlagen && !_areAllBauteile) {
-        // Gemischte Auswahl: Behalte die aktuelle parentId jeder Anlage
-        // (wird in moveAnlagen nicht gesetzt, wenn newParentId == null)
-        targetParentId = null; // null bedeutet: nicht ändern
+        targetParentId = null;
       } else if (_areAllAnlagen) {
-        // Nur Anlagen: Immer auf Hauptebene (null)
         targetParentId = null;
       } else {
-        // Nur Bauteile: Neue parentId setzen
         targetParentId = _selectedParentId;
       }
 
-      // Schema-Kompatibilität prüfen
       if (_selectedDiscipline!.label != widget.currentDiscipline.label) {
         final isCompatible = _areSchemasCompatible(
           widget.currentDiscipline,
@@ -245,25 +398,23 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         }
       }
 
-      // Verschiebe alle Anlagen (inkl. Kinder) - Stockwerk bleibt gleich
       if (!_areAllAnlagen && !_areAllBauteile) {
-        // Gemischte Auswahl: Jede Anlage behält ihre aktuelle parentId
-        // Verschiebe jede Anlage einzeln mit ihrer aktuellen parentId
         for (final anlage in widget.anlagenToMove) {
           await db.moveAnlagen(
             [anlage.id],
-            newFloorId: null, // Stockwerk bleibt unverändert
-            newParentId: anlage.parentId, // Behalte aktuelle parentId
-            newDiscipline: _selectedDiscipline,
+            newFloorId: null,
+            newParentId: anlage.parentId,
+            newDiscipline: targetDiscipline,
+            patchParams: patchParams,
           );
         }
       } else {
-        // Einheitliche Auswahl: Alle bekommen die gleiche parentId
         await db.moveAnlagen(
           widget.anlagenToMove.map((a) => a.id).toList(),
-          newFloorId: null, // Stockwerk bleibt unverändert
+          newFloorId: null,
           newParentId: targetParentId,
-          newDiscipline: _selectedDiscipline,
+          newDiscipline: targetDiscipline,
+          patchParams: patchParams,
         );
       }
 
@@ -281,9 +432,16 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final rfKey = widget.revisionsfeldGroupingKey?.trim();
+    final showRevisionsfeldPicker =
+        _hasHierarchyMove && rfKey != null && rfKey.isNotEmpty;
+    final revisionsobjekte = _revisionsobjekteForSelectedFeld;
+
     return Container(
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom +
+            MediaQuery.of(context).padding.bottom +
+            16,
         left: 16,
         right: 16,
         top: 16,
@@ -292,7 +450,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header
           Row(
             children: [
               Container(
@@ -321,7 +478,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
             ],
           ),
           const SizedBox(height: 24),
-
           if (_isLoading)
             const Center(
               child: Padding(
@@ -330,7 +486,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               ),
             )
           else ...[
-            // 1. Ziel-Gewerk Auswahl
             DropdownButtonFormField<Disziplin>(
               value: _availableDisciplines.firstWhere(
                 (d) => d.label == _selectedDiscipline?.label,
@@ -357,29 +512,92 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                   ),
                 );
               }).toList(),
-              onChanged: (val) {
+              onChanged: (val) async {
                 setState(() {
                   _selectedDiscipline = val;
-                  // Reset Parent bei Gewerk-Wechsel entsprechend der Regeln
                   if (_areAllAnlagen) {
                     _selectedParentId = 'root';
                   } else if (_areAllBauteile) {
-                    _selectedParentId = null; // Wird beim Laden der Parents gesetzt
+                    _selectedParentId = null;
                   }
-                  // Bei gemischter Auswahl wird _selectedParentId nicht verwendet
                 });
-                // Nur Parent-Liste laden, wenn es nicht gemischt ist
+                if (_hasHierarchyMove && val != null) {
+                  await _loadHierarchyTargets(
+                    ref.read(databaseServiceProvider),
+                    disciplineLabel: val.label,
+                    disciplines: _availableDisciplines,
+                  );
+                }
                 if (_areAllAnlagen || _areAllBauteile) {
-                  _loadPotentialParents();
+                  await _loadPotentialParents();
                 }
               },
             ),
+            if (_hasHierarchyMove) ...[
+              const SizedBox(height: 16),
+              if (showRevisionsfeldPicker) ...[
+                DropdownButtonFormField<String>(
+                  value: _sortedRevisionsfelder.contains(_selectedRevisionsfeld)
+                      ? _selectedRevisionsfeld
+                      : (_sortedRevisionsfelder.isNotEmpty
+                          ? _sortedRevisionsfelder.first
+                          : null),
+                  decoration: InputDecoration(
+                    labelText: 'Ziel-$_revisionsfeldLabel',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    prefixIcon: const Icon(Icons.folder_outlined),
+                    filled: true,
+                    fillColor: Colors.grey[50],
+                  ),
+                  items: _sortedRevisionsfelder.map((rf) {
+                    final label = rf.isEmpty ? '(Ohne $_revisionsfeldLabel)' : rf;
+                    return DropdownMenuItem(value: rf, child: Text(label));
+                  }).toList(),
+                  onChanged: (val) {
+                    setState(() {
+                      _selectedRevisionsfeld = val;
+                      final ros = _revisionsobjekteForSelectedFeld;
+                      _selectedRevisionsobjekt =
+                          ros.isNotEmpty ? ros.first : null;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
+              DropdownButtonFormField<String>(
+                value: revisionsobjekte.contains(_selectedRevisionsobjekt)
+                    ? _selectedRevisionsobjekt
+                    : (revisionsobjekte.isNotEmpty
+                        ? revisionsobjekte.first
+                        : null),
+                decoration: InputDecoration(
+                  labelText: 'Ziel-$_revisionsobjektLabel',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  prefixIcon: const Icon(Icons.account_tree_outlined),
+                  helperText:
+                      '$_revisionsfeldLabel und $_revisionsobjektLabel werden in den Datensätzen automatisch gesetzt.',
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  errorText: revisionsobjekte.isEmpty
+                      ? 'Keine Ziele vorhanden'
+                      : null,
+                ),
+                items: revisionsobjekte
+                    .map((ro) => DropdownMenuItem(value: ro, child: Text(ro)))
+                    .toList(),
+                onChanged: revisionsobjekte.isEmpty
+                    ? null
+                    : (val) {
+                        setState(() => _selectedRevisionsobjekt = val);
+                      },
+              ),
+            ],
             const SizedBox(height: 16),
-
-            // 2. Ziel-Übergeordnete Anlage (Parent)
-            // Bei gemischter Auswahl: Nur Gewerk-Wechsel erlaubt, keine Parent-Auswahl
             if (!_areAllAnlagen && !_areAllBauteile) ...[
-              // Warnung bei gemischter Auswahl
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -405,7 +623,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 ),
               ),
             ] else if (_areAllBauteile) ...[
-              // Nur Bauteile: Parent-Auswahl erforderlich
               DropdownButtonFormField<String>(
                 value: _potentialParents.any((p) => p.id == _selectedParentId)
                     ? _selectedParentId
@@ -423,25 +640,27 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                   fillColor: Colors.grey[50],
                   errorText: _selectedParentId == null ||
                           _selectedParentId == 'root' ||
-                          !_potentialParents.any((p) => p.id == _selectedParentId)
+                          !_potentialParents
+                              .any((p) => p.id == _selectedParentId)
                       ? 'Bitte wähle eine Anlage aus'
                       : null,
                 ),
-                items: _potentialParents.map((p) => DropdownMenuItem(
-                      value: p.id,
-                      child: Text(
-                        p.name,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )).toList(),
+                items: _potentialParents
+                    .map((p) => DropdownMenuItem(
+                          value: p.id,
+                          child: Text(
+                            p.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ))
+                    .toList(),
                 onChanged: (val) {
                   setState(() {
                     _selectedParentId = val;
                   });
                 },
               ),
-            ] else ...[
-              // Nur Anlagen: Zeige Info, dass sie auf Hauptebene bleiben
+            ] else if (!_hasHierarchyMove) ...[
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -467,7 +686,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 ),
               ),
             ],
-
             const SizedBox(height: 32),
             Row(
               children: [
@@ -488,7 +706,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _isMoving ? null : _executeMove,
+                    onPressed: (_isMoving || !_canExecuteHierarchyMove)
+                        ? null
+                        : _executeMove,
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: Colors.blue[600],
@@ -519,4 +739,3 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     );
   }
 }
-

@@ -531,6 +531,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       return;
     }
 
+    final dbService = ref.read(databaseServiceProvider);
+    final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
+
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -542,6 +545,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         currentBuildingId: widget.building.id,
         currentFloorId: widget.floor.id,
         currentDiscipline: widget.discipline,
+        projectId: projectId,
+        revisionsfeldGroupingKey: widget.groupingKey,
+        revisionsobjektGroupingKey: widget.subGroupingKey,
       ),
     );
 
