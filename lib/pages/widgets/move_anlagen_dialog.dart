@@ -339,44 +339,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     return discipline;
   }
 
-  /// Param-Updates für Eingabefelder (Revisionsfeld / Revisionsobjekt / Aliase).
-  Map<String, dynamic>? _buildParamsToUpdate({String? targetParentId}) {
-    final csv = _csvSettings;
-    if (csv == null) return null;
-
-    if (_hasHierarchyMove) {
-      final ro = _effectiveRevisionsobjekt?.trim();
-      if (ro == null || ro.isEmpty) return null;
-      final rfKey = widget.revisionsfeldGroupingKey?.trim();
-      final rf = rfKey != null && rfKey.isNotEmpty
-          ? _effectiveRevisionsfeld?.trim()
-          : null;
-      return csv.buildHierarchyLocationParams(
-        revisionsfeld: rf,
-        revisionsobjekt: ro,
-      );
-    }
-
-    // Bauteile mit parentId: Verortung vom Ziel-Parent übernehmen.
-    if (_areAllBauteile &&
-        targetParentId != null &&
-        targetParentId != 'root') {
-      try {
-        final parent =
-            _potentialParents.firstWhere((p) => p.id == targetParentId);
-        final ro = csv.revisionsobjektValueFromParams(parent.params)?.trim();
-        if (ro == null || ro.isEmpty) return null;
-        final rf = csv.revisionsfeldValueFromParams(parent.params);
-        return csv.buildHierarchyLocationParams(
-          revisionsfeld: rf,
-          revisionsobjekt: ro,
-        );
-      } catch (_) {}
-    }
-
-    return null;
-  }
-
   Future<void> _executeMove() async {
     if (_selectedDiscipline == null) return;
     if (!_canExecuteHierarchyMove) return;
@@ -398,20 +360,18 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     try {
       final db = ref.read(databaseServiceProvider);
-      _syncHierarchySelectionFromDropdowns();
 
+      // Bei gemischter Auswahl: Nur Gewerk ändern, Hierarchie bleibt unverändert
       String? targetParentId;
       if (!_areAllAnlagen && !_areAllBauteile) {
-        targetParentId = null;
+        targetParentId = null; // null bedeutet: nicht ändern
       } else if (_areAllAnlagen) {
         targetParentId = null;
       } else {
         targetParentId = _selectedParentId;
       }
 
-      final targetDiscipline = _disciplineForMove();
-      final paramsToUpdate = _buildParamsToUpdate(targetParentId: targetParentId);
-
+      // Schema-Kompatibilität prüfen
       if (_selectedDiscipline!.label != widget.currentDiscipline.label) {
         final isCompatible = _areSchemasCompatible(
           widget.currentDiscipline,
@@ -451,23 +411,99 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         }
       }
 
+      // --- Parameter (Eingabefelder) präzise aktualisieren ---
+      final projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
+      Map<String, dynamic> paramsToUpdate = {};
+
+      if (projectId != null) {
+        final csvSettings = await CsvSettings.loadForProject(projectId);
+
+        // Der eindeutige Key für den Namen der Ebene 3 (darf NIEMALS überschrieben werden)
+        final leafNameKey = csvSettings.resolveNameParamKey();
+
+        // 1. Feld für Ebene 1 (Gewerk-Tab): Disziplin-Label
+        final gewerkKey = csvSettings.resolveGewerkGroupingParamKey();
+        if (gewerkKey.isNotEmpty && gewerkKey != leafNameKey) {
+          paramsToUpdate[gewerkKey] = _selectedDiscipline!.label;
+        }
+
+        // 2. Ebene 1+2 vom Ziel-Parent (Bauteil-Verschiebung unter neue Anlage)
+        if (targetParentId != null && targetParentId != 'root') {
+          try {
+            final parent =
+                _potentialParents.firstWhere((p) => p.id == targetParentId);
+
+            final rfKey = csvSettings.resolveRevisionsfeldListGroupingParamKey();
+            if (rfKey != null && rfKey.isNotEmpty && rfKey != leafNameKey) {
+              final rf = csvSettings.revisionsfeldValueFromParams(parent.params);
+              if (rf != null && rf.isNotEmpty) {
+                paramsToUpdate[rfKey] = rf;
+              }
+            }
+
+            String? ebene2Key =
+                csvSettings.resolveRevisionsobjektGroupingParamKey();
+            if (ebene2Key == null || ebene2Key.isEmpty) {
+              ebene2Key = csvSettings.resolveAnlageGroupingParamKey();
+            }
+
+            final ebene2Value =
+                csvSettings.revisionsobjektValueFromParams(parent.params) ??
+                    csvSettings.schemaItemValueFromParams(parent.params) ??
+                    parent.name;
+
+            if (ebene2Key != null &&
+                ebene2Key.isNotEmpty &&
+                ebene2Key != leafNameKey) {
+              paramsToUpdate[ebene2Key] = ebene2Value;
+            }
+          } catch (e) {
+            // Parent nicht im Scope gefunden
+          }
+        }
+
+        // 3. Listen-Blätter (parentId == null): Ziel aus Dropdown, Blatt-Name unangetastet
+        if (_hasHierarchyMove && _areAllAnlagen) {
+          _syncHierarchySelectionFromDropdowns();
+          final ro = _effectiveRevisionsobjekt?.trim();
+          if (ro != null && ro.isNotEmpty) {
+            final rfKey = widget.revisionsfeldGroupingKey?.trim();
+            final rf = rfKey != null && rfKey.isNotEmpty
+                ? _effectiveRevisionsfeld?.trim()
+                : null;
+            final hierarchy = csvSettings.buildHierarchyLocationParams(
+              revisionsfeld: rf,
+              revisionsobjekt: ro,
+            );
+            hierarchy.forEach((key, value) {
+              if (leafNameKey == null || key != leafNameKey) {
+                paramsToUpdate[key] = value;
+              }
+            });
+          }
+        }
+      }
+
+      // Verschiebe alle Anlagen (inkl. Kinder) - Stockwerk bleibt gleich
       if (!_areAllAnlagen && !_areAllBauteile) {
+        // Gemischte Auswahl: Jede Anlage behält ihre aktuelle parentId
         for (final anlage in widget.anlagenToMove) {
           await db.moveAnlagen(
             [anlage.id],
-            newFloorId: null,
-            newParentId: anlage.parentId,
-            newDiscipline: targetDiscipline,
-            paramsToUpdate: paramsToUpdate,
+            newFloorId: null, // Stockwerk bleibt unverändert
+            newParentId: anlage.parentId, // Behalte aktuelle parentId
+            newDiscipline: _disciplineForMove(),
+            paramsToUpdate: paramsToUpdate.isNotEmpty ? paramsToUpdate : null,
           );
         }
       } else {
+        // Einheitliche Auswahl: Alle bekommen die gleiche parentId
         await db.moveAnlagen(
           widget.anlagenToMove.map((a) => a.id).toList(),
-          newFloorId: null,
+          newFloorId: null, // Stockwerk bleibt unverändert
           newParentId: targetParentId,
-          newDiscipline: targetDiscipline,
-          paramsToUpdate: paramsToUpdate,
+          newDiscipline: _disciplineForMove(),
+          paramsToUpdate: paramsToUpdate.isNotEmpty ? paramsToUpdate : null,
         );
       }
 
