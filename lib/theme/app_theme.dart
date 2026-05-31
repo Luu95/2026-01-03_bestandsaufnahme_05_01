@@ -33,9 +33,14 @@ class AppTheme {
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
-      inputDecorationTheme: const InputDecorationTheme(
+      inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      expansionTileTheme: ExpansionTileThemeData(
+        backgroundColor: Colors.white,
+        collapsedBackgroundColor: Colors.white,
       ),
     );
   }
@@ -70,6 +75,15 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: colorScheme.surfaceContainerHighest,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      expansionTileTheme: ExpansionTileThemeData(
+        backgroundColor: darkSurfaceColor,
+        collapsedBackgroundColor: darkSurfaceColor,
+        iconColor: colorScheme.onSurface,
+        textColor: colorScheme.onSurface,
+        collapsedIconColor: colorScheme.onSurface,
+        collapsedTextColor: colorScheme.onSurface,
       ),
     );
   }

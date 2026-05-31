@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 import 'disziplin_schnittstelle.dart'; // Nutzung des zentralen Disziplin-Modells
-import 'disziplin_defaults.dart'; // Import der Standard-Disziplinen
 import '../utils/delete_utils.dart'; // Für Bestätigungsdialog
 import '../providers/database_provider.dart';
 import '../providers/projects_provider.dart';
@@ -51,25 +50,6 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     setState(() {
       disziplinen = loaded;
     });
-  }
-
-  /// Generiert Standard-Disziplinen und fügt sie hinzu (nur die, die noch nicht existieren)
-  Future<void> _generateDefaultDisziplinen() async {
-    final defaultDisziplinen = getDefaultDisziplinen();
-    final existingLabels = disziplinen.map((d) => d.label.toLowerCase()).toSet();
-    
-    int addedCount = 0;
-    for (final defaultDisc in defaultDisziplinen) {
-      if (!existingLabels.contains(defaultDisc.label.toLowerCase())) {
-        disziplinen.add(defaultDisc);
-        addedCount++;
-      }
-    }
-    
-    if (addedCount > 0) {
-      await _saveDisziplinen();
-      setState(() {});
-    }
   }
 
   Future<void> _saveDisziplinen() async {
@@ -295,7 +275,6 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
                     const PopupMenuItem(value: 'delete_all', child: Text('Alle Anlagen löschen')),
                   ],
                 ),
-                IconButton(icon: const Icon(Icons.auto_fix_high), onPressed: _generateDefaultDisziplinen),
                 IconButton(icon: const Icon(Icons.schema), onPressed: _editSchemaForDisziplin),
               ],
       ),

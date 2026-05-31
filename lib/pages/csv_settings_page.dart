@@ -668,13 +668,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             children: [
               TextField(
                 controller: _labelGewerkCtrl,
-                decoration: InputDecoration(
+                decoration: _themedInputDecoration(
+                  context,
                   labelText: 'Bezeichnung Ebene 1',
                   helperText: 'Standard: Gewerk',
-                  isDense: true,
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 onChanged: (val) {
                   setState(() => _labelGewerk = val);
@@ -684,13 +681,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               const SizedBox(height: 12),
               TextField(
                 controller: _labelAnlageCtrl,
-                decoration: InputDecoration(
+                decoration: _themedInputDecoration(
+                  context,
                   labelText: 'Bezeichnung Ebene 2',
                   helperText: 'Standard: Anlage',
-                  isDense: true,
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 onChanged: (val) {
                   setState(() => _labelAnlage = val);
@@ -700,13 +694,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               const SizedBox(height: 12),
               TextField(
                 controller: _labelBauteilCtrl,
-                decoration: InputDecoration(
+                decoration: _themedInputDecoration(
+                  context,
                   labelText: 'Bezeichnung Ebene 3',
                   helperText: 'Standard: Bauteil',
-                  isDense: true,
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 onChanged: (val) {
                   setState(() => _labelBauteil = val);
@@ -733,11 +724,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   // --- SCHEMA TAB ---
 
   Widget _buildSchemaTab() {
-    if (_disciplines.isEmpty && _globalSchema.isEmpty) {
-      // Wenn alles leer ist, lade Standard-Heizung als Basis für Global wenn nichts da ist
-      // Aber eigentlich sollte der User einfach starten können.
-    }
-
     if (!_showDisciplineSelection) {
       if (_editingGlobal) {
         return Column(
@@ -807,7 +793,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   Widget _buildBackToSelectionHeader(String title) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       child: Row(
         children: [
           IconButton(
@@ -855,7 +841,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           Text(
             'Entspricht Ebene 1 im CSV-Mapping (${_hierarchySubtitle()}). '
             '$_labelGewerk aufklappen, dann $_schemaItemLevelLabel wählen, um dessen Attribute zu bearbeiten.',
-            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            style: TextStyle(fontSize: 13, color: _mutedTextColor(context)),
           ),
           const SizedBox(height: 16),
 
@@ -873,7 +859,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+                    side: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.25)),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Theme(
@@ -908,7 +894,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                         roList.isEmpty
                             ? 'Keine $_schemaItemLevelLabel'
                             : '${roList.length} $_schemaItemLevelLabel',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
                       ),
                       children: [
                         if (roList.isEmpty)
@@ -918,7 +904,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                               'Importieren Sie Gewerkevorlagen, damit $_schemaItemLevelLabel-Einträge erscheinen.',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.grey[600],
+                                color: _mutedTextColor(context),
                               ),
                             ),
                           )
@@ -939,7 +925,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                                 '${_schemaForRevisionsobjekt(d, ro).length} Felder',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey[600],
+                                  color: _mutedTextColor(context),
                                 ),
                               ),
                               trailing: const Icon(Icons.chevron_right),
@@ -971,7 +957,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+        side: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.25)),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
@@ -1089,19 +1075,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.bold)),
+          Text(label, style: TextStyle(fontSize: 12, color: _mutedTextColor(context), fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
           DropdownButtonFormField<int>(
             key: ValueKey('template_col_dropdown_${fieldKey}_$value'),
             value: value,
             isExpanded: true,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
+            decoration: _themedInputDecoration(context),
             items: List.generate(_templateCsvHeaders!.length, (index) {
               return DropdownMenuItem(
                 value: index,
@@ -1123,12 +1103,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       key: ValueKey('template_col_input_${fieldKey}_$value'),
       initialValue: (value + 1).toString(),
       keyboardType: TextInputType.number,
-      decoration: InputDecoration(
+      decoration: _themedInputDecoration(
+        context,
         labelText: label,
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         prefixIcon: const Icon(Icons.view_column, size: 18),
         helperText: _templateCsvHeaders != null && value >= _templateCsvHeaders!.length
             ? 'Spalte ${value + 1} liegt außerhalb der geladenen CSV (${_templateCsvHeaders!.length} Spalten)'
@@ -1151,18 +1128,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         : '$tripletCount Dreiergruppe${tripletCount == 1 ? '' : 'n'} konfiguriert';
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.shade200, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -1181,12 +1147,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             'Attribut-Dreiergruppen',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
               'CSV-Spalten für Attributdefinitionen: Name (z. B. ATT1), Typ (z. B. ATT1_TYPE), '
               'Optionen (z. B. ATT1_OPTIONS). Pro Attribut eine Dreiergruppe.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
             Container(
@@ -1211,7 +1177,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                     'Spaltennummern wie in der Dropdown-Anzeige (1 = erste Spalte). '
                     'Reihenfolge: Name, Typ, Optionen (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_OPTIONS, ATT2/…). '
                     'Spaltenanzahl im Bereich muss durch 3 teilbar sein.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black87),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
                   ),
                   const SizedBox(height: 10),
                   Wrap(
@@ -1293,7 +1261,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   children: [
                     Text(
                       'Attribut ${idx + 1}',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey[700]),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _mutedTextColor(context)),
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -1587,10 +1555,48 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   // --- HELPERS ---
 
+  Color _mutedTextColor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurfaceVariant;
+
+  BoxDecoration _themedSurfaceCardDecoration(
+    BuildContext context, {
+    required Color borderColor,
+  }) {
+    final theme = Theme.of(context);
+    return BoxDecoration(
+      color: theme.colorScheme.surface,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: borderColor, width: 1.5),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(theme.brightness == Brightness.dark ? 0.25 : 0.03),
+          blurRadius: 6,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    );
+  }
+
+  InputDecoration _themedInputDecoration(BuildContext context, {String? labelText, String? hintText, String? helperText, Widget? prefixIcon}) {
+    return InputDecoration(
+      labelText: labelText,
+      hintText: hintText,
+      helperText: helperText,
+      prefixIcon: prefixIcon,
+      isDense: true,
+      filled: true,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    );
+  }
+
   Widget _buildConnector() {
     return Padding(
       padding: const EdgeInsets.only(left: 32),
-      child: Container(height: 20, width: 2, color: Colors.grey.shade300),
+      child: Container(
+        height: 20,
+        width: 2,
+        color: Theme.of(context).colorScheme.outlineVariant,
+      ),
     );
   }
 
@@ -1601,13 +1607,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   ) {
     return TextField(
       controller: controller,
-      decoration: InputDecoration(
+      decoration: _themedInputDecoration(
+        context,
         labelText: label,
         hintText: 'z.B. Foto1 oder Spaltenname aus Ihrer CSV',
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       onChanged: onChanged,
     );
@@ -1626,18 +1629,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         : '$configuredCount Spalte${configuredCount == 1 ? '' : 'n'} konfiguriert';
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.shade200, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -1656,12 +1648,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             'Fotonummern-Spalten (Export)',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
               'Spalten-Labels Ihrer CSV, in die beim Export die Fotonummern (1–4) geschrieben werden. '
               'Beim Import können diese Spalten leer sein. Leer lassen = Spalte nicht verwenden.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
             _buildFotoSpalteField(
@@ -1709,17 +1701,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         children: [
           Text(
             label,
-            style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.bold),
+            style: TextStyle(fontSize: 12, color: _mutedTextColor(context), fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
           DropdownButtonFormField<int>(
             value: safeValue,
             isExpanded: true,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            decoration: _themedInputDecoration(context).copyWith(
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
             items: List.generate(csvHeaders.length, (index) {
@@ -1745,12 +1733,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       key: ValueKey('mapping_col_input_$label'),
       initialValue: (value + 1).toString(),
       keyboardType: TextInputType.number,
-      decoration: InputDecoration(
+      decoration: _themedInputDecoration(
+        context,
         labelText: label,
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         prefixIcon: const Icon(Icons.view_column, size: 18),
       ),
       onChanged: (text) {
@@ -1776,18 +1761,20 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     required ValueChanged<bool> onToggle,
     Widget? child,
   }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Column(
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: colorScheme.surfaceContainerHighest.withOpacity(0.65),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: colorScheme.outline.withOpacity(0.25)),
           ),
           child: Row(
             children: [
-              Icon(icon, size: 20, color: Colors.grey[600]),
+              Icon(icon, size: 20, color: colorScheme.onSurfaceVariant),
               const SizedBox(width: 8),
               Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w500))),
               Switch.adaptive(value: isActive, onChanged: onToggle),
@@ -1807,18 +1794,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         : '$pairCount Paar${pairCount == 1 ? '' : 'e'} konfiguriert';
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.shade200, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -1837,12 +1813,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             'Attribut-Spaltenpaare',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
               'CSV-Spalten, in denen pro Zeile Attributname und Attributwert stehen. '
               'Jedes Paar: eine Spalte für den Namen, eine für den Wert.',
-              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
             Container(
@@ -1866,7 +1842,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   Text(
                     'Erste Spalte = Attributname, nächste = Attributwert (z. B. 24–63 → Paare 24/25, 26/27, …). '
                     'Gerade Anzahl Spalten im Bereich nötig.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black87),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
                   ),
                   const SizedBox(height: 10),
                   Wrap(
@@ -2279,7 +2257,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           Expanded(
             child: Text(
               text,
-              style: TextStyle(color: Colors.grey[800], fontSize: 13),
+              style: TextStyle(color: _mutedTextColor(context), fontSize: 13),
             ),
           ),
         ],
@@ -2306,7 +2284,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               const SizedBox(height: 4),
               Text(
                 subtitle,
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                style: TextStyle(color: _mutedTextColor(context), fontSize: 12),
               ),
             ],
           ),

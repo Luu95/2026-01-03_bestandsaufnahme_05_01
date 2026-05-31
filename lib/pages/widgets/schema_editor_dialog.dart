@@ -1,6 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+BoxDecoration _schemaFieldCardDecoration(BuildContext context) {
+  final theme = Theme.of(context);
+  final colorScheme = theme.colorScheme;
+  return BoxDecoration(
+    color: colorScheme.surface,
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(color: colorScheme.outline.withOpacity(0.25), width: 1.5),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withOpacity(theme.brightness == Brightness.dark ? 0.25 : 0.03),
+        blurRadius: 8,
+        offset: const Offset(0, 2),
+      ),
+    ],
+  );
+}
+
 /// Widget für direkte Anzeige im Tab (ohne Dialog)
 class SchemaEditorWidget extends StatefulWidget {
   final List<Map<String, dynamic>> existingSchema;
@@ -168,21 +185,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                       return Container(
                         key: ValueKey('${field['key']}_$index'),
                         margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Colors.grey.withOpacity(0.2),
-                            width: 1.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.03),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
+                        decoration: _schemaFieldCardDecoration(context),
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
@@ -195,12 +198,12 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: Colors.grey[100],
+                                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Icon(
                                       Icons.drag_handle,
-                                      color: Colors.grey[600],
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                                       size: 20,
                                     ),
                                   ),
@@ -215,11 +218,11 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                             Expanded(
                                               child: Text(
                                                 field['label'],
-                                                style: const TextStyle(
+                                                style: TextStyle(
                                                   fontWeight: FontWeight.w600,
                                                   fontSize: 16,
                                                   letterSpacing: -0.2,
-                                                  color: Colors.black87,
+                                                  color: Theme.of(context).colorScheme.onSurface,
                                                 ),
                                                 maxLines: 2,
                                                 overflow: TextOverflow.ellipsis,
@@ -385,15 +388,15 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
         Container(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surface,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withOpacity(Theme.of(context).brightness == Brightness.dark ? 0.3 : 0.05),
                 blurRadius: 10,
                 offset: const Offset(0, -5),
               ),
             ],
-            border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.1))),
+            border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.15))),
           ),
           child: SizedBox(
             width: double.infinity,
@@ -475,7 +478,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: Container(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -492,7 +495,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                   ),
                   border: Border(
                     bottom: BorderSide(
-                      color: Colors.grey.withOpacity(0.15),
+                      color: Theme.of(context).colorScheme.outline.withOpacity(0.15),
                       width: 1,
                     ),
                   ),
@@ -535,7 +538,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                             style: TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.w600,
-                              color: Colors.grey[800],
+                              color: Theme.of(context).colorScheme.onSurface,
                               letterSpacing: -0.2,
                             ),
                           ),
@@ -549,7 +552,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                 '${schemaList.length} Feld${schemaList.length != 1 ? 'er' : ''} definiert',
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: Colors.grey[600],
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -650,21 +653,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                             return Container(
                               key: ValueKey('${field['key']}_$index'),
                               margin: const EdgeInsets.only(bottom: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: Colors.grey.withOpacity(0.2),
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.03),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
+                              decoration: _schemaFieldCardDecoration(context),
                               child: Material(
                                 color: Colors.transparent,
                                 child: InkWell(
@@ -677,12 +666,12 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                         Container(
                                           padding: const EdgeInsets.all(8),
                                           decoration: BoxDecoration(
-                                            color: Colors.grey[100],
+                                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Icon(
                                             Icons.drag_handle,
-                                            color: Colors.grey[600],
+                                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                                             size: 20,
                                           ),
                                         ),
@@ -698,11 +687,11 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                   Expanded(
                                                     child: Text(
                                                       field['label'],
-                                                      style: const TextStyle(
+                                                      style: TextStyle(
                                                         fontWeight: FontWeight.w600,
                                                         fontSize: 16,
                                                         letterSpacing: -0.2,
-                                                        color: Colors.black87,
+                                                        color: Theme.of(context).colorScheme.onSurface,
                                                       ),
                                                       maxLines: 2,
                                                       overflow: TextOverflow.ellipsis,
@@ -860,15 +849,15 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.surface,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
+                      color: Colors.black.withOpacity(Theme.of(context).brightness == Brightness.dark ? 0.3 : 0.05),
                       blurRadius: 10,
                       offset: const Offset(0, -5),
                     ),
                   ],
-                  border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.1))),
+                  border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.15))),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1011,7 +1000,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: Container(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1028,7 +1017,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                   ),
                   border: Border(
                     bottom: BorderSide(
-                      color: Colors.grey.withOpacity(0.15),
+                      color: Theme.of(context).colorScheme.outline.withOpacity(0.15),
                       width: 1,
                     ),
                   ),
@@ -1067,7 +1056,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w700,
-                          color: Colors.grey[900],
+                          color: Theme.of(context).colorScheme.onSurface,
                           letterSpacing: -0.3,
                         ),
                       ),
@@ -1089,7 +1078,6 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                           filled: true,
-                          fillColor: Colors.grey[50],
                         ),
                         style: const TextStyle(fontSize: 16),
                         autofocus: widget.existingField == null,
@@ -1097,23 +1085,22 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       const SizedBox(height: 20),
                       DropdownButtonFormField<String>(
                         value: selectedType,
-                        dropdownColor: Colors.grey[50],
                         items: [
                           DropdownMenuItem(
                             value: 'string',
-                            child: Text('String', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                            child: Text('String', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                           ),
                           DropdownMenuItem(
                             value: 'int',
-                            child: Text('Int', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                            child: Text('Int', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                           ),
                           DropdownMenuItem(
                             value: 'date',
-                            child: Text('Datum', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                            child: Text('Datum', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                           ),
                           DropdownMenuItem(
                             value: 'dropdown',
-                            child: Text('Dropdown', style: TextStyle(fontSize: 16, color: Colors.grey[900])),
+                            child: Text('Dropdown', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                           ),
                         ],
                         onChanged: (v) => setState(() => selectedType = v!),
@@ -1122,9 +1109,9 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                           filled: true,
-                          fillColor: Colors.grey[50],
+                          fillColor: null,
                         ),
-                        style: TextStyle(fontSize: 16, color: Colors.grey[900]),
+                        style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
                       ),
                       if (selectedType == 'dropdown') ...[
                         const SizedBox(height: 14),
@@ -1136,7 +1123,6 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                             filled: true,
-                            fillColor: Colors.grey[50],
                           ),
                           style: const TextStyle(fontSize: 16),
                           minLines: 1,
@@ -1147,9 +1133,9 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.grey[50],
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.grey.withOpacity(0.2), width: 1.5),
+                          border: Border.all(color: Theme.of(context).colorScheme.outline.withOpacity(0.25), width: 1.5),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1190,15 +1176,15 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
               Container(
                 padding: const EdgeInsets.fromLTRB(28, 20, 28, 28),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.surface,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
+                      color: Colors.black.withOpacity(Theme.of(context).brightness == Brightness.dark ? 0.3 : 0.05),
                       blurRadius: 10,
                       offset: const Offset(0, -5),
                     ),
                   ],
-                  border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.1))),
+                  border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.15))),
                 ),
                 child: Row(
                   children: [

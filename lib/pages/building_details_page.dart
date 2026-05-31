@@ -2346,7 +2346,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       elevation: 0,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.grey[50],
+          color: Theme.of(context).colorScheme.surface,
         ),
         child: SafeArea(
           child: Column(
@@ -2418,10 +2418,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.surface,
                   border: Border(
                     bottom: BorderSide(
-                      color: Colors.grey.withOpacity(0.1),
+                      color: Theme.of(context).colorScheme.outline.withOpacity(0.15),
                       width: 1,
                     ),
                   ),
@@ -2529,7 +2529,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? Theme.of(context).primaryColor.withOpacity(0.1)
-                                : Colors.white,
+                                : Theme.of(context).colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isSelected
@@ -2699,10 +2699,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.surface,
                   border: Border(
                     bottom: BorderSide(
-                      color: Colors.grey.withOpacity(0.1),
+                      color: Theme.of(context).colorScheme.outline.withOpacity(0.15),
                       width: 1,
                     ),
                   ),
@@ -2797,7 +2797,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           decoration: BoxDecoration(
                             color: isBldgSelected
                                 ? Colors.orange.withOpacity(0.1)
-                                : Colors.white,
+                                : Theme.of(context).colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isBldgSelected
@@ -2904,10 +2904,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 border: Border(
                   top: BorderSide(
-                    color: Colors.grey.withOpacity(0.1),
+                    color: Theme.of(context).colorScheme.outline.withOpacity(0.15),
                     width: 1,
                   ),
                 ),
