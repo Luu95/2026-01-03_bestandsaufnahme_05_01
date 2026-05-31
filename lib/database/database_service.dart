@@ -608,6 +608,7 @@ class DatabaseService {
     String? newParentId,
     String? newBuildingId,
     Disziplin? newDiscipline,
+    Map<String, dynamic>? paramsToUpdate,
     void Function(Map<String, dynamic> params)? patchParams,
   }) async {
     for (final anlageId in anlageIds) {
@@ -616,6 +617,9 @@ class DatabaseService {
       if (currentAnlage == null) continue;
 
       final params = Map<String, dynamic>.from(currentAnlage.params);
+      if (paramsToUpdate != null && paramsToUpdate.isNotEmpty) {
+        params.addAll(paramsToUpdate);
+      }
       patchParams?.call(params);
 
       // Erstelle aktualisierte Anlage
@@ -643,6 +647,7 @@ class DatabaseService {
           newParentId: anlageId, // Parent bleibt gleich (die verschobene Anlage)
           newBuildingId: newBuildingId,
           newDiscipline: newDiscipline,
+          paramsToUpdate: paramsToUpdate,
           patchParams: patchParams,
         );
       }

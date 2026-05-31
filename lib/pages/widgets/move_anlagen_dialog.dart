@@ -96,9 +96,13 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   Future<void> _loadData() async {
     final db = ref.read(databaseServiceProvider);
 
-    if (widget.projectId != null && widget.projectId!.isNotEmpty) {
-      await ref.read(csvSettingsProvider(widget.projectId!).notifier).load();
-      _csvSettings = ref.read(csvSettingsProvider(widget.projectId!));
+    var projectId = widget.projectId;
+    if (projectId == null || projectId.isEmpty) {
+      projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
+    }
+    if (projectId != null && projectId.isNotEmpty) {
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      _csvSettings = ref.read(csvSettingsProvider(projectId));
     }
 
     final disciplines = await db.getDisciplinesByBuildingId(widget.currentBuildingId);
@@ -211,6 +215,35 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     return ros;
   }
 
+  /// Tatsächlich gewähltes Revisionsfeld (Dropdown-Anzeige = gespeicherter Wert).
+  String? get _effectiveRevisionsfeld {
+    final list = _sortedRevisionsfelder;
+    if (list.isEmpty) return null;
+    final selected = _selectedRevisionsfeld;
+    if (selected != null && list.contains(selected)) return selected;
+    return list.first;
+  }
+
+  /// Tatsächlich gewähltes Revisionsobjekt (Dropdown-Anzeige = gespeicherter Wert).
+  String? get _effectiveRevisionsobjekt {
+    final list = _revisionsobjekteForSelectedFeld;
+    if (list.isEmpty) return null;
+    final selected = _selectedRevisionsobjekt?.trim();
+    if (selected != null && selected.isNotEmpty && list.contains(selected)) {
+      return selected;
+    }
+    return list.first;
+  }
+
+  void _syncHierarchySelectionFromDropdowns() {
+    if (!_hasHierarchyMove) return;
+    final rfKey = widget.revisionsfeldGroupingKey?.trim();
+    if (rfKey != null && rfKey.isNotEmpty) {
+      _selectedRevisionsfeld = _effectiveRevisionsfeld;
+    }
+    _selectedRevisionsobjekt = _effectiveRevisionsobjekt;
+  }
+
   Future<void> _loadPotentialParents() async {
     if (_selectedDiscipline == null) return;
 
@@ -284,11 +317,11 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
   bool get _canExecuteHierarchyMove {
     if (!_hasHierarchyMove) return true;
-    final ro = _selectedRevisionsobjekt?.trim() ?? '';
+    final ro = _effectiveRevisionsobjekt?.trim() ?? '';
     if (ro.isEmpty) return false;
     final rfKey = widget.revisionsfeldGroupingKey?.trim();
     if (rfKey != null && rfKey.isNotEmpty) {
-      final rf = _selectedRevisionsfeld?.trim() ?? '';
+      final rf = _effectiveRevisionsfeld?.trim() ?? '';
       if (rf.isEmpty) return false;
     }
     return true;
@@ -296,7 +329,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
   Disziplin _disciplineForMove() {
     var discipline = _selectedDiscipline!;
-    final ro = _selectedRevisionsobjekt?.trim();
+    final ro = _effectiveRevisionsobjekt?.trim();
     if (_hasHierarchyMove && ro != null && ro.isNotEmpty) {
       discipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
         discipline: discipline,
@@ -306,24 +339,42 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     return discipline;
   }
 
-  void Function(Map<String, dynamic> params)? _buildPatchParams() {
-    if (!_hasHierarchyMove) return null;
+  /// Param-Updates für Eingabefelder (Revisionsfeld / Revisionsobjekt / Aliase).
+  Map<String, dynamic>? _buildParamsToUpdate({String? targetParentId}) {
     final csv = _csvSettings;
-    final ro = _selectedRevisionsobjekt?.trim();
-    if (csv == null || ro == null || ro.isEmpty) return null;
+    if (csv == null) return null;
 
-    final rfKey = widget.revisionsfeldGroupingKey?.trim();
-    final rf = rfKey != null && rfKey.isNotEmpty
-        ? (_selectedRevisionsfeld?.trim() ?? '')
-        : null;
-
-    return (params) {
-      csv.writeHierarchyLocationToParams(
-        params,
+    if (_hasHierarchyMove) {
+      final ro = _effectiveRevisionsobjekt?.trim();
+      if (ro == null || ro.isEmpty) return null;
+      final rfKey = widget.revisionsfeldGroupingKey?.trim();
+      final rf = rfKey != null && rfKey.isNotEmpty
+          ? _effectiveRevisionsfeld?.trim()
+          : null;
+      return csv.buildHierarchyLocationParams(
         revisionsfeld: rf,
         revisionsobjekt: ro,
       );
-    };
+    }
+
+    // Bauteile mit parentId: Verortung vom Ziel-Parent übernehmen.
+    if (_areAllBauteile &&
+        targetParentId != null &&
+        targetParentId != 'root') {
+      try {
+        final parent =
+            _potentialParents.firstWhere((p) => p.id == targetParentId);
+        final ro = csv.revisionsobjektValueFromParams(parent.params)?.trim();
+        if (ro == null || ro.isEmpty) return null;
+        final rf = csv.revisionsfeldValueFromParams(parent.params);
+        return csv.buildHierarchyLocationParams(
+          revisionsfeld: rf,
+          revisionsobjekt: ro,
+        );
+      } catch (_) {}
+    }
+
+    return null;
   }
 
   Future<void> _executeMove() async {
@@ -347,8 +398,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     try {
       final db = ref.read(databaseServiceProvider);
-      final targetDiscipline = _disciplineForMove();
-      final patchParams = _buildPatchParams();
+      _syncHierarchySelectionFromDropdowns();
 
       String? targetParentId;
       if (!_areAllAnlagen && !_areAllBauteile) {
@@ -358,6 +408,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       } else {
         targetParentId = _selectedParentId;
       }
+
+      final targetDiscipline = _disciplineForMove();
+      final paramsToUpdate = _buildParamsToUpdate(targetParentId: targetParentId);
 
       if (_selectedDiscipline!.label != widget.currentDiscipline.label) {
         final isCompatible = _areSchemasCompatible(
@@ -405,7 +458,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
             newFloorId: null,
             newParentId: anlage.parentId,
             newDiscipline: targetDiscipline,
-            patchParams: patchParams,
+            paramsToUpdate: paramsToUpdate,
           );
         }
       } else {
@@ -414,7 +467,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
           newFloorId: null,
           newParentId: targetParentId,
           newDiscipline: targetDiscipline,
-          patchParams: patchParams,
+          paramsToUpdate: paramsToUpdate,
         );
       }
 
@@ -537,11 +590,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               const SizedBox(height: 16),
               if (showRevisionsfeldPicker) ...[
                 DropdownButtonFormField<String>(
-                  value: _sortedRevisionsfelder.contains(_selectedRevisionsfeld)
-                      ? _selectedRevisionsfeld
-                      : (_sortedRevisionsfelder.isNotEmpty
-                          ? _sortedRevisionsfelder.first
-                          : null),
+                  value: _effectiveRevisionsfeld,
                   decoration: InputDecoration(
                     labelText: 'Ziel-$_revisionsfeldLabel',
                     border: OutlineInputBorder(
@@ -567,11 +616,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 const SizedBox(height: 16),
               ],
               DropdownButtonFormField<String>(
-                value: revisionsobjekte.contains(_selectedRevisionsobjekt)
-                    ? _selectedRevisionsobjekt
-                    : (revisionsobjekte.isNotEmpty
-                        ? revisionsobjekte.first
-                        : null),
+                value: _effectiveRevisionsobjekt,
                 decoration: InputDecoration(
                   labelText: 'Ziel-$_revisionsobjektLabel',
                   border: OutlineInputBorder(

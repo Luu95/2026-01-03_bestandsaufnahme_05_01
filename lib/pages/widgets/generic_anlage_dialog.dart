@@ -303,10 +303,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     await _loadSettingsAndPrefill();
     final isNewFromRevisionsobjekt = widget.existingAnlage == null &&
         widget.initialRevisionsobjekt?.trim().isNotEmpty == true;
+    _establishLocationLocks();
     if (!isNewFromRevisionsobjekt) {
       _applyEffectiveSchemaFromParams();
+      if (widget.existingAnlage != null) {
+        _establishLocationLocks();
+      }
     }
-    _establishLocationLocks();
     _applyRevisionsobjektPrefill();
     if (widget.existingAnlage == null) {
       _finalizeSchemaForRevisionsobjekt();
@@ -342,66 +345,95 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         widget.existingAnlage != null;
     if (!hasFixedLocation) return;
 
-    final roValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+    final sourceParams = widget.existingAnlage?.params ?? widget.initialParams ?? _params;
+
+    String? roValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
         ? widget.initialRevisionsobjekt!.trim()
-        : (widget.existingAnlage != null && _revisionsobjektParamKey != null
-            ? csv.revisionsobjektValueFromParams(widget.existingAnlage!.params)
-            : null);
+        : csv.revisionsobjektValueFromParams(sourceParams);
 
-    if (_revisionsobjektParamKey != null &&
-        roValue != null &&
-        roValue.isNotEmpty) {
-      _lockedLocationParams[_revisionsobjektParamKey!] = roValue;
-      _setParamAndController(_revisionsobjektParamKey!, roValue);
+    String? rfValue;
+    if (_revisionsfeldParamKey != null && _revisionsfeldParamKey!.isNotEmpty) {
+      rfValue = widget.initialParams?[_revisionsfeldParamKey!]?.toString().trim();
+      rfValue ??= csv.revisionsfeldValueFromParams(sourceParams);
     }
-
-    String? rfKey = _revisionsfeldParamKey;
-    String? rf;
-    if (rfKey != null && rfKey.isNotEmpty && widget.initialParams != null) {
-      rf = widget.initialParams![rfKey]?.toString().trim();
-    }
-    rf ??= (rfKey != null && rfKey.isNotEmpty && widget.existingAnlage != null)
-        ? csv.revisionsfeldValueFromParams(widget.existingAnlage!.params)
-        : null;
-    if ((rf == null || rf.isEmpty) && widget.initialParams != null) {
+    if ((rfValue == null || rfValue.isEmpty) && widget.initialParams != null) {
       for (final entry in widget.initialParams!.entries) {
         if (entry.key.startsWith('__')) continue;
-        if (_revisionsobjektParamKey != null && entry.key == _revisionsobjektParamKey) {
-          continue;
-        }
         final v = entry.value?.toString().trim() ?? '';
         if (v.isNotEmpty && v != roValue) {
-          rfKey = entry.key;
-          rf = v;
+          _revisionsfeldParamKey = entry.key;
+          rfValue = v;
           break;
         }
       }
     }
-    if (rfKey != null &&
-        rfKey.isNotEmpty &&
-        rf != null &&
-        rf.isNotEmpty &&
-        rf != roValue) {
-      _revisionsfeldParamKey = rfKey;
-      _lockedLocationParams[rfKey] = rf;
-      _setParamAndController(rfKey, rf);
+
+    if (roValue == null || roValue.isEmpty) return;
+
+    csv.writeHierarchyLocationToParams(
+      _params,
+      revisionsfeld: rfValue,
+      revisionsobjekt: roValue,
+    );
+
+    for (final key in csv.allRevisionsobjektParamKeys()) {
+      _lockedLocationParams[key] = roValue;
+      _setParamAndController(key, roValue);
+    }
+
+    if (rfValue != null && rfValue.isNotEmpty) {
+      for (final key in csv.allRevisionsfeldParamKeys()) {
+        _lockedLocationParams[key] = rfValue;
+        _setParamAndController(key, rfValue);
+      }
+      final rfKeys = csv.allRevisionsfeldParamKeys();
+      if ((_revisionsfeldParamKey == null || _revisionsfeldParamKey!.isEmpty) &&
+          rfKeys.isNotEmpty) {
+        _revisionsfeldParamKey = rfKeys.first;
+      }
+    }
+
+    for (final field in _currentDiscipline.schema) {
+      final key = (field['key'] ?? '').toString();
+      final label = (field['label'] ?? '').toString();
+      if (key.isEmpty) continue;
+      if (_isSchemaItemField(key, label)) {
+        _lockedLocationParams[key] = roValue;
+        _setParamAndController(key, roValue);
+      } else if (rfValue != null &&
+          rfValue.isNotEmpty &&
+          _revisionsfeldParamKey != null &&
+          (key == _revisionsfeldParamKey ||
+              label.trim().toLowerCase() ==
+                  _revisionsfeldParamKey!.trim().toLowerCase())) {
+        _lockedLocationParams[key] = rfValue;
+        _setParamAndController(key, rfValue);
+      }
     }
   }
 
   bool _isLocationLocked(String key) => _lockedLocationParams.containsKey(key);
 
   void _applyLockedLocationParams() {
+    final csv = _csvSettings;
+    if (csv != null && _lockedLocationParams.isNotEmpty) {
+      final ro = (csv.revisionsobjektValueFromParams(_lockedLocationParams) ??
+              _lockedLocationParams.values.first)
+          .trim();
+      final rf = csv.revisionsfeldValueFromParams(_lockedLocationParams);
+      if (ro.isNotEmpty) {
+        csv.writeHierarchyLocationToParams(
+          _params,
+          revisionsfeld: rf,
+          revisionsobjekt: ro,
+        );
+      }
+    }
     for (final entry in _lockedLocationParams.entries) {
       _params[entry.key] = entry.value;
       if (_controllers.containsKey(entry.key)) {
         _controllers[entry.key]!.text = entry.value;
       }
-    }
-    final ro = _revisionsobjektParamKey != null
-        ? _lockedLocationParams[_revisionsobjektParamKey!]
-        : null;
-    if (ro != null && ro.isNotEmpty) {
-      _csvSettings?.writeSchemaItemToParams(_params, ro);
     }
   }
 
@@ -1312,6 +1344,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
         _controllers[key]!.addListener(_updateValidationStatus);
+      } else if (_isLocationLocked(key)) {
+        final locked = _lockedLocationParams[key] ?? _params[key]?.toString() ?? '';
+        if (_controllers[key]!.text != locked) {
+          _controllers[key]!.text = locked;
+        }
       }
       final controller = _controllers[key]!;
       final isEmpty = controller.text.trim().isEmpty;

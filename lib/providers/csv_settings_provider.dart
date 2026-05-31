@@ -385,7 +385,34 @@ class CsvSettings {
     );
   }
 
+  /// Alle Param-Keys, unter denen Revisionsobjekt-Werte gespeichert sein können.
+  List<String> allRevisionsobjektParamKeys() {
+    final keys = <String>{...legacySchemaItemParamKeys};
+    for (final k in <String?>[
+      resolveRevisionsobjektParamKey(),
+      resolveRevisionsobjektGroupingParamKey(),
+      resolveSchemaItemParamKey(),
+      resolveAnlageGroupingParamKey(),
+    ]) {
+      final t = k?.trim() ?? '';
+      if (t.isNotEmpty) keys.add(t);
+    }
+    return keys.toList();
+  }
+
+  /// Alle Param-Keys für Revisionsfeld (nur wenn nicht schon Gewerk-Tab).
+  List<String> allRevisionsfeldParamKeys() {
+    final keys = <String>{};
+    final listKey = resolveRevisionsfeldListGroupingParamKey();
+    if (listKey != null && listKey.trim().isNotEmpty) {
+      keys.add(listKey.trim());
+    }
+    return keys.toList();
+  }
+
   /// Schreibt Listen-Hierarchie Ebene 1+2 in die Parameter eines Blatt-Datensatzes.
+  /// Aktualisiert alle bekannten Alias-Keys (CSV-Header + Legacy), damit Eingabefelder
+  /// und Listen-Gruppierung dieselben Werte zeigen.
   void writeHierarchyLocationToParams(
     Map<String, dynamic> params, {
     String? revisionsfeld,
@@ -394,17 +421,30 @@ class CsvSettings {
     final ro = revisionsobjekt.trim();
     if (ro.isEmpty) return;
 
-    final rfKey = resolveRevisionsfeldListGroupingParamKey();
-    final rf = revisionsfeld?.trim() ?? '';
-    if (rfKey != null && rfKey.isNotEmpty && rf.isNotEmpty) {
-      params[rfKey] = rf;
+    for (final key in allRevisionsobjektParamKeys()) {
+      params[key] = ro;
     }
 
-    final roKey = resolveRevisionsobjektParamKey();
-    if (roKey != null && roKey.isNotEmpty) {
-      params[roKey] = ro;
+    final rf = revisionsfeld?.trim() ?? '';
+    if (rf.isNotEmpty) {
+      for (final key in allRevisionsfeldParamKeys()) {
+        params[key] = rf;
+      }
     }
-    writeSchemaItemToParams(params, ro);
+  }
+
+  /// Neue Param-Werte für Verortung (z. B. beim Verschieben in andere Liste).
+  Map<String, dynamic> buildHierarchyLocationParams({
+    String? revisionsfeld,
+    required String revisionsobjekt,
+  }) {
+    final params = <String, dynamic>{};
+    writeHierarchyLocationToParams(
+      params,
+      revisionsfeld: revisionsfeld,
+      revisionsobjekt: revisionsobjekt,
+    );
+    return params;
   }
 
   /// Param-Key Revisionsobjekt (Listen-Ebene 2 unter Revisionsfeld).
