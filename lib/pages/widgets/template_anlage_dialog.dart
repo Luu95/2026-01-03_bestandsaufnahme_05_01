@@ -24,6 +24,7 @@ class TemplateAnlageDialog extends StatefulWidget {
   final TemplateFormProceedCallback? onProceedToForm;
   final String gewerkLevelLabel;
   final String anlageLevelLabel;
+  final String? schemaItemParamKey;
 
   const TemplateAnlageDialog({
     Key? key,
@@ -37,6 +38,7 @@ class TemplateAnlageDialog extends StatefulWidget {
     this.onProceedToForm,
     this.gewerkLevelLabel = 'Gewerk',
     this.anlageLevelLabel = 'Anlage',
+    this.schemaItemParamKey,
   }) : super(key: key);
 
   @override
@@ -190,14 +192,11 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
       revisionsobjekt: parentTemplate.anlagentyp.trim(),
     );
 
-    final parentParams = TemplateService.buildEmptyParamsFromTemplate(
-      parentTemplate.parameter,
+    final parentParams = TemplateService.buildInitialParamsForSchemaItem(
+      parentTemplate: parentTemplate,
+      selectedAnlagentyp: parentTemplate.anlagentyp.trim(),
+      schemaItemParamKey: widget.schemaItemParamKey,
     );
-    final anlagentyp = parentTemplate.anlagentyp.trim();
-    if (anlagentyp.isNotEmpty) {
-      parentParams['Anlagentyp'] = anlagentyp;
-      parentParams['Revisionsobjekt'] = anlagentyp;
-    }
 
     final parent = Anlage(
       id: parentId,
@@ -263,7 +262,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Anlage aus Vorlage',
+                      '${widget.anlageLevelLabel} aus Vorlage',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,

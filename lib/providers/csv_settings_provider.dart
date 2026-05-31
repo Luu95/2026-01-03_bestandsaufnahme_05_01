@@ -211,13 +211,22 @@ class CsvSettings {
 
   /// Anzeige-Label der Schema-Unterebene (CSV-Mapping Ebene 2 oder 3).
   String resolveSchemaItemLevelLabel() {
-    if (level2.enabled && enabledLevelsOrdered.length >= 2) return labelAnlage;
-    if (level3.enabled) return labelBauteil;
+    if (level2.enabled && enabledLevelsOrdered.length >= 2) {
+      return _headerLabelAt(level2.nameColumn) ?? labelAnlage;
+    }
+    if (level3.enabled) {
+      return _headerLabelAt(level3.nameColumn) ?? labelBauteil;
+    }
     return labelAnlage;
   }
 
   /// Anzeige-Label der untersten aktiven Ebene (= ein Datensatz in der App).
   String resolveLeafLevelLabel() {
+    final leaf = leafLevel;
+    if (leaf != null) {
+      final fromHeader = _headerLabelAt(leaf.nameColumn);
+      if (fromHeader != null && fromHeader.isNotEmpty) return fromHeader;
+    }
     final n = enabledLevelsOrdered.length;
     if (n <= 1) return labelGewerk;
     if (n == 2) return labelAnlage;
@@ -266,6 +275,152 @@ class CsvSettings {
   }
 
   String get schemaDisciplineLevelLabel => labelGewerk;
+
+  /// Legacy-Param-Keys – nur zum Lesen älterer importierter Daten.
+  static const List<String> legacySchemaItemParamKeys = [
+    'Revisionsobjekt',
+    'Anlagentyp',
+    'Anlage',
+  ];
+
+  static const List<String> legacyEtageParamKeys = ['Etage'];
+
+  static const List<String> legacyAnlageBauteilParamKeys = [
+    'Anlage/Bauteil',
+    'Anlage/Bautel',
+  ];
+
+  /// Param-Key der optionalen A/B-Spalte (Legacy-Hierarchie).
+  String? resolveAnlageBauteilParamKey() {
+    if (anlageBauteilSpalte == null) return null;
+    return _headerLabelAt(anlageBauteilSpalte) ??
+        legacyAnlageBauteilParamKeys.first;
+  }
+
+  /// Liest einen Param-Wert: primärer Key, dann Legacy-Aliase.
+  String? readParamValue(
+    Map<String, dynamic> params,
+    String primaryKey, {
+    List<String> legacyKeys = const [],
+  }) {
+    final primary = params[primaryKey]?.toString().trim();
+    if (primary != null && primary.isNotEmpty) return primary;
+    for (final key in legacyKeys) {
+      final value = params[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  String? schemaItemValueFromParams(Map<String, dynamic> params) {
+    final key = resolveSchemaItemParamKey();
+    if (key != null && key.trim().isNotEmpty) {
+      final value = readParamValue(
+        params,
+        key,
+        legacyKeys: legacySchemaItemParamKeys,
+      );
+      if (value != null) return value;
+    }
+    for (final legacyKey in legacySchemaItemParamKeys) {
+      final value = params[legacyKey]?.toString().trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  String? etageValueFromParams(Map<String, dynamic> params) {
+    final key = resolveEtageGroupingParamKey();
+    final value = readParamValue(
+      params,
+      key,
+      legacyKeys: [...legacyEtageParamKeys, '__etageName'],
+    );
+    return value;
+  }
+
+  String? anlageBauteilValueFromParams(Map<String, dynamic> params) {
+    final key = resolveAnlageBauteilParamKey();
+    if (key == null || key.isEmpty) return null;
+    return readParamValue(
+      params,
+      key,
+      legacyKeys: legacyAnlageBauteilParamKeys,
+    );
+  }
+
+  void writeEtageToParams(Map<String, dynamic> params, String value) {
+    if (value.trim().isEmpty) return;
+    params[resolveEtageGroupingParamKey()] = value;
+    params['__etageName'] = value;
+  }
+
+  void writeAnlageBauteilToParams(Map<String, dynamic> params, String value) {
+    final key = resolveAnlageBauteilParamKey();
+    if (key == null || key.isEmpty || value.trim().isEmpty) return;
+    params[key] = value;
+  }
+
+  void writeSchemaItemToParams(Map<String, dynamic> params, String value) {
+    final key = resolveSchemaItemParamKey();
+    if (key == null || key.trim().isEmpty || value.trim().isEmpty) return;
+    params[key.trim()] = value.trim();
+  }
+
+  /// Sammel-Disziplin, wenn Gewerk-Gruppierung deaktiviert ist.
+  String resolveDefaultDisciplineLabel() =>
+      useDisciplineGrouping ? labelGewerk : 'Allgemein';
+
+  /// Anzeige-Label für mehrere Blatt-Datensätze (einfache Pluralbildung).
+  String pluralLeafLevelLabel(int count) {
+    final label = resolveLeafLevelLabel();
+    if (count == 1) return label;
+    if (label.endsWith('e')) return '${label}n';
+    return '${label}en';
+  }
+
+  /// Plural für Ebene-1-Label (z. B. Gewerk → Gewerke).
+  String pluralDisciplineLabel(int count) {
+    final label = labelGewerk;
+    if (count == 1) return label;
+    if (label.endsWith('e')) return '${label}n';
+    return '${label}e';
+  }
+
+  /// Reservierte Param-Keys, die nicht als Extra-Felder im Dialog erscheinen.
+  Set<String> reservedParamKeysForDialog() {
+    final keys = <String>{
+      'lfdNummer',
+      'photoPaths',
+      ...legacyAnlageBauteilParamKeys,
+    };
+    keys.add(resolveEtageGroupingParamKey());
+    final abKey = resolveAnlageBauteilParamKey();
+    if (abKey != null && abKey.isNotEmpty) keys.add(abKey);
+    final schemaKey = resolveSchemaItemParamKey();
+    if (schemaKey != null && schemaKey.isNotEmpty) keys.add(schemaKey);
+    return keys;
+  }
+
+  /// Erstes Token aus anlageKuerzel (z. B. „A“ aus „A,Anlage“).
+  String defaultAnlageKuerzelToken() {
+    final tokens = anlageKuerzel
+        .split(',')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    return tokens.isNotEmpty ? tokens.first : 'A';
+  }
+
+  /// Erstes Token aus bauteilKuerzel (z. B. „B“ aus „B,Bauteil“).
+  String defaultBauteilKuerzelToken() {
+    final tokens = bauteilKuerzel
+        .split(',')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    return tokens.isNotEmpty ? tokens.first : 'B';
+  }
 
   // --- Legacy-Getter ---
   int get gewerkSpalte => level1.nameColumn;
@@ -472,6 +627,26 @@ class CsvSettings {
   static List<String> _parseStringList(dynamic raw) {
     if (raw is! List) return [];
     return raw.map((e) => e.toString()).toList();
+  }
+
+  /// Lädt projektbezogene CSV-Einstellungen (Cache → SharedPreferences → Defaults).
+  static Future<CsvSettings> loadForProject(String projectId) async {
+    final cached = CsvSettingsCache.get(projectId);
+    if (cached != null) return cached;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('csv_settings_$projectId');
+      if (raw != null && raw.trim().isNotEmpty) {
+        final settings = CsvSettings.fromJson(
+          Map<String, dynamic>.from(json.decode(raw) as Map),
+        );
+        CsvSettingsCache.set(projectId, settings);
+        return settings;
+      }
+    } catch (_) {}
+    final defaults = CsvSettings.defaults();
+    CsvSettingsCache.set(projectId, defaults);
+    return defaults;
   }
 }
 

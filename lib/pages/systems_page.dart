@@ -98,6 +98,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   List<Anlage> _alleAnlagen = [];  // Liste aller Anlagen im aktuellen Gebäude und auf dem aktuellen Floor
   List<Anlage> _parentAnlagen = [];
   Map<String, List<Anlage>> _childrenByParentId = {};
+  CsvSettings? _cachedCsvSettings;
   final Map<String, bool> _validationByAnlageId = {};
   bool _isSelectionMode = false;    // Gibt an, ob sich die Seite im Auswahlmodus befindet
   bool _isLoading = false;           // Gibt an, ob die Anlagen gerade geladen werden
@@ -323,6 +324,13 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     try {
       final buildingId = widget.building.id;
       final label = widget.discipline.label;
+
+      final projectId = await dbService.getProjectIdByBuildingId(buildingId);
+      CsvSettings? csvSettings;
+      if (projectId != null) {
+        await ref.read(csvSettingsProvider(projectId).notifier).load();
+        csvSettings = ref.read(csvSettingsProvider(projectId));
+      }
       
       // Lade alle Anlagen für dieses Gebäude und diese Disziplin
       final loaded = await dbService.getAnlagenByBuildingIdAndDiscipline(buildingId, label);
@@ -341,6 +349,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
       setState(() {
         _alleAnlagen = filtered;
+        _cachedCsvSettings = csvSettings;
         _rebuildAnlagenIndexes();
         _isLoading = false;
         _hasLoadedOnce = true;
@@ -572,11 +581,22 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     // Hier nehmen wir die Anlage, die du gedrückt hältst (Eltern-Objekt)
     final firstParent = selectedParents.first;
 
-    // WICHTIG: Wir holen den Namen des Revisionsobjekts.
-    // Falls das Feld leer ist (historische Daten!), nehmen wir den Namen der Anlage selbst (z.B. "tragbare Handfeuerlöscher")
-    final roValue = firstParent.params['Revisionsobjekt']?.toString() ??
-        firstParent.params['Anlagentyp']?.toString() ??
-        firstParent.name; // Fallback auf den Anzeigenamen
+    final dbService = ref.read(databaseServiceProvider);
+    final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
+    CsvSettings csvSettings = CsvSettings.defaults();
+    if (projectId != null) {
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      csvSettings = ref.read(csvSettingsProvider(projectId));
+    }
+
+    final schemaItemKey = csvSettings.resolveSchemaItemParamKey();
+    final roValue = csvSettings.schemaItemValueFromParams(firstParent.params) ??
+        firstParent.name;
+
+    final initialParams = <String, dynamic>{};
+    if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
+      initialParams[schemaItemKey] = roValue;
+    }
 
     showModalBottomSheet<void>(
       context: context,
@@ -594,9 +614,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         index: null,
         // Explizit, welches Revisionsobjekt-Schema geladen werden soll
         initialRevisionsobjekt: roValue,
-        initialParams: {
-          'Revisionsobjekt': roValue,
-        },
+        initialParams: initialParams,
         onSave: (createdBauteil, _) async {
           final copies = <Anlage>[];
 
@@ -785,6 +803,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         floorId: widget.floor.id,
         gewerkLevelLabel: csvSettings.schemaDisciplineLevelLabel,
         anlageLevelLabel: csvSettings.resolveSchemaItemLevelLabel(),
+        schemaItemParamKey: csvSettings.resolveSchemaItemParamKey(),
         onProceedToForm: ({
           required selectedGewerk,
           required selectedAnlagentyp,
@@ -869,15 +888,23 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         ? Map<String, dynamic>.from(marker.params!)
         : <String, dynamic>{};
 
-    // Etage automatisch in Params setzen (damit sie im Anlagen-Dialog/CSV sichtbar ist)
     final floorLabel = widget.floor.name.trim().isNotEmpty
         ? widget.floor.name.trim()
         : (widget.floor.pdfName?.trim().isNotEmpty == true
             ? widget.floor.pdfName!.trim()
             : '');
     if (floorLabel.isNotEmpty) {
-      final existing = params['Etage']?.toString().trim() ?? '';
-      if (existing.isEmpty) {
+      final dbService = ref.read(databaseServiceProvider);
+      final projectId =
+          await dbService.getProjectIdByBuildingId(widget.building.id);
+      if (projectId != null) {
+        await ref.read(csvSettingsProvider(projectId).notifier).load();
+        final csvSettings = ref.read(csvSettingsProvider(projectId));
+        final existing = csvSettings.etageValueFromParams(params) ?? '';
+        if (existing.isEmpty) {
+          csvSettings.writeEtageToParams(params, floorLabel);
+        }
+      } else if ((params['Etage']?.toString().trim() ?? '').isEmpty) {
         params['Etage'] = floorLabel;
       }
     }
@@ -957,6 +984,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     );
   }
 
+  String? _resolveTypeHint(Anlage anlage) {
+    final settings = _cachedCsvSettings;
+    if (settings == null) return null;
+    return settings.anlageBauteilValueFromParams(anlage.params);
+  }
+
   Widget _buildHierarchicalAnlageItem(
     Anlage a,
     Disziplin disc, {
@@ -982,6 +1015,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     return AnlageHierarchicalItem(
       anlage: a,
       discipline: disc,
+      typeHint: _resolveTypeHint(a),
       isChild: isChild,
       hasChildren: hasChildren,
       isExpanded: isExpanded,

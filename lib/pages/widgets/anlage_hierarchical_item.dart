@@ -21,6 +21,7 @@ class AnlageHierarchicalItem extends StatelessWidget {
 
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
+  final String? typeHint;
 
   const AnlageHierarchicalItem({
     super.key,
@@ -30,8 +31,9 @@ class AnlageHierarchicalItem extends StatelessWidget {
     required this.showSelectionCircles,
     required this.isValidated,
     required this.isLastOpened,
-    required this.onTap,
+    required     this.onTap,
     this.onLongPress,
+    this.typeHint,
     this.scrollKey,
     this.isChild = false,
     this.hasChildren = false,
@@ -41,7 +43,7 @@ class AnlageHierarchicalItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final anlageBautel = anlage.params['Anlage/Bautel']?.toString() ?? '';
+    final typeDisplay = typeHint?.trim() ?? '';
 
     final baseTrailing = showSelectionCircles
         ? (isSelected
@@ -428,8 +430,8 @@ class AnlageHierarchicalItem extends StatelessWidget {
                                         e.key.toLowerCase() == 'hersteller')
                                     .toList();
                                 return herstellerEntries.isEmpty
-                                    ? (anlageBautel.isNotEmpty
-                                        ? 'Typ: $anlageBautel'
+                                    ? (typeDisplay.isNotEmpty
+                                        ? 'Typ: $typeDisplay'
                                         : '')
                                     : herstellerEntries.first.value.toString();
                               }(),

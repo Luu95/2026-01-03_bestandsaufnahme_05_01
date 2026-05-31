@@ -22,6 +22,7 @@ import '../models/building.dart';
 import '../models/floor_plan.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../pages/widgets/marker_form_dialog.dart';
+import '../providers/csv_settings_provider.dart';
 
 class FloorPlanFullScreen extends StatefulWidget {
   final Building building;
@@ -50,6 +51,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
 
   List<Anlage> _allAnlagen = [];
   List<Disziplin> _disziplinen = [];
+  CsvSettings? _csvSettings;
 
   bool _isLoading = true;
   String? _currentPdfName;
@@ -73,8 +75,39 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
   }
 
   Future<void> _init() async {
+    await _loadCsvSettings();
     await _loadDisziplinen();
     await _loadFloorPlanData();
+  }
+
+  Future<void> _loadCsvSettings() async {
+    final projectId =
+        await widget.dbService.getProjectIdByBuildingId(widget.building.id);
+    if (projectId == null || projectId.isEmpty) return;
+    final settings = await CsvSettings.loadForProject(projectId);
+    if (!mounted) return;
+    setState(() => _csvSettings = settings);
+  }
+
+  void _applyFloorLabelToParams(Map<String, dynamic> params) {
+    final floorLabel = widget.floor.name.trim().isNotEmpty
+        ? widget.floor.name.trim()
+        : (_currentPdfName?.trim().isNotEmpty == true
+            ? _currentPdfName!.trim()
+            : '');
+    if (floorLabel.isEmpty) return;
+    final settings = _csvSettings;
+    if (settings != null) {
+      final existing = settings.etageValueFromParams(params) ?? '';
+      if (existing.isEmpty) {
+        settings.writeEtageToParams(params, floorLabel);
+      }
+      return;
+    }
+    final existing = params['Etage']?.toString().trim() ?? '';
+    if (existing.isEmpty) {
+      params['Etage'] = floorLabel;
+    }
   }
 
   Future<void> _loadDisziplinen() async {
@@ -742,17 +775,15 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                     ? _currentPdfName!.trim()
                     : '');
             if (floorLabel.isNotEmpty) {
-              final existing = params['Etage']?.toString().trim() ?? '';
-              if (existing.isEmpty) {
-                params['Etage'] = floorLabel;
-              }
+              _applyFloorLabelToParams(params);
             }
 
+            final leafLabel = _csvSettings?.resolveLeafLevelLabel() ?? 'Eintrag';
             final newAnlage = Anlage(
               id: newId,
               name: newMarker.title.isNotEmpty
                   ? newMarker.title
-                  : 'Anlage $newId',
+                  : '$leafLabel $newId',
               params: params,
               floorId: widget.floor.id,
               buildingId: widget.building.id,
@@ -812,10 +843,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             ? _currentPdfName!.trim()
             : '');
     if (floorLabel.isNotEmpty) {
-      final existing = updatedAnlage.params['Etage']?.toString().trim() ?? '';
-      if (existing.isEmpty) {
-        updatedAnlage.params['Etage'] = floorLabel;
-      }
+      _applyFloorLabelToParams(updatedAnlage.params);
     }
 
     // Speichere in der Datenbank
@@ -881,10 +909,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                       ? _currentPdfName!.trim()
                       : '');
               if (floorLabel.isNotEmpty) {
-                final existing = params['Etage']?.toString().trim() ?? '';
-                if (existing.isEmpty) {
-                  params['Etage'] = floorLabel;
-                }
+                _applyFloorLabelToParams(params);
               }
               a.params = params;
               final oldMarkerInfo = a.markerInfo != null

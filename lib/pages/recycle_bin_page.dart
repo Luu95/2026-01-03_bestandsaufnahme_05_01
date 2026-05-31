@@ -246,13 +246,13 @@ class _RecycleBinPageState extends ConsumerState<RecycleBinPage> {
                           )),
                     ],
                     if (_deletedAnlagen.isNotEmpty) ...[
-                      _buildSectionTitle('Anlagen', _deletedAnlagen.length),
+                      _buildSectionTitle('Datensätze', _deletedAnlagen.length),
                       ..._deletedAnlagen.map((a) => _buildItemTile(
                             title: a.name,
                             subtitle: a.discipline.label,
                             onRestore: () => _restoreAnlage(a),
                             onPermanentDelete: () => _permanentlyDelete(
-                              itemType: 'Anlage',
+                              itemType: 'Datensatz',
                               itemName: a.name,
                               onDelete: () => ref
                                   .read(databaseServiceProvider)

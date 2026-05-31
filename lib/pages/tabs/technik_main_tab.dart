@@ -47,6 +47,12 @@ class TechnikMainTab extends StatefulWidget {
   /// Param-Key für Anzeigenamen einzelner Anlagen.
   final String? systemsDisplayNameParamKey;
 
+  /// Anzeige-Labels aus CSV-Einstellungen (Gewerk / Blatt-Ebene).
+  final String labelGewerk;
+  final String labelLeafLevel;
+  final String labelGewerkPlural;
+  final String labelLeafLevelPlural;
+
   const TechnikMainTab({
     Key? key,
     required this.dbService,
@@ -71,6 +77,10 @@ class TechnikMainTab extends StatefulWidget {
     this.systemsGroupingKey,
     this.systemsSubGroupingKey,
     this.systemsDisplayNameParamKey,
+    this.labelGewerk = 'Gewerk',
+    this.labelLeafLevel = 'Anlage',
+    this.labelGewerkPlural = 'Gewerke',
+    this.labelLeafLevelPlural = 'Anlagen',
   }) : super(key: key);
 
   @override
@@ -144,19 +154,19 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
               Icon(Icons.inbox, size: 64, color: Colors.grey),
               const SizedBox(height: 16),
               Text(
-                'Keine Gewerke vorhanden',
+                'Keine ${widget.labelGewerkPlural} vorhanden',
                 style: TextStyle(fontSize: 18, color: Colors.grey[600]),
               ),
               const SizedBox(height: 8),
               Text(
-                'Erstelle ein neues Gewerk oder\nimportiere Anlagen über CSV',
+                'Erstelle ein neues ${widget.labelGewerk} oder\nimportiere ${widget.labelLeafLevelPlural} über CSV',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 14, color: Colors.grey[500]),
               ),
               const SizedBox(height: 32),
               ElevatedButton.icon(
                 icon: Icon(Icons.add_circle_outline),
-                label: Text('Gewerk erstellen'),
+                label: Text('${widget.labelGewerk} erstellen'),
                 style: ElevatedButton.styleFrom(
                   padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),

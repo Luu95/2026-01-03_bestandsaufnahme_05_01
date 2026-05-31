@@ -655,8 +655,6 @@ class TemplateService {
     if (key != null && key.isNotEmpty) {
       params[key] = type;
     }
-    params['Anlagentyp'] = type;
-    params['Revisionsobjekt'] = type;
     return params;
   }
 

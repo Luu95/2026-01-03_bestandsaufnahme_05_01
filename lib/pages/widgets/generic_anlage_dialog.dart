@@ -132,8 +132,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   bool _isDataReady = false;
   late Disziplin _currentDiscipline;
   String? _schemaItemParamKey;
-  String _leafLevelLabel = 'Anlage';
-  String _childLevelLabel = 'Bauteil';
+  CsvSettings? _csvSettings;
+  String _leafLevelLabel = '';
+  String _childLevelLabel = '';
   String? _dialogSubtitle;
   String? _dialogContextLine;
   
@@ -331,17 +332,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final keys = <String>{
       if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty)
         _schemaItemParamKey!.trim(),
-      'Revisionsobjekt',
-      'Anlagentyp',
     };
 
     for (final field in _currentDiscipline.schema) {
       final key = (field['key'] ?? '').toString();
-      final label = (field['label'] ?? '').toString().toLowerCase();
+      final label = (field['label'] ?? '').toString();
       if (key.isEmpty) continue;
-      if (label.contains('revisionsobjekt') ||
-          label.contains('anlagentyp') ||
-          label == ro.toLowerCase()) {
+      if (_isSchemaItemField(key, label)) {
         keys.add(key);
       }
     }
@@ -350,15 +347,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       _setParamAndController(key, ro);
     }
 
-    // Neue Anlage (Ebene 3), kein Bauteil
-    if (widget.parentId == null) {
-      for (final field in _currentDiscipline.schema) {
-        final key = (field['key'] ?? '').toString();
-        final label = (field['label'] ?? '').toString().toLowerCase();
-        if (key.isEmpty) continue;
-        if (label.contains('bauteil') || label == 'a/b') {
-          _setParamAndController(key, 'A');
-        }
+    // Neue Blatt-Zeile (kein Kind): optional A/B-Kennung setzen
+    if (widget.parentId == null && _csvSettings?.anlageBauteilSpalte != null) {
+      final abKey = _csvSettings!.resolveAnlageBauteilParamKey();
+      if (abKey != null && abKey.isNotEmpty) {
+        _setParamAndController(
+          abKey,
+          _csvSettings!.defaultAnlageKuerzelToken(),
+        );
       }
     }
   }
@@ -368,15 +364,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final v = _params[_schemaItemParamKey]?.toString().trim();
       if (v != null && v.isNotEmpty) return v;
     }
+    if (_csvSettings != null) {
+      final fromSettings = _csvSettings!.schemaItemValueFromParams(_params);
+      if (fromSettings != null && fromSettings.isNotEmpty) return fromSettings;
+    }
     for (final ro in _currentDiscipline.revisionsobjektNames) {
       for (final entry in _params.entries) {
         if (entry.value?.toString().trim() == ro) return ro;
       }
-    }
-    const candidateKeys = ['Revisionsobjekt', 'Anlagentyp', 'Anlage'];
-    for (final key in candidateKeys) {
-      final value = _params[key]?.toString().trim();
-      if (value != null && value.isNotEmpty) return value;
     }
     return null;
   }
@@ -451,6 +446,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
       await ref.read(csvSettingsProvider(projectId).notifier).load();
       final csvSettings = ref.read(csvSettingsProvider(projectId));
+      _csvSettings = csvSettings;
       _childLevelLabel = csvSettings.labelBauteil;
       final roInit = widget.initialRevisionsobjekt?.trim();
       if (roInit != null && roInit.isNotEmpty) {
@@ -468,6 +464,33 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           : csvSettings.resolveSchemaItemParamKey();
       if (mounted) setState(() {});
 
+      // Vorbefüllung nur bei Neuanlage ohne festes Revisionsobjekt
+      if (widget.existingAnlage == null &&
+          (widget.initialRevisionsobjekt == null ||
+              widget.initialRevisionsobjekt!.trim().isEmpty)) {
+        final gewerkKey = csvSettings.resolveGewerkGroupingParamKey();
+        final abKey = csvSettings.resolveAnlageBauteilParamKey();
+        for (var field in _currentDiscipline.schema) {
+          final fieldKey = (field['key'] ?? '').toString();
+          if (fieldKey.isEmpty) continue;
+
+          if (fieldKey == gewerkKey ||
+              fieldKey.toLowerCase() == gewerkKey.toLowerCase()) {
+            _setParamAndController(fieldKey, _currentDiscipline.label);
+          }
+
+          if (abKey != null &&
+              abKey.isNotEmpty &&
+              (fieldKey == abKey ||
+                  fieldKey.toLowerCase() == abKey.toLowerCase())) {
+            final value = widget.parentId != null
+                ? csvSettings.defaultBauteilKuerzelToken()
+                : csvSettings.defaultAnlageKuerzelToken();
+            _setParamAndController(fieldKey, value);
+          }
+        }
+      }
+
       final prefs = await SharedPreferences.getInstance();
       final key = 'csv_settings_$projectId';
       final settingsJson = prefs.getString(key);
@@ -477,29 +500,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         setState(() {
           _isNameEditable = settings['nameBearbeitbar'] as bool? ?? true;
         });
-
-        // Vorbefüllung nur bei Neuanlage ohne festes Revisionsobjekt
-        if (widget.existingAnlage == null &&
-            (widget.initialRevisionsobjekt == null ||
-                widget.initialRevisionsobjekt!.trim().isEmpty)) {
-          // Suche Felder im Schema, die diesen Spalten entsprechen
-          for (var field in _currentDiscipline.schema) {
-            final fieldKey = field['key'];
-            if (fieldKey == null) continue;
-
-            // Vorbefüllung "Gewerk"
-            if (field['label']?.toString().toLowerCase().contains('gewerk') == true) {
-              _setParamAndController(fieldKey.toString(), _currentDiscipline.label);
-            }
-
-            // Vorbefüllung "Anlage/Bauteil" (nur A/B-Kennung, nicht Revisionsobjekt)
-            if (field['label']?.toString().toLowerCase().contains('bauteil') == true ||
-                field['label']?.toString().toLowerCase() == 'a/b') {
-              final value = widget.parentId != null ? 'B' : 'A';
-              _setParamAndController(fieldKey.toString(), value);
-            }
-          }
-        }
       }
     } catch (e) {
       debugPrint('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
@@ -1438,13 +1438,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     // Zusätzliche Felder: Params, die nicht im Schema sind (z. B. aus CSV-Attribut-Spaltenpaaren)
     final schemaKeys = schema.map((f) => (f['key'] as String?).toString()).where((k) => k.isNotEmpty).toSet();
-    const reservedKeys = {
-      'lfdNummer',
-      'Etage',
-      'Anlage/Bauteil',
-      'Anlage/Bautel',
-      'photoPaths',
-    };
+    final reservedKeys = _csvSettings?.reservedParamKeysForDialog() ??
+        const {'lfdNummer', 'photoPaths'};
     for (final key in _params.keys) {
       if (schemaKeys.contains(key)) continue;
       if (key.startsWith('__')) continue;
@@ -1572,16 +1567,20 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     final isEdit = widget.existingAnlage != null;
     final isChildCreate = !isEdit && widget.parentId != null;
+    final leafLabel =
+        _leafLevelLabel.isNotEmpty ? _leafLevelLabel : 'Eintrag';
+    final childLabel =
+        _childLevelLabel.isNotEmpty ? _childLevelLabel : leafLabel;
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
     final dialogTitle = isEdit
-        ? '$_leafLevelLabel bearbeiten'
+        ? '$leafLabel bearbeiten'
         : (isChildCreate
-            ? 'Neues $_childLevelLabel erfassen'
-            : 'Neues $_leafLevelLabel erfassen');
+            ? 'Neues $childLabel erfassen'
+            : 'Neues $leafLabel erfassen');
     final nameLabel = (widget.parentId != null ||
             widget.existingAnlage?.parentId != null)
-        ? 'Name ($_childLevelLabel)'
-        : 'Name ($_leafLevelLabel)';
+        ? 'Name ($childLabel)'
+        : 'Name ($leafLabel)';
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),

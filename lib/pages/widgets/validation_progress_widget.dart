@@ -7,11 +7,15 @@ import '../../services/anlage_validation_service.dart';
 class ValidationProgressWidget extends StatelessWidget {
   final ValidationProgress progress;
   final String? title;
+  final String leafLevelLabel;
+  final String leafLevelLabelPlural;
 
   const ValidationProgressWidget({
     Key? key,
     required this.progress,
     this.title,
+    this.leafLevelLabel = 'Anlage',
+    this.leafLevelLabelPlural = 'Anlagen',
   }) : super(key: key);
 
   @override
@@ -27,7 +31,7 @@ class ValidationProgressWidget extends StatelessWidget {
               Icon(Icons.info_outline, color: Colors.grey[600]),
               const SizedBox(width: 12),
               Text(
-                'Keine Anlagen vorhanden',
+                'Keine $leafLevelLabelPlural vorhanden',
                 style: TextStyle(color: Colors.grey[600], fontSize: 14),
               ),
             ],
@@ -50,19 +54,22 @@ class ValidationProgressWidget extends StatelessWidget {
     Color motivationColor;
 
     if (isComplete) {
-      motivationText = '🎉 Alle Anlagen validiert! Perfekt!';
+      motivationText = '🎉 Alle $leafLevelLabelPlural validiert! Perfekt!';
       motivationIcon = Icons.celebration;
       motivationColor = Colors.green;
     } else if (isAlmostComplete) {
-      motivationText = '💪 Fast geschafft! Noch ${progress.remaining} Anlage${progress.remaining > 1 ? 'n' : ''} offen';
+      motivationText =
+          '💪 Fast geschafft! Noch ${progress.remaining} offen';
       motivationIcon = Icons.trending_up;
       motivationColor = Colors.orange;
     } else if (progress.percentage >= 50) {
-      motivationText = '🔥 Gute Arbeit! Noch ${progress.remaining} Anlage${progress.remaining > 1 ? 'n' : ''} zu bearbeiten';
+      motivationText =
+          '🔥 Gute Arbeit! Noch ${progress.remaining} zu bearbeiten';
       motivationIcon = Icons.local_fire_department;
       motivationColor = Colors.deepOrange;
     } else {
-      motivationText = '📋 Los geht\'s! ${progress.remaining} Anlage${progress.remaining > 1 ? 'n' : ''} warten auf Validierung';
+      motivationText =
+          '📋 Los geht\'s! ${progress.remaining} warten auf Validierung';
       motivationIcon = Icons.assignment;
       motivationColor = Colors.blue;
     }

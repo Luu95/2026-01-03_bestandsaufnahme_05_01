@@ -140,21 +140,15 @@ class CsvService {
 
   static const Set<String> _nonDynamicParamKeys = {
     'lfdNummer',
-    'Etage',
-    'Anlage/Bauteil',
-    'Anlage/Bautel',
+    '__etageName',
   };
 
-  /// Mapping von CSV-Header-Labels zu internen Param-Keys, damit Export und Import
-  /// dieselbe Logik nutzen (Import schreibt immer params['lfdNummer'] etc.).
+  /// Mapping von CSV-Header-Labels zu internen Param-Keys (Legacy-Aliase).
   static const Map<String, String> _headerLabelToCanonicalKey = {
     'lfdNummer': 'lfdNummer',
     'Lfd. Nr.': 'lfdNummer',
     'Lfd Nr': 'lfdNummer',
     'Lfd. Nr': 'lfdNummer',
-    'Etage': 'Etage',
-    'Anlage/Bauteil': 'Anlage/Bauteil',
-    'Anlage/Bautel': 'Anlage/Bauteil',
   };
 
   static String _paramKeyForHeaderLabel(String label) {
@@ -652,7 +646,7 @@ class CsvService {
           }
         }
       } else {
-        uniqueDisciplines.add('Allgemein');
+        uniqueDisciplines.add(settings.resolveDefaultDisciplineLabel());
       }
 
       debugPrint('Gefundene Disziplinen in CSV: $uniqueDisciplines');
@@ -751,11 +745,13 @@ class CsvService {
           continue;
         }
 
-        final nameValue = leafName.trim().isEmpty ? 'Anlage_${i + 1}' : leafName.trim();
+        final nameValue = leafName.trim().isEmpty
+            ? '${settings.resolveLeafLevelLabel()}_${i + 1}'
+            : leafName.trim();
 
         final disciplineLabel = useDisciplineGrouping
             ? _safeCell(row, settings.level1.nameColumn)
-            : 'Allgemein';
+            : settings.resolveDefaultDisciplineLabel();
         if (disciplineLabel.trim().isEmpty) {
           debugPrint('Zeile ${i + 1} übersprungen: Keine Disziplin angegeben');
           continue;
@@ -787,13 +783,11 @@ class CsvService {
         params['lfdNummer'] = lfdNummerValue;
 
         if (etageValue != null && etageValue.isNotEmpty) {
-          params['Etage'] = etageValue;
-          params['__etageName'] = etageValue;
+          settings.writeEtageToParams(params, etageValue);
         }
 
         if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
-          params['Anlage/Bauteil'] = anlageBauteilValue;
-          params['Anlage/Bautel'] = anlageBauteilValue;
+          settings.writeAnlageBauteilToParams(params, anlageBauteilValue);
         }
 
         final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
@@ -865,10 +859,10 @@ class CsvService {
 
         // Legacy A/B-Hierarchie (nur wenn konfiguriert und noch kein Eltern-Knoten gesetzt)
         if (anlageBauteilIdx != null && !params.containsKey('__parentLfdNummer')) {
-          final anlageBautel = (params['Anlage/Bauteil'] ?? params['Anlage/Bautel'] ?? '')
-              .toString()
-              .trim()
-              .toLowerCase();
+          final abKey = settings.resolveAnlageBauteilParamKey();
+          final anlageBautel = abKey != null
+              ? (settings.anlageBauteilValueFromParams(params) ?? '')
+              : '';
           final isBauteil = _matchesAnyToken(anlageBautel, bauteilKuerzel);
 
           if (isBauteil) {
@@ -880,12 +874,9 @@ class CsvService {
               final existingLfd = existing.params['lfdNummer']?.toString();
               if (existingLfd == null || existingLfd.isEmpty) continue;
 
-              final existingType = (existing.params['Anlage/Bauteil'] ??
-                      existing.params['Anlage/Bautel'] ??
-                      '')
-                  .toString()
-                  .trim()
-                  .toLowerCase();
+              final existingType = abKey != null
+                  ? (settings.anlageBauteilValueFromParams(existing.params) ?? '')
+                  : '';
               if (_matchesAnyToken(existingType, bauteilKuerzel)) continue;
 
               parentLfd = existingLfd;

@@ -315,6 +315,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       // CSV importieren
       debugPrint('Starte CSV-Import für Building: ${_building.id}');
+      if (_currentProject.id.isNotEmpty) {
+        await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+      }
+      final importCsvSettings = _currentProject.id.isNotEmpty
+          ? ref.read(csvSettingsProvider(_currentProject.id))
+          : CsvSettings.defaults();
       final anlagen = await CsvService.importAnlagenCsvForDisciplines(
         dbService: ref.read(databaseServiceProvider),
         buildingId: _building.id,
@@ -347,7 +353,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           try {
             // Etage auflösen/erstellen falls in CSV angegeben
             String resolvedFloorId = anlage.floorId;
-            final etageName = (anlage.params['Etage'] ?? anlage.params['__etageName'])?.toString();
+            final etageName = importCsvSettings.etageValueFromParams(anlage.params);
             if (etageName != null && etageName.isNotEmpty) {
               final etageKey = etageName.toLowerCase();
               var floorId = floorIdByName[etageKey];
@@ -1179,11 +1185,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     );
 
     final params = TemplateService.buildEmptyParamsFromTemplate(parentTemplate.parameter);
+    csvSettings.writeSchemaItemToParams(params, schemaRo);
     if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
       params[schemaItemKey] = roValue;
     }
-    params['Revisionsobjekt'] = schemaRo;
-    params['Anlagentyp'] = schemaRo;
     params.addAll(additionalParams);
 
     if (!mounted) return;
@@ -1815,6 +1820,18 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             systemsGroupingKey: _resolveSystemsGroupingParamKey(),
             systemsSubGroupingKey: _resolveSystemsSubGroupingParamKey(),
             systemsDisplayNameParamKey: _resolveSystemsDisplayNameParamKey(),
+            labelGewerk: _currentProject.id.isNotEmpty
+                ? ref.read(csvSettingsProvider(_currentProject.id)).labelGewerk
+                : 'Gewerk',
+            labelLeafLevel: _currentProject.id.isNotEmpty
+                ? ref.read(csvSettingsProvider(_currentProject.id)).resolveLeafLevelLabel()
+                : 'Anlage',
+            labelGewerkPlural: _currentProject.id.isNotEmpty
+                ? ref.read(csvSettingsProvider(_currentProject.id)).pluralDisciplineLabel(2)
+                : 'Gewerke',
+            labelLeafLevelPlural: _currentProject.id.isNotEmpty
+                ? ref.read(csvSettingsProvider(_currentProject.id)).pluralLeafLevelLabel(2)
+                : 'Anlagen',
             onGroupLongPress: (discipline, groupKey, groupValue, additionalParams) {
               CsvSettings? csvSettings;
               if (_currentProject.id.isNotEmpty) {
@@ -1991,7 +2008,15 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         buttons.add(
           _buildFloatingActionButton(
             icon: Icons.delete_outline,
-            tooltip: 'Ausgewählte Anlagen löschen',
+            tooltip: () {
+              if (_currentProject.id.isEmpty) {
+                return 'Ausgewählte Einträge löschen';
+              }
+              final label = ref
+                  .read(csvSettingsProvider(_currentProject.id))
+                  .pluralLeafLevelLabel(2);
+              return 'Ausgewählte $label löschen';
+            }(),
             onPressed: _handleDeleteSelectedAnlagen,
             backgroundColor: Colors.red,
           ),
