@@ -42,7 +42,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     nameColumn: 1,
     useIdColumn: false,
   );
-  int? _etageSpalte;
   int? _anlageBauteilSpalte;
   String _anlageKuerzel = 'A,Anlage';
   String _bauteilKuerzel = 'B,Bauteil';
@@ -54,8 +53,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _displayNameParamKey = 'Name';
   int? _displayNameSpalte;
 
-  /// Explizite Spaltenpaare: welche Spalte = Attributname, welche = Attributwert (pro Zeile variabel).
-  List<AttributeColumnPair> _attributeColumnPairs = [];
+  /// Attribut-Vierergruppen: Name, Typ, Optionen, Art (z. B. ATT1 … ATT1_ART).
+  List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
 
   /// Spalten-Labels für Fotonummern beim CSV-Export (1–4). Leer = Spalte nicht verwendet.
   String? _foto1SpalteLabel;
@@ -79,36 +78,24 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _foto4SpalteLabelCtrl;
   late final TextEditingController _attrPairGenStartCtrl;
   late final TextEditingController _attrPairGenEndCtrl;
-  late final TextEditingController _templateAttrTripletGenStartCtrl;
-  late final TextEditingController _templateAttrTripletGenEndCtrl;
 
   // Bearbeitbar-Flags (für Kompatibilität)
   bool _lfdNummerBearbeitbar = true;
   bool _nameBearbeitbar = true;
   bool _gewerkBearbeitbar = true;
-  bool _etageBearbeitbar = true;
   bool _anlageBauteilBearbeitbar = true;
   bool _parameterBearbeitbar = true;
 
   bool _isLoading = true;
   List<Disziplin> _disciplines = [];
-  List<Map<String, dynamic>> _globalSchema = [];
   bool _showDisciplineSelection = true;
   int? _editingDisciplineIndex;
   String? _editingRevisionsobjekt;
-  bool _editingGlobal = false;
   final Set<int> _expandedSchemaDisciplineIndices = {};
   List<Template> _projectTemplates = [];
   
-  // CSV Header für beide Tabs
+  // CSV-Header aus letztem Import (Anlagen oder Gewerkevorlagen)
   List<String>? _mappingCsvHeaders;
-  List<String>? _templateCsvHeaders;
-  
-  // Template CSV Settings
-  int _templateGewerkSpalte = 0;
-  int _templateRevisionsobjektSpalte = 1;
-  int _templateErsteSpalteAttributDefinitionen = 2;
-  List<AttributeTripletColumn> _templateAttributeTriplets = [];
 
   // Auto-Save Timer
   Timer? _autoSaveTimer;
@@ -131,8 +118,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto4SpalteLabelCtrl = TextEditingController(text: _foto4SpalteLabel ?? '');
     _attrPairGenStartCtrl = TextEditingController(text: '24');
     _attrPairGenEndCtrl = TextEditingController(text: '63');
-    _templateAttrTripletGenStartCtrl = TextEditingController(text: '3');
-    _templateAttrTripletGenEndCtrl = TextEditingController(text: '62');
     _loadAllData();
   }
 
@@ -153,8 +138,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto4SpalteLabelCtrl.dispose();
     _attrPairGenStartCtrl.dispose();
     _attrPairGenEndCtrl.dispose();
-    _templateAttrTripletGenStartCtrl.dispose();
-    _templateAttrTripletGenEndCtrl.dispose();
     super.dispose();
   }
 
@@ -241,92 +224,29 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     await Future.wait([
       _loadCsvSettings(),
       _loadDisciplines(),
-      _loadTemplateCsvSettings(),
-      _loadGlobalSchema(),
       _loadProjectTemplates(),
     ]);
-    _syncGlobalSchemaToDisciplines();
     if (mounted) {
       setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _loadGlobalSchema() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'global_schema_${widget.projectId}';
-      final schemaJson = prefs.getString(key);
-      if (schemaJson != null) {
-        setState(() {
-          _globalSchema = (json.decode(schemaJson) as List)
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList();
-        });
-      }
-    } catch (e) {
-      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+  List<AttributeTripletColumn> _loadAttributeQuadrupletColumnsFromSettings(
+    CsvSettings settings,
+  ) {
+    if (settings.attributeTripletColumns.isNotEmpty) {
+      return List<AttributeTripletColumn>.from(settings.attributeTripletColumns);
     }
-  }
-
-  Future<void> _saveGlobalSchema() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'global_schema_${widget.projectId}';
-      await prefs.setString(key, json.encode(_globalSchema));
-    } catch (e) {
-      debugPrint('Fehler beim Speichern des globalen Schemas: $e');
-    }
-  }
-  
-  Future<void> _loadTemplateCsvSettings() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'template_csv_settings_${widget.projectId}';
-      final settingsJson = prefs.getString(key);
-      
-      if (settingsJson != null) {
-        final settings = json.decode(settingsJson) as Map<String, dynamic>;
-        final tripletsRaw = settings['attributeTripletColumns'];
-        final triplets = <AttributeTripletColumn>[];
-        if (tripletsRaw is List) {
-          for (final e in tripletsRaw) {
-            if (e is Map<String, dynamic>) {
-              triplets.add(AttributeTripletColumn.fromJson(e));
-            } else if (e is Map) {
-              triplets.add(AttributeTripletColumn.fromJson(Map<String, dynamic>.from(e)));
-            }
-          }
-        }
-        setState(() {
-          _templateGewerkSpalte = settings['revisionsfeldSpalte'] as int? ??
-              settings['gewerkSpalte'] as int? ??
-              0;
-          _templateRevisionsobjektSpalte = settings['revisionsobjektSpalte'] as int? ??
-              settings['anlagentypSpalte'] as int? ??
-              1;
-          _templateErsteSpalteAttributDefinitionen =
-              settings['ersteSpalteAttributDefinitionen'] as int? ?? 2;
-          _templateAttributeTriplets = triplets;
-        });
-      }
-    } catch (e) {
-      debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
-    }
-  }
-  
-  Future<void> _saveTemplateCsvSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'template_csv_settings_${widget.projectId}';
-    final settings = {
-      'gewerkSpalte': _templateGewerkSpalte,
-      'revisionsfeldSpalte': _templateGewerkSpalte,
-      'revisionsobjektSpalte': _templateRevisionsobjektSpalte,
-      'anlagentypSpalte': _templateRevisionsobjektSpalte,
-      'bezeichnungSpalte': _templateRevisionsobjektSpalte,
-      'ersteSpalteAttributDefinitionen': _templateErsteSpalteAttributDefinitionen,
-      'attributeTripletColumns': _templateAttributeTriplets.map((t) => t.toJson()).toList(),
-    };
-    await prefs.setString(key, json.encode(settings));
+    if (settings.attributeColumnPairs.isEmpty) return [];
+    return settings.attributeColumnPairs.map((pair) {
+      final start = pair.nameColumn;
+      return AttributeTripletColumn(
+        nameColumn: start,
+        typeColumn: start + 1,
+        optionsColumn: start + 2,
+        artColumn: start + 3,
+      );
+    }).toList();
   }
 
   Future<void> _loadCsvSettings() async {
@@ -338,14 +258,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _level1 = settings.level1;
         _level2 = settings.level2;
         _level3 = settings.level3;
-        _etageSpalte = settings.etageSpalte;
         _anlageBauteilSpalte = settings.anlageBauteilSpalte;
         _anlageKuerzel = settings.anlageKuerzel;
         _bauteilKuerzel = settings.bauteilKuerzel;
         _labelGewerk = settings.labelGewerk;
         _labelAnlage = settings.labelAnlage;
         _labelBauteil = settings.labelBauteil;
-        _attributeColumnPairs = List<AttributeColumnPair>.from(settings.attributeColumnPairs);
+        _attributeQuadrupletColumns = _loadAttributeQuadrupletColumnsFromSettings(settings);
         _foto1SpalteLabel = settings.foto1SpalteLabel;
         _foto2SpalteLabel = settings.foto2SpalteLabel;
         _foto3SpalteLabel = settings.foto3SpalteLabel;
@@ -354,9 +273,16 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
         _displayNameParamKey = settings.displayNameParamKey;
         _displayNameSpalte = settings.displayNameSpalte;
+        _mappingCsvHeaders = settings.importHeaderRow.isNotEmpty
+            ? List<String>.from(settings.importHeaderRow)
+            : null;
       });
       _syncTextControllersFromState();
       _syncGroupingKeysFromLevels();
+      if (_mappingCsvHeaders != null) {
+        _syncGroupingGewerkKeyFromColumn();
+        _syncGroupingAnlageKeyFromColumn();
+      }
 
       final prefs = await SharedPreferences.getInstance();
       final key = 'csv_settings_${widget.projectId}';
@@ -367,7 +293,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _lfdNummerBearbeitbar = flags['lfdNummerBearbeitbar'] as bool? ?? true;
           _nameBearbeitbar = flags['nameBearbeitbar'] as bool? ?? true;
           _gewerkBearbeitbar = flags['gewerkBearbeitbar'] as bool? ?? true;
-          _etageBearbeitbar = flags['etageBearbeitbar'] as bool? ?? true;
           _anlageBauteilBearbeitbar = flags['anlageBauteilBearbeitbar'] as bool? ?? true;
           _parameterBearbeitbar = flags['parameterBearbeitbar'] as bool? ?? true;
         });
@@ -457,7 +382,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         level1: _level1,
         level2: _level2,
         level3: _level3,
-        etageSpalte: current.etageSpalte,
         anlageBauteilSpalte: _anlageBauteilSpalte,
         delimiterMode: 'auto',
         anlageKuerzel: _anlageKuerzel,
@@ -466,14 +390,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         labelGewerk: _labelGewerk,
         labelAnlage: _labelAnlage,
         labelBauteil: _labelBauteil,
-        attributeColumnPairs: List<AttributeColumnPair>.from(_attributeColumnPairs),
+        attributeColumnPairs: const [],
+        attributeTripletColumns:
+            List<AttributeTripletColumn>.from(_attributeQuadrupletColumns),
         foto1SpalteLabel: _foto1SpalteLabel,
         foto2SpalteLabel: _foto2SpalteLabel,
         foto3SpalteLabel: _foto3SpalteLabel,
         foto4SpalteLabel: _foto4SpalteLabel,
         importHeaderRow: current.importHeaderRow,
         exportDelimiter: current.exportDelimiter,
-        groupingEtageParamKey: current.groupingEtageParamKey,
         groupingGewerkParamKey: _groupingGewerkParamKey,
         groupingAnlageParamKey: _groupingAnlageParamKey,
         displayNameParamKey: _displayNameParamKey,
@@ -487,7 +412,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         'lfdNummerBearbeitbar': _lfdNummerBearbeitbar,
         'nameBearbeitbar': _nameBearbeitbar,
         'gewerkBearbeitbar': _gewerkBearbeitbar,
-        'etageBearbeitbar': _etageBearbeitbar,
         'anlageBauteilBearbeitbar': _anlageBauteilBearbeitbar,
         'parameterBearbeitbar': _parameterBearbeitbar,
       };
@@ -507,8 +431,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       await Future.wait([
         _saveCsvSettings(),
         _saveDisciplines(),
-        _saveTemplateCsvSettings(),
-        _saveGlobalSchema(),
       ]);
     } catch (e) {
       debugPrint('Fehler beim automatischen Speichern: $e');
@@ -530,49 +452,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   Future<void> _saveDisciplines() async {
     if (!mounted) return;
-    _syncGlobalSchemaToDisciplines();
     final dbService = ref.read(databaseServiceProvider);
     await dbService.replaceDisciplines(widget.buildingId, _disciplines);
   }
-
-  void _syncGlobalSchemaToDisciplines() {
-    final markedGlobalSchema =
-        _globalSchema.map((f) => {...f, 'isGlobal': true}).toList();
-    final globalKeys = markedGlobalSchema.map((f) => f['key']).toSet();
-
-    for (int i = 0; i < _disciplines.length; i++) {
-      final d = _disciplines[i];
-      final newSchema = markedGlobalSchema
-          .map((f) => Map<String, dynamic>.from(f))
-          .toList();
-
-      final legacyIndividual = d.schema
-          .where((f) => f['isGlobal'] != true && !globalKeys.contains(f['key']))
-          .map((f) => Map<String, dynamic>.from(f))
-          .toList();
-      if (legacyIndividual.isNotEmpty && d.revisionsobjektSchemas.isEmpty) {
-        newSchema.addAll(legacyIndividual);
-      }
-
-      final newRoSchemas = <String, List<Map<String, dynamic>>>{};
-      d.revisionsobjektSchemas.forEach((ro, fields) {
-        newRoSchemas[ro] = fields
-            .where((f) => !globalKeys.contains(f['key']))
-            .map((f) => Map<String, dynamic>.from(f))
-            .toList();
-      });
-
-      _disciplines[i] = Disziplin(
-        label: d.label,
-        icon: d.icon,
-        color: d.color,
-        schema: newSchema,
-        groupingKey: d.groupingKey,
-        revisionsobjektSchemas: newRoSchemas,
-      );
-    }
-  }
-
 
   @override
   Widget build(BuildContext context) {
@@ -585,7 +467,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _leavePage();
       },
       child: DefaultTabController(
-        length: 3,
+        length: 2,
         child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
           appBar: AppBar(
@@ -604,7 +486,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               tabs: [
                 Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
                 Tab(icon: Icon(Icons.schema), text: 'Eingabefelder'),
-                Tab(icon: Icon(Icons.table_view), text: 'Gewerkevorlagen'),
               ],
             ),
             actions: [
@@ -625,7 +506,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   children: [
                     _buildMappingTab(),
                     _buildSchemaTab(),
-                    _buildTemplateTab(),
                   ],
                 ),
         ),
@@ -641,6 +521,19 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildInfoCard(
+            'Spaltenzuordnung gilt einheitlich für Anlagen-Import, Anlagen-Export und Gewerkevorlagen. '
+            'Nach einem CSV-Import werden die Spaltenüberschriften für die Auswahl übernommen.',
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _buildHeaderAction(
+              icon: Icons.upload_file,
+              label: 'Gewerkevorlagen importieren',
+              onPressed: _importTemplates,
+            ),
+          ),
           const SizedBox(height: 20),
           _buildSectionHeader(
             title: 'CSV-Mapping',
@@ -690,7 +583,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             },
           ),
           const SizedBox(height: 16),
-          _buildCollapsibleAttributePairsSection(),
+          _buildCollapsibleAttributeQuadrupletsSection(),
           const SizedBox(height: 16),
           _buildCollapsibleFotoSpaltenSection(),
           const SizedBox(height: 16),
@@ -765,8 +658,16 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ),
           const SizedBox(height: 12),
           _buildValidationWarning(),
-          const SizedBox(height: 32),
-          // Diskret: Alle Gewerke, Anlagen und Grundrisse löschen
+          const SizedBox(height: 24),
+          _buildBottomDeleteButton(
+            title: 'Alle Vorlagen löschen',
+            description:
+                'Löscht alle importierten Gewerkevorlagen für dieses Projekt. '
+                'Gewerke und Anlagen im Gebäude bleiben erhalten.',
+            buttonText: 'Vorlagen löschen',
+            onPressed: () => _confirmAndDeleteTemplates(),
+          ),
+          const SizedBox(height: 16),
           _buildBottomDeleteButton(
             title: 'Alle Daten löschen',
             description: 'Löscht alle Gewerke, Anlagen und Grundrisse (Ebenen) für dieses Gebäude. Diese Aktion kann nicht rückgängig gemacht werden.',
@@ -781,67 +682,47 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   // --- SCHEMA TAB ---
 
   Widget _buildSchemaTab() {
-    if (!_showDisciplineSelection) {
-      if (_editingGlobal) {
-        return Column(
-          children: [
-            _buildBackToSelectionHeader('Globales Standard-Schema'),
-            Expanded(
-              child: SchemaEditorWidget(
-                existingSchema: _globalSchema,
-                allowEditGlobal: true,
-                onSchemaChanged: (newSchema) {
-                  setState(() {
-                    _globalSchema = newSchema.map((f) => {...f, 'isGlobal': true}).toList();
-                    _syncGlobalSchemaToDisciplines();
-                  });
-                  _scheduleAutoSave();
-                },
-              ),
-            ),
-          ],
-        );
-      } else if (_editingDisciplineIndex != null &&
-          _editingRevisionsobjekt != null) {
-        final d = _disciplines[_editingDisciplineIndex!];
-        final ro = _editingRevisionsobjekt!;
-        return Column(
-          children: [
-            _buildBackToSelectionHeader('${d.label} → $_schemaItemLevelLabel: $ro'),
-            Expanded(
-              child: SchemaEditorWidget(
-                existingSchema: _schemaForRevisionsobjekt(d, ro),
-                onSchemaChanged: (newSchema) {
-                  setState(() {
-                    final updatedRoSchemas =
-                        Map<String, List<Map<String, dynamic>>>.from(
-                      d.revisionsobjektSchemas,
-                    );
-                    updatedRoSchemas[ro] = newSchema
-                        .map((f) => Map<String, dynamic>.from(f))
-                        .toList();
+    if (!_showDisciplineSelection &&
+        _editingDisciplineIndex != null &&
+        _editingRevisionsobjekt != null) {
+      final d = _disciplines[_editingDisciplineIndex!];
+      final ro = _editingRevisionsobjekt!;
+      return Column(
+        children: [
+          _buildBackToSelectionHeader('${d.label} → $_schemaItemLevelLabel: $ro'),
+          Expanded(
+            child: SchemaEditorWidget(
+              existingSchema: _schemaForRevisionsobjekt(d, ro),
+              onSchemaChanged: (newSchema) {
+                setState(() {
+                  final updatedRoSchemas =
+                      Map<String, List<Map<String, dynamic>>>.from(
+                    d.revisionsobjektSchemas,
+                  );
+                  updatedRoSchemas[ro] = newSchema
+                      .map((f) => Map<String, dynamic>.from(f))
+                      .toList();
 
-                    final globalOnly = d.schema
-                        .where((f) => f['isGlobal'] == true)
-                        .map((f) => Map<String, dynamic>.from(f))
-                        .toList();
+                  final globalOnly = d.schema
+                      .where((f) => f['isGlobal'] == true)
+                      .map((f) => Map<String, dynamic>.from(f))
+                      .toList();
 
-                    _disciplines[_editingDisciplineIndex!] = Disziplin(
-                      label: d.label,
-                      icon: d.icon,
-                      color: d.color,
-                      schema: globalOnly,
-                      groupingKey: d.groupingKey,
-                      revisionsobjektSchemas: updatedRoSchemas,
-                    );
-                  });
-                  _scheduleAutoSave();
-                },
-              ),
+                  _disciplines[_editingDisciplineIndex!] = Disziplin(
+                    label: d.label,
+                    icon: d.icon,
+                    color: d.color,
+                    schema: globalOnly,
+                    groupingKey: d.groupingKey,
+                    revisionsobjektSchemas: updatedRoSchemas,
+                  );
+                });
+                _scheduleAutoSave();
+              },
             ),
-          ],
-        );
-      }
+          ),
+        ],
+      );
     }
 
     return _buildSchemaSelectionView();
@@ -857,7 +738,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => setState(() {
               _showDisciplineSelection = true;
-              _editingGlobal = false;
               _editingDisciplineIndex = null;
               _editingRevisionsobjekt = null;
             }),
@@ -877,19 +757,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          
-          // GLOBAL CARD
-          _buildSelectionCard(
-            title: 'Globales Standard-Schema',
-            icon: Icons.public,
-            color: Colors.blue,
-            onTap: () => setState(() {
-              _showDisciplineSelection = false;
-              _editingGlobal = true;
-            }),
-          ),
-          
-          const SizedBox(height: 32),
           Text(
             '$_labelGewerk (Ebene 1)',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -907,7 +774,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(
-                  'Importieren Sie im Tab „Gewerkevorlagen“ eine CSV, '
+                  'Importieren Sie im Tab „CSV-Mapping“ Gewerkevorlagen, '
                   'damit $_labelGewerk und $_schemaItemLevelLabel hier erscheinen.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
@@ -1019,475 +886,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  Widget _buildSelectionCard({
-    required String title,
-    String? subtitle,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.25)),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: color),
-        ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: (subtitle != null && subtitle.isNotEmpty) ? Text(subtitle) : null,
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
-      ),
-    );
-  }
-
-  // --- TEMPLATE TAB ---
-
-  Widget _buildTemplateTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildInfoCard(
-            'Ordnen Sie hier fest, welche CSV-Spalten in der App welche Bedeutung haben. '
-                'Geben Sie die Spaltennummern manuell ein (Start bei 1).',
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _buildHeaderAction(
-              icon: Icons.upload_file,
-              label: 'Vorlagen importieren',
-              onPressed: _importTemplates,
-            ),
-          ),
-          const SizedBox(height: 20),
-          _buildSectionHeader(
-            title: 'CSV-Mapping für Vorlagen',
-            subtitle: 'Revisionsfeld → Revisionsobjekt → Attribute',
-          ),
-          const SizedBox(height: 16),
-
-          SettingsCard(
-            color: Colors.blueGrey,
-            borderColor: Colors.blueGrey.shade200,
-            icon: Icons.folder_open,
-            iconColor: Colors.blueGrey,
-            title: 'Revisionsfeld',
-            description: 'Welche Spalte enthält das Revisionsfeld (Gewerk)?',
-            child: _buildTemplateColumnSelector(
-              label: 'Spalte für Revisionsfeld',
-              value: _templateGewerkSpalte,
-              onChanged: (v) {
-                setState(() => _templateGewerkSpalte = v);
-                _scheduleAutoSave();
-              },
-            ),
-          ),
-
-          _buildConnector(),
-
-          SettingsCard(
-            color: Colors.green,
-            borderColor: Colors.green.shade200,
-            icon: Icons.settings_applications,
-            iconColor: Colors.green,
-            title: 'Revisionsobjekt',
-            description: 'Welche Spalte enthält das Revisionsobjekt (Anlagentyp)?',
-            child: _buildTemplateColumnSelector(
-              label: 'Spalte für Revisionsobjekt',
-              value: _templateRevisionsobjektSpalte,
-              onChanged: (v) {
-                setState(() => _templateRevisionsobjektSpalte = v);
-                _scheduleAutoSave();
-              },
-            ),
-          ),
-
-          const SizedBox(height: 16),
-          _buildCollapsibleAttributeTripletsSection(),
-          
-          const SizedBox(height: 24),
-          _buildTemplateValidationWarning(),
-          const SizedBox(height: 32),
-          // Diskret: Vorlagen für das Projekt löschen
-          _buildBottomDeleteButton(
-            title: 'Alle Vorlagen löschen',
-            description: 'Löscht alle importierten Vorlagen für dieses Projekt. Gewerke und Anlagen im Gebäude bleiben erhalten.',
-            buttonText: 'Vorlagen löschen',
-            onPressed: () => _confirmAndDeleteTemplates(),
-          ),
-        ],
-      ),
-    );
-  }
-
-
-  Widget _buildTemplateColumnSelector({
-    required String label,
-    required int value,
-    required ValueChanged<int> onChanged,
-    String? keySuffix,
-  }) {
-    final fieldKey = keySuffix ?? label;
-
-    if (_templateCsvHeaders != null &&
-        _templateCsvHeaders!.isNotEmpty &&
-        value >= 0 &&
-        value < _templateCsvHeaders!.length) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: TextStyle(fontSize: 12, color: _mutedTextColor(context), fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          DropdownButtonFormField<int>(
-            key: ValueKey('template_col_dropdown_${fieldKey}_$value'),
-            value: value,
-            isExpanded: true,
-            decoration: _themedInputDecoration(context),
-            items: List.generate(_templateCsvHeaders!.length, (index) {
-              return DropdownMenuItem(
-                value: index,
-                child: Text(
-                  '${index + 1}: ${_templateCsvHeaders![index]}',
-                  overflow: TextOverflow.ellipsis,
-                ),
-              );
-            }),
-            onChanged: (val) {
-              if (val != null) onChanged(val);
-            },
-          ),
-        ],
-      );
-    }
-
-    return TextFormField(
-      key: ValueKey('template_col_input_${fieldKey}_$value'),
-      initialValue: (value + 1).toString(),
-      keyboardType: TextInputType.number,
-      decoration: _themedInputDecoration(
-        context,
-        labelText: label,
-        prefixIcon: const Icon(Icons.view_column, size: 18),
-        helperText: _templateCsvHeaders != null && value >= _templateCsvHeaders!.length
-            ? 'Spalte ${value + 1} liegt außerhalb der geladenen CSV (${_templateCsvHeaders!.length} Spalten)'
-            : null,
-      ),
-      onFieldSubmitted: (text) {
-        final userInput = int.tryParse(text.trim());
-        if (userInput != null && userInput > 0) {
-          onChanged(userInput - 1);
-        }
-      },
-    );
-  }
-
-  Widget _buildCollapsibleAttributeTripletsSection() {
-    const color = Colors.deepPurple;
-    final tripletCount = _templateAttributeTriplets.length;
-    final subtitle = tripletCount == 0
-        ? 'Keine Dreiergruppen – zum Konfigurieren aufklappen'
-        : '$tripletCount Dreiergruppe${tripletCount == 1 ? '' : 'n'} konfiguriert';
-
-    return Container(
-      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: false,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          leading: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.view_column, color: color, size: 24),
-          ),
-          title: const Text(
-            'Attribut-Dreiergruppen',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
-          children: [
-            Text(
-              'CSV-Spalten für Attributdefinitionen: Name (z. B. ATT1), Typ (z. B. ATT1_TYPE), '
-              'Optionen (z. B. ATT1_OPTIONS). Pro Attribut eine Dreiergruppe.',
-              style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: color.withValues(alpha: 0.2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Dreiergruppen aus Spaltenbereich erzeugen',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: color.shade700,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Spaltennummern wie in der Dropdown-Anzeige (1 = erste Spalte). '
-                    'Reihenfolge: Name, Typ, Optionen (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_OPTIONS, ATT2/…). '
-                    'Spaltenanzahl im Bereich muss durch 3 teilbar sein.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _templateAttrTripletGenStartCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Erste Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const Text('…'),
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _templateAttrTripletGenEndCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Letzte Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Dreiergruppen generieren'),
-                        onPressed: () {
-                          final start = int.tryParse(_templateAttrTripletGenStartCtrl.text.trim());
-                          final end = int.tryParse(_templateAttrTripletGenEndCtrl.text.trim());
-                          if (start == null || end == null) {
-                            return;
-                          }
-                          if (start >= end) {
-                            return;
-                          }
-                          final count = end - start + 1;
-                          if (count % 3 != 0) {
-                            return;
-                          }
-                          // Eingabe ist 1-basiert (wie Dropdown-Anzeige), intern 0-basiert speichern
-                          final startIndex = start - 1;
-                          final endIndex = end - 1;
-                          final triplets = <AttributeTripletColumn>[];
-                          for (var i = startIndex; i <= endIndex; i += 3) {
-                            triplets.add(AttributeTripletColumn(
-                              nameColumn: i,
-                              typeColumn: i + 1,
-                              optionsColumn: i + 2,
-                            ));
-                          }
-                          setState(() {
-                            _templateAttributeTriplets = triplets;
-                            _templateErsteSpalteAttributDefinitionen = startIndex;
-                          });
-                          _scheduleAutoSave();
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            ...List.generate(_templateAttributeTriplets.length, (idx) {
-              final triplet = _templateAttributeTriplets[idx];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Attribut ${idx + 1}',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _mutedTextColor(context)),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildTemplateColumnSelector(
-                            label: 'Spalte Name',
-                            keySuffix: 'attr_${idx}_name',
-                            value: triplet.nameColumn,
-                            onChanged: (v) {
-                              setState(() {
-                                _templateAttributeTriplets = List<AttributeTripletColumn>.from(_templateAttributeTriplets)
-                                  ..[idx] = AttributeTripletColumn(
-                                    nameColumn: v,
-                                    typeColumn: triplet.typeColumn,
-                                    optionsColumn: triplet.optionsColumn,
-                                  );
-                              });
-                              _scheduleAutoSave();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildTemplateColumnSelector(
-                            label: 'Spalte Typ',
-                            keySuffix: 'attr_${idx}_type',
-                            value: triplet.typeColumn,
-                            onChanged: (v) {
-                              setState(() {
-                                _templateAttributeTriplets = List<AttributeTripletColumn>.from(_templateAttributeTriplets)
-                                  ..[idx] = AttributeTripletColumn(
-                                    nameColumn: triplet.nameColumn,
-                                    typeColumn: v,
-                                    optionsColumn: triplet.optionsColumn,
-                                  );
-                              });
-                              _scheduleAutoSave();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildTemplateColumnSelector(
-                            label: 'Spalte Optionen',
-                            keySuffix: 'attr_${idx}_options',
-                            value: triplet.optionsColumn,
-                            onChanged: (v) {
-                              setState(() {
-                                _templateAttributeTriplets = List<AttributeTripletColumn>.from(_templateAttributeTriplets)
-                                  ..[idx] = AttributeTripletColumn(
-                                    nameColumn: triplet.nameColumn,
-                                    typeColumn: triplet.typeColumn,
-                                    optionsColumn: v,
-                                  );
-                              });
-                              _scheduleAutoSave();
-                            },
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                          onPressed: () {
-                            setState(() {
-                              _templateAttributeTriplets = List<AttributeTripletColumn>.from(_templateAttributeTriplets)
-                                ..removeAt(idx);
-                            });
-                            _scheduleAutoSave();
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            }),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text('Dreiergruppe hinzufügen'),
-              onPressed: () {
-                final maxCol = (_templateCsvHeaders?.length ?? 20) - 1;
-                final used = _allReservedTemplateColumnIndices().toSet();
-                var n = 0;
-                while (used.contains(n) && n <= maxCol) n++;
-                var t = n + 1;
-                while (used.contains(t) && t <= maxCol) t++;
-                var o = t + 1;
-                while (used.contains(o) && o <= maxCol) o++;
-                setState(() {
-                  _templateAttributeTriplets = List<AttributeTripletColumn>.from(_templateAttributeTriplets)
-                    ..add(AttributeTripletColumn(nameColumn: n, typeColumn: t, optionsColumn: o));
-                });
-                _scheduleAutoSave();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Set<int> _allReservedTemplateColumnIndices() {
-    final used = <int>{
-      _templateGewerkSpalte,
-      _templateRevisionsobjektSpalte,
-    };
-    for (final t in _templateAttributeTriplets) {
-      used.add(t.nameColumn);
-      used.add(t.typeColumn);
-      used.add(t.optionsColumn);
-    }
-    return used;
-  }
-
-  Widget _buildTemplateValidationWarning() {
-    final values = <int>[
-      _templateGewerkSpalte,
-      _templateRevisionsobjektSpalte,
-    ];
-    for (final t in _templateAttributeTriplets) {
-      values.addAll([t.nameColumn, t.typeColumn, t.optionsColumn]);
-    }
-    final uniqueValues = values.toSet();
-    
-    if (values.length != uniqueValues.length) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.red.shade50,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.red.shade200),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Achtung: Eine Spaltennummer wurde mehrfach vergeben!',
-                style: TextStyle(
-                  color: Colors.red.shade900,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return const SizedBox.shrink();
-  }
-
   Future<void> _importTemplates() async {
     // Zeige Bestätigungsdialog
     final confirmed = await showDialog<bool>(
@@ -1547,10 +945,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       Navigator.of(context).pop(); // Lade-Dialog schließen
 
       if (mounted) {
+        await ref.read(csvSettingsProvider(widget.projectId).notifier).load();
+        await _loadCsvSettings();
         await _loadProjectTemplates();
         await _loadDisciplines();
-        _syncGlobalSchemaToDisciplines();
         setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Gewerkevorlagen importiert')),
+        );
       }
     } catch (e) {
       if (!mounted) return;
@@ -1859,12 +1261,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  Widget _buildCollapsibleAttributePairsSection() {
+  Widget _buildCollapsibleAttributeQuadrupletsSection() {
     const color = Colors.deepPurple;
-    final pairCount = _attributeColumnPairs.length;
-    final subtitle = pairCount == 0
-        ? 'Keine Paare – zum Konfigurieren aufklappen'
-        : '$pairCount Paar${pairCount == 1 ? '' : 'e'} konfiguriert';
+    final groupCount = _attributeQuadrupletColumns.length;
+    final subtitle = groupCount == 0
+        ? 'Keine Vierergruppen – zum Konfigurieren aufklappen'
+        : '$groupCount Vierergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
 
     return Container(
       decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
@@ -1883,14 +1285,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             child: const Icon(Icons.view_column, color: color, size: 24),
           ),
           title: const Text(
-            'Attribut-Spaltenpaare',
+            'Attribut-Spalten (4er-Gruppen)',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
-              'CSV-Spalten, in denen pro Zeile Attributname und Attributwert stehen. '
-              'Jedes Paar: eine Spalte für den Namen, eine für den Wert.',
+              'Pro Attribut vier Spalten: Name (z. B. ATT1), Typ (ATT1_TYPE), '
+              'Optionen (ATT1_OPTIONS), Art (ATT1_ART). Gilt für Gewerkevorlagen, Anlagen-Import und Export.',
               style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
@@ -1905,7 +1307,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Paare aus Spaltenbereich erzeugen',
+                    'Vierergruppen aus Spaltenbereich erzeugen',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           color: color.shade700,
                           fontWeight: FontWeight.w600,
@@ -1913,8 +1315,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Erste Spalte = Attributname, nächste = Attributwert (z. B. 24–63 → Paare 24/25, 26/27, …). '
-                    'Gerade Anzahl Spalten im Bereich nötig.',
+                    'Reihenfolge: Name, Typ, Optionen, Art (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_OPTIONS/ATT1_ART, …). '
+                    'Die Spaltenanzahl im Bereich muss durch 4 teilbar sein.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurface,
                         ),
@@ -1952,25 +1354,25 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       ),
                       FilledButton.icon(
                         icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Paare generieren'),
+                        label: const Text('Vierergruppen generieren'),
                         onPressed: () {
                           final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
                           final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
-                          if (start == null || end == null) {
-                            return;
-                          }
-                          if (start >= end) {
-                            return;
-                          }
+                          if (start == null || end == null || start >= end) return;
                           final count = end - start + 1;
-                          if (count.isOdd) {
-                            return;
+                          if (count % 4 != 0) return;
+                          final startIndex = start - 1;
+                          final endIndex = end - 1;
+                          final groups = <AttributeTripletColumn>[];
+                          for (var i = startIndex; i <= endIndex; i += 4) {
+                            groups.add(AttributeTripletColumn(
+                              nameColumn: i,
+                              typeColumn: i + 1,
+                              optionsColumn: i + 2,
+                              artColumn: i + 3,
+                            ));
                           }
-                          final pairs = <AttributeColumnPair>[];
-                          for (var i = start; i < end; i += 2) {
-                            pairs.add(AttributeColumnPair(nameColumn: i, valueColumn: i + 1));
-                          }
-                          setState(() => _attributeColumnPairs = pairs);
+                          setState(() => _attributeQuadrupletColumns = groups);
                           _scheduleAutoSave();
                         },
                       ),
@@ -1980,50 +1382,107 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               ),
             ),
             const SizedBox(height: 16),
-            ...List.generate(_attributeColumnPairs.length, (idx) {
-              final pair = _attributeColumnPairs[idx];
+            ...List.generate(_attributeQuadrupletColumns.length, (idx) {
+              final group = _attributeQuadrupletColumns[idx];
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: _buildColumnSelector(
-                        label: 'Spalte Attributname',
-                        value: pair.nameColumn,
-                        onChanged: (v) {
-                          setState(() {
-                            _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
-                              ..[idx] = AttributeColumnPair(nameColumn: v, valueColumn: pair.valueColumn);
-                          });
-                          _scheduleAutoSave();
-                        },
-                        csvHeaders: _mappingCsvHeaders,
+                    Text(
+                      'Attribut ${idx + 1}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _mutedTextColor(context),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildColumnSelector(
-                        label: 'Spalte Attributwert',
-                        value: pair.valueColumn,
-                        onChanged: (v) {
-                          setState(() {
-                            _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
-                              ..[idx] = AttributeColumnPair(nameColumn: pair.nameColumn, valueColumn: v);
-                          });
-                          _scheduleAutoSave();
-                        },
-                        csvHeaders: _mappingCsvHeaders,
-                      ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Name',
+                            value: group.nameColumn,
+                            onChanged: (v) => _updateQuadrupletColumn(
+                              idx,
+                              AttributeTripletColumn(
+                                nameColumn: v,
+                                typeColumn: group.typeColumn,
+                                optionsColumn: group.optionsColumn,
+                                artColumn: group.artColumn,
+                              ),
+                            ),
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Typ',
+                            value: group.typeColumn,
+                            onChanged: (v) => _updateQuadrupletColumn(
+                              idx,
+                              AttributeTripletColumn(
+                                nameColumn: group.nameColumn,
+                                typeColumn: v,
+                                optionsColumn: group.optionsColumn,
+                                artColumn: group.artColumn,
+                              ),
+                            ),
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                      onPressed: () {
-                        setState(() {
-                          _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
-                            ..removeAt(idx);
-                        });
-                        _scheduleAutoSave();
-                      },
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Optionen',
+                            value: group.optionsColumn,
+                            onChanged: (v) => _updateQuadrupletColumn(
+                              idx,
+                              AttributeTripletColumn(
+                                nameColumn: group.nameColumn,
+                                typeColumn: group.typeColumn,
+                                optionsColumn: v,
+                                artColumn: group.artColumn,
+                              ),
+                            ),
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildColumnSelector(
+                            label: 'Art',
+                            value: group.artColumn,
+                            onChanged: (v) => _updateQuadrupletColumn(
+                              idx,
+                              AttributeTripletColumn(
+                                nameColumn: group.nameColumn,
+                                typeColumn: group.typeColumn,
+                                optionsColumn: group.optionsColumn,
+                                artColumn: v,
+                              ),
+                            ),
+                            csvHeaders: _mappingCsvHeaders,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              _attributeQuadrupletColumns =
+                                  List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)
+                                    ..removeAt(idx);
+                            });
+                            _scheduleAutoSave();
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -2032,22 +1491,30 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.add),
-              label: const Text('Paar hinzufügen'),
+              label: const Text('Vierergruppe hinzufügen'),
               onPressed: () {
-                final maxCol = (_mappingCsvHeaders?.length ?? 10) - 1;
+                final maxCol = (_mappingCsvHeaders?.length ?? 20) - 1;
                 final used = _allReservedColumnIndices().toSet();
-                for (final p in _attributeColumnPairs) {
-                  used.add(p.nameColumn);
-                  used.add(p.valueColumn);
+                for (final g in _attributeQuadrupletColumns) {
+                  used.addAll(g.columnIndices);
                 }
                 var n = 0;
                 while (used.contains(n) && n <= maxCol) n++;
-                var v = n + 1;
-                while (used.contains(v) && v <= maxCol) v++;
-                if (v > maxCol) v = n;
+                var t = n + 1;
+                while (used.contains(t) && t <= maxCol) t++;
+                var o = t + 1;
+                while (used.contains(o) && o <= maxCol) o++;
+                var a = o + 1;
+                while (used.contains(a) && a <= maxCol) a++;
                 setState(() {
-                  _attributeColumnPairs = List<AttributeColumnPair>.from(_attributeColumnPairs)
-                    ..add(AttributeColumnPair(nameColumn: n, valueColumn: v));
+                  _attributeQuadrupletColumns =
+                      List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)
+                        ..add(AttributeTripletColumn(
+                          nameColumn: n,
+                          typeColumn: t,
+                          optionsColumn: o,
+                          artColumn: a,
+                        ));
                 });
                 _scheduleAutoSave();
               },
@@ -2056,6 +1523,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         ),
       ),
     );
+  }
+
+  void _updateQuadrupletColumn(int idx, AttributeTripletColumn updated) {
+    setState(() {
+      _attributeQuadrupletColumns =
+          List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)..[idx] = updated;
+    });
+    _scheduleAutoSave();
   }
 
   String _hierarchySubtitle() {
@@ -2094,17 +1569,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     addLevel(1, _level1);
     addLevel(2, _level2);
     addLevel(3, _level3);
-    if (_etageSpalte != null) used.add(_etageSpalte!);
     if (_anlageBauteilSpalte != null) used.add(_anlageBauteilSpalte!);
     return used;
   }
 
-  /// Alle reservierten Spalten inkl. Attribut-Paare (für freie Spalte suchen).
+  /// Alle reservierten Spalten inkl. Attribut-Vierergruppen (für freie Spalte suchen).
   List<int> _allReservedColumnIndices() {
     final used = _mappingColumnIndices();
-    for (final p in _attributeColumnPairs) {
-      used.add(p.nameColumn);
-      used.add(p.valueColumn);
+    for (final g in _attributeQuadrupletColumns) {
+      used.addAll(g.columnIndices);
     }
     return used;
   }
@@ -2249,9 +1722,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         mapCol(_level3.idColumn!, 'Ebene 3 ID');
       }
     }
-    if (_etageSpalte != null) {
-      mapCol(_etageSpalte!, 'Etage');
-    }
 
     for (final e in mappingByCol.entries) {
       if (e.value.length > 1) {
@@ -2259,24 +1729,20 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       }
     }
 
-    for (var i = 0; i < _attributeColumnPairs.length; i++) {
-      final p = _attributeColumnPairs[i];
-      final pairLabel = 'Attribut-Paar ${i + 1}';
-      if (p.nameColumn == p.valueColumn) {
-        conflicts.add(
-          'Spalte ${_columnLabel(p.nameColumn)}: Name und Wert im $pairLabel identisch',
-        );
+    for (var i = 0; i < _attributeQuadrupletColumns.length; i++) {
+      final g = _attributeQuadrupletColumns[i];
+      final groupLabel = 'Attribut ${i + 1}';
+      final cols = g.columnIndices;
+      if (cols.toSet().length != cols.length) {
+        conflicts.add('$groupLabel: Spalten innerhalb der Gruppe doppelt vergeben');
       }
-      for (final e in mappingByCol.entries) {
-        if (e.key == p.nameColumn) {
-          conflicts.add(
-            'Spalte ${_columnLabel(e.key)}: ${e.value.join(', ')} und $pairLabel (Name)',
-          );
-        }
-        if (e.key == p.valueColumn) {
-          conflicts.add(
-            'Spalte ${_columnLabel(e.key)}: ${e.value.join(', ')} und $pairLabel (Wert)',
-          );
+      for (final col in cols) {
+        for (final e in mappingByCol.entries) {
+          if (e.key == col) {
+            conflicts.add(
+              'Spalte ${_columnLabel(e.key)}: ${e.value.join(', ')} und $groupLabel',
+            );
+          }
         }
       }
     }
@@ -2594,15 +2060,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       // Alle SharedPreferences-Einträge für dieses Gebäude löschen
       final prefs = await SharedPreferences.getInstance();
       
-      // Globales Schema löschen
-      if (mounted) {
-        setState(() {
-          _globalSchema = [];
-        });
-        final globalSchemaKey = 'global_schema_${widget.projectId}';
-        await prefs.remove(globalSchemaKey);
-      }
-      
       // Disziplinen-Initialisierungs-Flag löschen
       final disciplinesInitializedKey = 'disciplines_initialized_${widget.buildingId}';
       await prefs.remove(disciplinesInitializedKey);
@@ -2641,7 +2098,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _showDisciplineSelection = true;
           _editingDisciplineIndex = null;
           _editingRevisionsobjekt = null;
-          _editingGlobal = false;
         });
       }
 

@@ -882,27 +882,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         ? Map<String, dynamic>.from(marker.params!)
         : <String, dynamic>{};
 
-    final floorLabel = widget.floor.name.trim().isNotEmpty
-        ? widget.floor.name.trim()
-        : (widget.floor.pdfName?.trim().isNotEmpty == true
-            ? widget.floor.pdfName!.trim()
-            : '');
-    if (floorLabel.isNotEmpty) {
-      final dbService = ref.read(databaseServiceProvider);
-      final projectId =
-          await dbService.getProjectIdByBuildingId(widget.building.id);
-      if (projectId != null) {
-        await ref.read(csvSettingsProvider(projectId).notifier).load();
-        final csvSettings = ref.read(csvSettingsProvider(projectId));
-        final existing = csvSettings.etageValueFromParams(params) ?? '';
-        if (existing.isEmpty) {
-          csvSettings.writeEtageToParams(params, floorLabel);
-        }
-      } else if ((params['Etage']?.toString().trim() ?? '').isEmpty) {
-        params['Etage'] = floorLabel;
-      }
-    }
-
     final newAnlage = Anlage(
       id: marker.id,
       name: marker.title,
@@ -979,9 +958,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   String? _resolveTypeHint(Anlage anlage) {
-    final settings = _cachedCsvSettings;
-    if (settings == null) return null;
-    return settings.anlageBauteilValueFromParams(anlage.params);
+    if (anlage.parentId != null && anlage.parentId!.isNotEmpty) {
+      return _cachedCsvSettings?.labelBauteil;
+    }
+    return null;
   }
 
   Widget _buildHierarchicalAnlageItem(

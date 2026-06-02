@@ -10,6 +10,7 @@ import '../database/database_service.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
 import '../utils/app_log.dart';
+import '../utils/csv_column_layout.dart';
 import '../utils/csv_utils.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
@@ -52,24 +53,16 @@ class Template {
   }
 
   /// Erstellt eine Template-Instanz anhand der projektbezogenen CSV-Einstellungen.
-  static Template fromCsvRowWithSettings(List<dynamic> row, Map<String, dynamic> settings) {
-    final gewerkIdx = settings['gewerkSpalte'] as int? ?? 0;
-    final revisObjIdx = settings['revisionsobjektSpalte'] as int? ??
-        settings['anlagentypSpalte'] as int? ??
-        1;
-    final bezIdx = settings['bezeichnungSpalte'] as int? ?? revisObjIdx;
-
-    final gewerk = _safeCellStatic(row, gewerkIdx);
-    final anlagentyp = _safeCellStatic(row, revisObjIdx);
-    final bezeichnung = bezIdx == revisObjIdx
-        ? anlagentyp
-        : _safeCellStatic(row, bezIdx);
-
+  static Template fromCsvRowWithSettings(
+    List<dynamic> row,
+    CsvSettings csvSettings,
+  ) {
+    final h = readTemplateHierarchyFromRow(row, csvSettings);
     return Template(
-      gewerk: gewerk,
-      anlageBauteil: 'a',
-      anlagentyp: anlagentyp,
-      bezeichnung: bezeichnung.isEmpty ? anlagentyp : bezeichnung,
+      gewerk: h.gewerk,
+      anlageBauteil: '',
+      anlagentyp: h.schemaItem,
+      bezeichnung: h.bezeichnung,
       parameter: null,
     );
   }
@@ -151,20 +144,29 @@ class TemplateService {
     return split.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
   }
 
-  /// Baut aus einer CSV-Zeile die Attribut-Definitionen (Dreiergruppen: Name, Typ, Optionen) ab [startColumn].
-  /// Liefert JSON für template.parameter mit "_schema": [{ key, label, type, options? }].
-  static String _buildParameterJsonFromAttributeTriplets(List<dynamic> row, int startColumn) {
+  /// Baut aus einer CSV-Zeile die Attribut-Definitionen (Vierergruppen) ab [startColumn].
+  static String _buildParameterJsonFromAttributeQuadruplets(List<dynamic> row, int startColumn) {
     final schema = <Map<String, dynamic>>[];
-    for (var i = startColumn; i + 2 < row.length; i += 3) {
+    for (var i = startColumn; i + 3 < row.length; i += 4) {
       final name = _safeCell(row, i);
       if (name.isEmpty) continue;
-      schema.add(_schemaEntryFromTripletCells(name, _safeCell(row, i + 1), _safeCell(row, i + 2)));
+      schema.add(_schemaEntryFromQuadrupletCells(
+        name,
+        _safeCell(row, i + 1),
+        _safeCell(row, i + 2),
+        _safeCell(row, i + 3),
+      ));
     }
     if (schema.isEmpty) return '';
     return json.encode({'_schema': schema});
   }
 
-  static Map<String, dynamic> _schemaEntryFromTripletCells(String name, String typeStr, String optionsStr) {
+  static Map<String, dynamic> _schemaEntryFromQuadrupletCells(
+    String name,
+    String typeStr,
+    String optionsStr,
+    String artStr,
+  ) {
     final normalizedType = typeStr.toLowerCase();
     String type = 'text';
     if (normalizedType == 'select' || normalizedType == 'dropdown') {
@@ -181,129 +183,71 @@ class TemplateService {
     };
     final options = _parseOptions(optionsStr);
     if (options.isNotEmpty) entry['options'] = options;
+    final art = artStr.trim();
+    if (art.isNotEmpty) entry['art'] = art;
     return entry;
   }
 
-  /// Baut Attribut-Schema aus explizit konfigurierten Spalten-Dreiergruppen.
-  static String _buildParameterJsonFromConfiguredTriplets(
+  /// Baut Attribut-Schema aus konfigurierten Spalten-Vierergruppen.
+  static String _buildParameterJsonFromConfiguredQuadruplets(
     List<dynamic> row,
-    List<AttributeTripletColumn> triplets,
+    List<AttributeTripletColumn> quadruplets,
   ) {
     final schema = <Map<String, dynamic>>[];
-    for (final triplet in triplets) {
-      final name = _safeCell(row, triplet.nameColumn);
+    for (final group in quadruplets) {
+      final name = _safeCell(row, group.nameColumn);
       if (name.isEmpty) continue;
-      schema.add(_schemaEntryFromTripletCells(
+      schema.add(_schemaEntryFromQuadrupletCells(
         name,
-        _safeCell(row, triplet.typeColumn),
-        _safeCell(row, triplet.optionsColumn),
+        _safeCell(row, group.typeColumn),
+        _safeCell(row, group.optionsColumn),
+        _safeCell(row, group.artColumn),
       ));
     }
     if (schema.isEmpty) return '';
     return json.encode({'_schema': schema});
   }
 
-  static List<AttributeTripletColumn> _parseAttributeTripletColumns(dynamic raw) {
-    if (raw is! List) return [];
-    final triplets = <AttributeTripletColumn>[];
-    for (final e in raw) {
-      if (e is Map<String, dynamic>) {
-        triplets.add(AttributeTripletColumn.fromJson(e));
-      } else if (e is Map) {
-        triplets.add(AttributeTripletColumn.fromJson(Map<String, dynamic>.from(e)));
-      }
-    }
-    return triplets;
-  }
-
-  static List<String> _parseStringList(dynamic raw) {
-    if (raw is! List) return [];
-    return raw.map((e) => e.toString()).toList();
-  }
-
-  /// Lädt die CSV-Einstellungen für Vorlagen (inkl. gespeicherter Import-Headerzeile).
-  static Future<Map<String, dynamic>> loadTemplateCsvSettings(String projectId) async {
-    return _loadTemplateCsvSettings(projectId);
-  }
-
-  /// Entfernt die gespeicherte Gewerkevorlagen-Import-Headerzeile.
+  /// Entfernt die gespeicherte CSV-Import-Headerzeile (gemeinsam mit Anlagen-Import).
   static Future<void> clearTemplateImportHeaderRow(String projectId) async {
-    await saveTemplateImportHeaderRow(projectId, const []);
-  }
-
-  /// Speichert die Header-Zeile der zuletzt importierten Gewerkevorlagen-CSV.
-  static Future<void> saveTemplateImportHeaderRow(
-    String projectId,
-    List<String> headerRow,
-  ) async {
+    final current = await CsvSettings.loadForProject(projectId);
     final prefs = await SharedPreferences.getInstance();
-    final key = 'template_csv_settings_$projectId';
-    final current = await _loadTemplateCsvSettings(projectId);
     await prefs.setString(
-      key,
-      json.encode({
-        ...current,
-        'importHeaderRow': headerRow,
-      }),
+      'csv_settings_$projectId',
+      json.encode(current.copyWith(importHeaderRow: const []).toJson()),
     );
   }
 
-  /// Lädt die CSV-Einstellungen für Vorlagen
-  static Future<Map<String, dynamic>> _loadTemplateCsvSettings(String projectId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'template_csv_settings_$projectId';
-    final settingsJson = prefs.getString(key);
-
-    const defaultGewerkSpalte = 0;
-    const defaultRevisionsobjektSpalte = 1;
-    const defaultErsteSpalteAttribut = 2;
-
-    if (settingsJson != null) {
-      try {
-        final settings = json.decode(settingsJson) as Map<String, dynamic>;
-        final gewerkSpalte = settings['revisionsfeldSpalte'] as int? ??
-            settings['gewerkSpalte'] as int? ??
-            defaultGewerkSpalte;
-        final revisionsobjektSpalte = settings['revisionsobjektSpalte'] as int? ??
-            settings['anlagentypSpalte'] as int? ??
-            defaultRevisionsobjektSpalte;
-        final attributeTripletColumns = _parseAttributeTripletColumns(settings['attributeTripletColumns']);
-        return {
-          'gewerkSpalte': gewerkSpalte,
-          'revisionsobjektSpalte': revisionsobjektSpalte,
-          'anlagentypSpalte': revisionsobjektSpalte,
-          'bezeichnungSpalte': settings['bezeichnungSpalte'] as int? ?? revisionsobjektSpalte,
-          'ersteSpalteAttributDefinitionen':
-              settings['ersteSpalteAttributDefinitionen'] as int? ?? defaultErsteSpalteAttribut,
-          'attributeTripletColumns': attributeTripletColumns,
-          'importHeaderRow': _parseStringList(settings['importHeaderRow']),
-        };
-      } catch (e) {
-        debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
-      }
+  static List<AttributeTripletColumn> _attributeQuadrupletsFromSettings(
+    CsvSettings csvSettings,
+  ) {
+    if (csvSettings.attributeTripletColumns.isNotEmpty) {
+      return csvSettings.attributeTripletColumns;
     }
+    return const [];
+  }
 
-    return {
-      'gewerkSpalte': defaultGewerkSpalte,
-      'revisionsobjektSpalte': defaultRevisionsobjektSpalte,
-      'anlagentypSpalte': defaultRevisionsobjektSpalte,
-      'bezeichnungSpalte': defaultRevisionsobjektSpalte,
-      'ersteSpalteAttributDefinitionen': defaultErsteSpalteAttribut,
-      'attributeTripletColumns': <AttributeTripletColumn>[],
-      'importHeaderRow': <String>[],
-    };
+  static int _firstAttributeScanColumn(CsvSettings csvSettings) {
+    final reserved = csvSettings.reservedImportColumnIndices();
+    var max = -1;
+    for (final i in reserved) {
+      if (i > max) max = i;
+    }
+    return max + 1;
   }
 
   static String _buildParameterJsonForRow(
     List<dynamic> row,
-    Map<String, dynamic> settings,
+    CsvSettings csvSettings,
   ) {
-    final triplets = settings['attributeTripletColumns'] as List<AttributeTripletColumn>? ?? [];
-    if (triplets.isNotEmpty) {
-      return _buildParameterJsonFromConfiguredTriplets(row, triplets);
+    final quadruplets = _attributeQuadrupletsFromSettings(csvSettings);
+    if (quadruplets.isNotEmpty) {
+      return _buildParameterJsonFromConfiguredQuadruplets(row, quadruplets);
     }
-    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 2;
-    return _buildParameterJsonFromAttributeTriplets(row, ersteSpalteAttribut);
+    return _buildParameterJsonFromAttributeQuadruplets(
+      row,
+      _firstAttributeScanColumn(csvSettings),
+    );
   }
 
   /// Lädt Vorlagen aus der Datenbank (projektbezogen)
@@ -358,27 +302,29 @@ class TemplateService {
     final bytes = await file.readAsBytes();
     final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
 
-    // Lade CSV-Einstellungen (für Delimiter-Sniffing brauchen wir den maxIndex)
-    final settings = await _loadTemplateCsvSettings(projectId);
-    final gewerkIdx = settings['gewerkSpalte'] as int? ?? 0;
-    final revisObjIdx = settings['revisionsobjektSpalte'] as int? ??
-        settings['anlagentypSpalte'] as int? ??
-        1;
-    final triplets = settings['attributeTripletColumns'] as List<AttributeTripletColumn>? ?? [];
-    final ersteSpalteAttribut = settings['ersteSpalteAttributDefinitionen'] as int? ?? 2;
+    final csvSettings = await CsvSettings.loadForProject(projectId);
+    final hierarchyCols = csvSettings.hierarchyNameColumnIndices();
+    final level1Idx = hierarchyCols.isNotEmpty ? hierarchyCols.first : 0;
+    final schemaLevel = csvSettings.schemaItemLevelNumber ?? 2;
+    final level2Idx = hierarchyCols.length >= schemaLevel
+        ? hierarchyCols[schemaLevel - 1]
+        : (hierarchyCols.length >= 2 ? hierarchyCols[1] : level1Idx);
 
-    int requiredMaxIndex = gewerkIdx > revisObjIdx ? gewerkIdx : revisObjIdx;
-    if (triplets.isNotEmpty) {
-      for (final t in triplets) {
-        if (t.nameColumn > requiredMaxIndex) requiredMaxIndex = t.nameColumn;
-        if (t.typeColumn > requiredMaxIndex) requiredMaxIndex = t.typeColumn;
-        if (t.optionsColumn > requiredMaxIndex) requiredMaxIndex = t.optionsColumn;
+    int requiredMaxIndex = level1Idx > level2Idx ? level1Idx : level2Idx;
+    for (final col in hierarchyCols) {
+      if (col > requiredMaxIndex) requiredMaxIndex = col;
+    }
+    for (final t in csvSettings.attributeTripletColumns) {
+      for (final col in t.columnIndices) {
+        if (col > requiredMaxIndex) requiredMaxIndex = col;
       }
-    } else if (ersteSpalteAttribut + 2 > requiredMaxIndex) {
-      requiredMaxIndex = ersteSpalteAttribut + 2;
+    }
+    final scanStart = _firstAttributeScanColumn(csvSettings);
+    if (requiredMaxIndex < scanStart + 3) {
+      requiredMaxIndex = scanStart + 3;
     }
 
-    // Delimiter-Sniffing anhand Revisionsfeld/Revisionsobjekt
+    // Delimiter-Sniffing anhand der konfigurierten Hierarchie-Spalten
     const candidates = [';', '\t', ','];
     String delimiter = _detectDelimiterWithSettings(csvString, requiredMaxIndex);
 
@@ -398,11 +344,13 @@ class TemplateService {
         for (var i = 1; i < sample.length; i++) {
           final row = sample[i];
           if (row.isEmpty) continue;
-          if (row.length <= gewerkIdx || row.length <= revisObjIdx) continue;
-          final gewerkVal = row[gewerkIdx].toString().trim();
-          if (gewerkVal.isEmpty) continue;
-          final revisObjVal = row[revisObjIdx].toString().trim();
-          if (revisObjVal.isNotEmpty) score++;
+          if (row.length <= level1Idx || row.length <= level2Idx) {
+            continue;
+          }
+          final level1Val = row[level1Idx].toString().trim();
+          if (level1Val.isEmpty) continue;
+          final level2Val = row[level2Idx].toString().trim();
+          if (level2Val.isNotEmpty) score++;
         }
 
         if (score > bestScore || (score == bestScore && d == ';' && bestDelimiter != ';')) {
@@ -424,9 +372,7 @@ class TemplateService {
 
     final importHeaderRow =
         csvData[0].map((cell) => cell.toString().trim()).toList();
-    await saveTemplateImportHeaderRow(projectId, importHeaderRow);
-
-    // columnIndices sind oben bereits geladen (für Delimiter-Erkennung)
+    await CsvSettings.saveImportHeaderRowForProject(projectId, importHeaderRow);
 
     // Lösche alle bestehenden Vorlagen für dieses Projekt
     await dbService.deleteTemplatesByProjectId(projectId);
@@ -437,8 +383,6 @@ class TemplateService {
     
     // Parse Datenzeilen und speichere direkt in DB
     int count = 0;
-    int validA = 0;
-    int validB = 0;
     int skipped = 0;
     for (var i = 1; i < csvData.length; i++) {
       final row = csvData[i];
@@ -446,20 +390,25 @@ class TemplateService {
         continue;
       }
       try {
-        final template = Template.fromCsvRowWithSettings(row, settings);
+        final template = Template.fromCsvRowWithSettings(
+          row,
+          csvSettings,
+        );
         if (template.gewerk.isNotEmpty && template.anlagentyp.isNotEmpty) {
-          final parameterJson = _buildParameterJsonForRow(row, settings);
+          final parameterJson = _buildParameterJsonForRow(
+            row,
+            csvSettings,
+          );
           await dbService.insertTemplate(
             projectId,
             template.gewerk,
-            'a',
+            '',
             template.anlagentyp,
             template.bezeichnung,
             parameterJson.isEmpty ? null : parameterJson,
           );
           
           uniqueGewerke.add(template.gewerk);
-          validA++;
           count++;
         } else {
           skipped++;
@@ -471,7 +420,7 @@ class TemplateService {
     }
 
     debugPrint(
-      'Vorlagen-Import abgeschlossen: projectId=$projectId, valid=$count, a=$validA, b=$validB, skipped=$skipped, delimiter=$delimiter, requiredMaxIndex=$requiredMaxIndex, uniqueGewerke=${uniqueGewerke.length}',
+      'Vorlagen-Import abgeschlossen: projectId=$projectId, valid=$count, skipped=$skipped, delimiter=$delimiter, requiredMaxIndex=$requiredMaxIndex, uniqueGewerke=${uniqueGewerke.length}',
     );
 
     // Optional: Disziplin-Schemata aus Vorlagen synchronisieren,
@@ -637,33 +586,13 @@ class TemplateService {
       return [];
     }
 
-    // Lade CSV-Einstellungen, falls projectId vorhanden
-    Map<String, dynamic>? settings;
-    if (projectId != null) {
-      settings = await _loadTemplateCsvSettings(projectId);
-    } else {
-      // Erste Zeile ist der Header
-      final headerRow = csvData[0].map((e) => e.toString().trim().toLowerCase()).toList();
-      int? gewerkIdx;
-      int? revisObjIdx;
-      for (var i = 0; i < headerRow.length; i++) {
-        final header = headerRow[i];
-        if (header.contains('revisionsfeld') || header == 'gewerk' || header.contains('gewerk')) {
-          gewerkIdx = i;
-        } else if (header.contains('revisionsobjekt') || header.contains('anlagentyp')) {
-          revisObjIdx = i;
-        }
-      }
-      settings = {
-        'gewerkSpalte': gewerkIdx ?? 0,
-        'revisionsobjektSpalte': revisObjIdx ?? 1,
-        'bezeichnungSpalte': revisObjIdx ?? 1,
-        'ersteSpalteAttributDefinitionen': (revisObjIdx ?? 1) + 1,
-        'attributeTripletColumns': <AttributeTripletColumn>[],
-      };
-    }
+    final headerRow =
+        csvData[0].map((e) => e.toString().trim()).toList();
+    final csvSettings = projectId != null
+        ? await CsvSettings.loadForProject(projectId)
+        : CsvSettings.defaults();
 
-    // Parse Datenzeilen (Parameter = _schema aus Dreiergruppen Name/Typ/Optionen)
+    // Parse Datenzeilen (Parameter = _schema aus CSV-Mapping)
     final templates = <Template>[];
     for (var i = 1; i < csvData.length; i++) {
       final row = csvData[i];
@@ -671,8 +600,14 @@ class TemplateService {
         continue;
       }
       try {
-        final parameterOverride = _buildParameterJsonForRow(row, settings);
-        final template = Template.fromCsvRowWithSettings(row, settings);
+        final parameterOverride = _buildParameterJsonForRow(
+          row,
+          csvSettings,
+        );
+        final template = Template.fromCsvRowWithSettings(
+          row,
+          csvSettings,
+        );
         final withParams = Template(
           gewerk: template.gewerk,
           anlageBauteil: template.anlageBauteil,

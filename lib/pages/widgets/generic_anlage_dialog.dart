@@ -133,10 +133,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   String _childLevelLabel = '';
   String? _dialogSubtitle;
   String? _dialogContextLine;
-  /// Gesperrte Verortung: Revisionsfeld und Revisionsobjekt (getrennte Werte).
+  /// Gesperrte Verortung: Hierarchie-Ebenen (Level-Nummer → Param-Key).
+  final Map<int, String> _lockedHierarchyParamKeys = {};
   final Map<String, String> _lockedLocationParams = {};
-  String? _revisionsfeldParamKey;
-  String? _revisionsobjektParamKey;
 
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
@@ -329,8 +328,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final csv = _csvSettings;
     if (csv == null) return;
 
-    _revisionsfeldParamKey = csv.resolveRevisionsfeldListGroupingParamKey();
-    _revisionsobjektParamKey = csv.resolveRevisionsobjektParamKey();
+    _lockedHierarchyParamKeys.clear();
+    for (var level = 1; level <= 3; level++) {
+      final key = csv.resolveHierarchyLevelParamKey(level);
+      if (key != null && key.isNotEmpty) {
+        _lockedHierarchyParamKeys[level] = key;
+      }
+    }
+    _schemaItemParamKey ??= csv.resolveSchemaItemParamKey();
 
     final hasFixedLocation = widget.initialRevisionsobjekt?.trim().isNotEmpty == true ||
         widget.parentId != null ||
@@ -339,50 +344,37 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     final sourceParams = widget.existingAnlage?.params ?? widget.initialParams ?? _params;
 
-    String? roValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+    final schemaLevel = csv.schemaItemLevelNumber ?? 2;
+    String? schemaValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
         ? widget.initialRevisionsobjekt!.trim()
-        : csv.revisionsobjektValueFromParams(sourceParams);
+        : csv.hierarchyLevelValueFromParams(sourceParams, schemaLevel);
 
-    String? rfValue;
-    if (_revisionsfeldParamKey != null && _revisionsfeldParamKey!.isNotEmpty) {
-      rfValue = widget.initialParams?[_revisionsfeldParamKey!]?.toString().trim();
-      rfValue ??= csv.revisionsfeldValueFromParams(sourceParams);
-    }
-    if ((rfValue == null || rfValue.isEmpty) && widget.initialParams != null) {
-      for (final entry in widget.initialParams!.entries) {
-        if (entry.key.startsWith('__')) continue;
-        final v = entry.value?.toString().trim() ?? '';
-        if (v.isNotEmpty && v != roValue) {
-          _revisionsfeldParamKey = entry.key;
-          rfValue = v;
-          break;
+    if (schemaValue == null || schemaValue.isEmpty) return;
+
+    final levelValues = <int, String>{schemaLevel: schemaValue};
+    if (!csv.level1IsDiscipline) {
+      final level1Value = csv.hierarchyLevelValueFromParams(sourceParams, 1);
+      if (level1Value != null && level1Value.isNotEmpty) {
+        levelValues[1] = level1Value;
+      } else if (widget.initialParams != null) {
+        for (final entry in widget.initialParams!.entries) {
+          if (entry.key.startsWith('__')) continue;
+          final v = entry.value?.toString().trim() ?? '';
+          if (v.isNotEmpty && v != schemaValue) {
+            levelValues[1] = v;
+            _lockedHierarchyParamKeys[1] = entry.key;
+            break;
+          }
         }
       }
     }
 
-    if (roValue == null || roValue.isEmpty) return;
+    csv.writeHierarchyPathToParams(_params, levelValues: levelValues);
 
-    csv.writeHierarchyLocationToParams(
-      _params,
-      revisionsfeld: rfValue,
-      revisionsobjekt: roValue,
-    );
-
-    for (final key in csv.allRevisionsobjektParamKeys()) {
-      if (csv.isLeafNameParamKey(key)) continue;
-      _lockedLocationParams[key] = roValue;
-      _setParamAndController(key, roValue);
-    }
-
-    if (rfValue != null && rfValue.isNotEmpty) {
-      for (final key in csv.allRevisionsfeldParamKeys()) {
-        _lockedLocationParams[key] = rfValue;
-        _setParamAndController(key, rfValue);
-      }
-      final rfKeys = csv.allRevisionsfeldParamKeys();
-      if ((_revisionsfeldParamKey == null || _revisionsfeldParamKey!.isEmpty) &&
-          rfKeys.isNotEmpty) {
-        _revisionsfeldParamKey = rfKeys.first;
+    for (final entry in levelValues.entries) {
+      for (final key in csv.allParamKeysForHierarchyLevel(entry.key)) {
+        _lockedLocationParams[key] = entry.value;
+        _setParamAndController(key, entry.value);
       }
     }
 
@@ -391,16 +383,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final label = (field['label'] ?? '').toString();
       if (key.isEmpty) continue;
       if (_isSchemaItemField(key, label)) {
-        _lockedLocationParams[key] = roValue;
-        _setParamAndController(key, roValue);
-      } else if (rfValue != null &&
-          rfValue.isNotEmpty &&
-          _revisionsfeldParamKey != null &&
-          (key == _revisionsfeldParamKey ||
-              label.trim().toLowerCase() ==
-                  _revisionsfeldParamKey!.trim().toLowerCase())) {
-        _lockedLocationParams[key] = rfValue;
-        _setParamAndController(key, rfValue);
+        _lockedLocationParams[key] = schemaValue;
+        _setParamAndController(key, schemaValue);
       }
     }
   }
@@ -442,16 +426,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   void _applyLockedLocationParams() {
     final csv = _csvSettings;
     if (csv != null && _lockedLocationParams.isNotEmpty) {
-      final ro = (csv.revisionsobjektValueFromParams(_lockedLocationParams) ??
-              _lockedLocationParams.values.first)
-          .trim();
-      final rf = csv.revisionsfeldValueFromParams(_lockedLocationParams);
-      if (ro.isNotEmpty) {
-        csv.writeHierarchyLocationToParams(
-          _params,
-          revisionsfeld: rf,
-          revisionsobjekt: ro,
-        );
+      final levelValues = <int, String>{};
+      for (var level = 1; level <= 3; level++) {
+        final v = csv.hierarchyLevelValueFromParams(_lockedLocationParams, level);
+        if (v != null && v.isNotEmpty) levelValues[level] = v;
+      }
+      if (levelValues.isNotEmpty) {
+        csv.writeHierarchyPathToParams(_params, levelValues: levelValues);
       }
     }
     for (final entry in _lockedLocationParams.entries) {
@@ -466,24 +447,15 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final csv = _csvSettings;
     if (csv == null) return;
 
-    final level1Key = csv.labelGewerk.trim();
-    final level2Key = csv.labelAnlage.trim();
-
-    final level1Value = (csv.revisionsfeldValueFromParams(_params) ??
-            _currentDiscipline.label)
-        .trim();
-    final level2Value =
-        (csv.revisionsobjektValueFromParams(_params) ?? '').trim();
-
-    if (level1Key.isNotEmpty &&
-        level1Value.isNotEmpty &&
-        !csv.isLeafNameParamKey(level1Key)) {
-      _params[level1Key] = level1Value;
-    }
-    if (level2Key.isNotEmpty &&
-        level2Value.isNotEmpty &&
-        !csv.isLeafNameParamKey(level2Key)) {
-      _params[level2Key] = level2Value;
+    for (var level = 1; level <= 3; level++) {
+      final key = csv.resolveHierarchyLevelParamKey(level);
+      if (key == null || key.isEmpty || csv.isLeafNameParamKey(key)) continue;
+      final value = csv.hierarchyLevelValueFromParams(_params, level);
+      if (value != null && value.isNotEmpty) {
+        _params[key] = value;
+      } else if (level == 1 && csv.level1IsDiscipline) {
+        _params[key] = _currentDiscipline.label;
+      }
     }
   }
 
@@ -492,23 +464,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     if (csv == null) return const [];
 
     final widgets = <Widget>[];
-    final level1Key = csv.labelGewerk.trim();
-    final level2Key = csv.labelAnlage.trim();
-
-    String readValue(String key, String fallback) {
-      final fromParams = _params[key]?.toString().trim() ?? '';
-      if (fromParams.isNotEmpty) return fromParams;
-      return fallback;
-    }
-
-    final level1Value = readValue(
-      level1Key,
-      (csv.revisionsfeldValueFromParams(_params) ?? _currentDiscipline.label).trim(),
-    );
-    final level2Value = readValue(
-      level2Key,
-      (csv.revisionsobjektValueFromParams(_params) ?? '').trim(),
-    );
 
     Widget buildReadonlyField(String label, String value) {
       return Container(
@@ -534,11 +489,20 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       );
     }
 
-    if (level1Key.isNotEmpty && level1Value.isNotEmpty) {
-      widgets.add(buildReadonlyField(level1Key, level1Value));
-    }
-    if (level2Key.isNotEmpty && level2Value.isNotEmpty) {
-      widgets.add(buildReadonlyField(level2Key, level2Value));
+    for (var i = 0; i < csv.enabledLevelsOrdered.length; i++) {
+      final levelNum = csv.levelNumberAtEnabledIndex(i);
+      if (levelNum == 1 && csv.level1IsDiscipline) continue;
+      final schemaLevel = csv.schemaItemLevelNumber;
+      if (schemaLevel != null && levelNum == schemaLevel) continue;
+      final label = csv.hierarchyLevelHeaderLabel(levelNum);
+      if (label.isEmpty) continue;
+      var value = csv.hierarchyLevelValueFromParams(_params, levelNum) ?? '';
+      if (value.isEmpty && levelNum == 1) {
+        value = _currentDiscipline.label;
+      }
+      if (value.isNotEmpty) {
+        widgets.add(buildReadonlyField(label, value));
+      }
     }
     return widgets;
   }
@@ -550,9 +514,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final keys = <String>{
       if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty)
         _schemaItemParamKey!.trim(),
-      if (_revisionsobjektParamKey != null && _revisionsobjektParamKey!.trim().isNotEmpty)
-        _revisionsobjektParamKey!.trim(),
     };
+    final schemaLevel = _csvSettings?.schemaItemLevelNumber;
+    if (schemaLevel != null) {
+      final schemaKey = _csvSettings!.resolveHierarchyLevelParamKey(schemaLevel);
+      if (schemaKey != null && schemaKey.isNotEmpty) keys.add(schemaKey);
+    }
 
     for (final field in _currentDiscipline.schema) {
       final key = (field['key'] ?? '').toString();
@@ -563,21 +530,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
     }
 
+    final level1Key = _lockedHierarchyParamKeys[1];
     for (final key in keys) {
-      if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) continue;
+      if (level1Key != null && key == level1Key) continue;
       if (_isLeafNameField(key)) continue;
       _setParamAndController(key, ro);
-    }
-
-    // Neue Blatt-Zeile (kein Kind): optional A/B-Kennung setzen
-    if (widget.parentId == null && _csvSettings?.anlageBauteilSpalte != null) {
-      final abKey = _csvSettings!.resolveAnlageBauteilParamKey();
-      if (abKey != null && abKey.isNotEmpty) {
-        _setParamAndController(
-          abKey,
-          _csvSettings!.defaultAnlageKuerzelToken(),
-        );
-      }
     }
   }
 
@@ -600,8 +557,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   bool _isSchemaItemField(String key, String label) {
     if (_isLeafNameField(key)) return false;
-    if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) return false;
-    final paramKey = _revisionsobjektParamKey ?? _schemaItemParamKey?.trim();
+    final schemaLevel = _csvSettings?.schemaItemLevelNumber;
+    if (schemaLevel != null) {
+      final levelKey = _csvSettings!.resolveHierarchyLevelParamKey(schemaLevel);
+      if (levelKey != null && key == levelKey) return false;
+    }
+    final paramKey = _schemaItemParamKey?.trim();
     if (paramKey == null || paramKey.isEmpty) return false;
     if (key == paramKey) return true;
     return label.trim().toLowerCase() == paramKey.toLowerCase();
@@ -692,25 +653,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       if (widget.existingAnlage == null &&
           (widget.initialRevisionsobjekt == null ||
               widget.initialRevisionsobjekt!.trim().isEmpty)) {
-        final gewerkKey = csvSettings.resolveGewerkGroupingParamKey();
-        final abKey = csvSettings.resolveAnlageBauteilParamKey();
+        final gewerkKey = csvSettings.resolveHierarchyLevelParamKey(1);
         for (var field in _currentDiscipline.schema) {
           final fieldKey = (field['key'] ?? '').toString();
           if (fieldKey.isEmpty) continue;
 
-          if (fieldKey == gewerkKey ||
-              fieldKey.toLowerCase() == gewerkKey.toLowerCase()) {
+          if (gewerkKey != null &&
+              csvSettings.level1IsDiscipline &&
+              (fieldKey == gewerkKey ||
+                  fieldKey.toLowerCase() == gewerkKey.toLowerCase())) {
             _setParamAndController(fieldKey, _currentDiscipline.label);
-          }
-
-          if (abKey != null &&
-              abKey.isNotEmpty &&
-              (fieldKey == abKey ||
-                  fieldKey.toLowerCase() == abKey.toLowerCase())) {
-            final value = widget.parentId != null
-                ? csvSettings.defaultBauteilKuerzelToken()
-                : csvSettings.defaultAnlageKuerzelToken();
-            _setParamAndController(fieldKey, value);
           }
         }
       }

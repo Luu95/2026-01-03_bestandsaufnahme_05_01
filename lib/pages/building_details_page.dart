@@ -370,36 +370,13 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       int skippedCount = 0;
       int errorCount = 0;
       final List<String> failedRows = [];
-      bool floorsAdded = false;
       // Einmalig alle lfdNummern laden (statt pro Zeile die komplette Anlagenliste)
       final lfdToId = await dbService.getLfdNummerToIdMap(_building.id);
-      final floorIdByName = <String, String>{
-        for (final f in _building.floors)
-          f.name.toLowerCase(): f.id,
-        for (final f in _building.floors)
-          if (f.pdfName != null && f.pdfName!.isNotEmpty)
-            f.pdfName!.toLowerCase(): f.id,
-      };
       final pendingInserts = <Anlage>[];
 
       for (final anlage in anlagen) {
           try {
-            // Etage auflösen/erstellen falls in CSV angegeben
-            String resolvedFloorId = anlage.floorId;
-            final etageName = importCsvSettings.etageValueFromParams(anlage.params);
-            if (etageName != null && etageName.isNotEmpty) {
-              final etageKey = etageName.toLowerCase();
-              var floorId = floorIdByName[etageKey];
-              if (floorId == null) {
-                final newId = 'floor_${DateTime.now().millisecondsSinceEpoch}_${etageName.replaceAll(' ', '_')}';
-                final floor = FloorPlan(id: newId, name: etageName);
-                _building.floors.add(floor);
-                floorIdByName[etageKey] = newId;
-                floorsAdded = true;
-                floorId = newId;
-              }
-              resolvedFloorId = floorId;
-            }
+            final resolvedFloorId = anlage.floorId;
 
             // Prüfe, ob eine lfdNummer in den Params vorhanden ist
             final lfdNummer = anlage.params['lfdNummer']?.toString().trim();
@@ -467,11 +444,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             failedRows.add('Batch-Speichern: $e');
             debugPrint('Fehler beim Batch-Speichern: $e');
           }
-        }
-
-        // Falls neue Etagen hinzugefügt wurden, Gebäude persistieren
-        if (floorsAdded) {
-          await ref.read(projectsProvider.notifier).updateBuilding(_building);
         }
 
         debugPrint('CSV-Import: $savedCount importiert, $skippedCount übersprungen, $errorCount Fehler. Fehlgeschlagen: $failedRows');

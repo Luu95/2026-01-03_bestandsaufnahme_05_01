@@ -17,8 +17,8 @@ import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../database/database_service.dart';
 import '../providers/csv_settings_provider.dart';
-import 'template_service.dart';
 import '../utils/app_log.dart';
+import '../utils/csv_column_layout.dart';
 import '../utils/csv_utils.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
@@ -61,29 +61,30 @@ class ExportBuiltFile {
   });
 }
 
-class _AttTripletSlotIndices {
+class _AttQuadrupletSlotIndices {
   final int nameColumn;
   final int typeColumn;
-  final int wertColumn;
+  final int optionsColumn;
+  final int artColumn;
 
-  const _AttTripletSlotIndices({
+  const _AttQuadrupletSlotIndices({
     required this.nameColumn,
     required this.typeColumn,
-    required this.wertColumn,
+    required this.optionsColumn,
+    required this.artColumn,
   });
 }
 
-/// Layout wie Gewerkevorlagen-CSV: Revisionsfeld, Revisionsobjekt, ATT1…ATTn (+ TYPE, WERT).
+/// Layout wie Vorlagen-CSV: Hierarchie-Spalten (pro aktiver Ebene), dann ATT1…ATTn (+ TYPE, WERT).
 class _TemplateStyleExportLayout {
   final List<String> headers;
-  final int revisionsfeldColumn;
-  final int revisionsobjektColumn;
-  final List<_AttTripletSlotIndices> attSlots;
+  /// Spaltenindizes je aktiver Hierarchie-Ebene (Reihenfolge = Ebene 1…n).
+  final List<int> hierarchyColumnIndices;
+  final List<_AttQuadrupletSlotIndices> attSlots;
 
   const _TemplateStyleExportLayout({
     required this.headers,
-    required this.revisionsfeldColumn,
-    required this.revisionsobjektColumn,
+    required this.hierarchyColumnIndices,
     required this.attSlots,
   });
 }
@@ -222,21 +223,31 @@ class CsvService {
   static List<String> _buildRowFromImportStructure({
     required Anlage anlage,
     required List<String> headerRow,
-    required List<AttributeColumnPair> attributePairs,
+    required List<AttributeTripletColumn> attributeQuadruplets,
+    List<AttributeColumnPair> attributePairs = const [],
     required List<String?> fotoLabels,
     required List<String> fotoNumbers,
   }) {
-    final row = List<String>.filled(headerRow.length, '', growable: true);
+    var rowLength = headerRow.length;
+    for (final q in attributeQuadruplets) {
+      for (final col in q.columnIndices) {
+        if (col >= rowLength) rowLength = col + 1;
+      }
+    }
+    final row = List<String>.filled(rowLength, '', growable: true);
     final headerSet = headerRow.toSet();
     final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
     final attributeIndices = <int>{};
+    for (final q in attributeQuadruplets) {
+      attributeIndices.addAll(q.columnIndices);
+    }
     for (final p in attributePairs) {
       attributeIndices.add(p.nameColumn);
       attributeIndices.add(p.valueColumn);
     }
 
-    for (int i = 0; i < headerRow.length; i++) {
+    for (int i = 0; i < row.length && i < headerRow.length; i++) {
       if (attributeIndices.contains(i)) continue;
       final label = headerRow[i];
       if (useFotoColumns && _isFotoLabel(label, fotoLabels)) {
@@ -250,6 +261,14 @@ class CsvService {
 
     final dynamicAttrs = _collectDynamicAttributeEntries(anlage, headerSet, fotoLabels);
     int dynIndex = 0;
+    for (final q in attributeQuadruplets) {
+      if (q.nameColumn < 0 || q.nameColumn >= row.length) continue;
+      if (q.artColumn < 0 || q.artColumn >= row.length) continue;
+      if (dynIndex >= dynamicAttrs.length) break;
+      final entry = dynamicAttrs[dynIndex++];
+      row[q.nameColumn] = entry.key;
+      row[q.artColumn] = _paramValueToCsvCell(entry.value);
+    }
     for (final pair in attributePairs) {
       if (pair.nameColumn < 0 || pair.nameColumn >= row.length) continue;
       if (pair.valueColumn < 0 || pair.valueColumn >= row.length) continue;
@@ -273,10 +292,12 @@ class CsvService {
   }
 
   /// Import-CSV-Struktur nur, wenn Header gespeichert sind und noch importierte Zeilen existieren.
+  /// Bei konfigurierten Attribut-Vierergruppen wird das ATT/TYPE/OPTIONS/ART-Layout genutzt.
   static bool shouldExportWithAnlagenImportStructure({
     required CsvSettings csvSettings,
     required List<Anlage> anlagen,
   }) {
+    if (csvSettings.attributeTripletColumns.isNotEmpty) return false;
     if (!csvSettings.hasAnlagenCsvImport) return false;
     return anlagen.any((a) {
       final lfd = a.params['lfdNummer']?.toString().trim() ?? '';
@@ -300,6 +321,37 @@ class CsvService {
   }
 
   /// Felder für eine Zeile: zuerst manuelle globale Attribute, dann Gewerk/RO-Schema.
+  /// Datenzeile nur über konfigurierte Spaltennummern (kein Header-Matching).
+  static List<String> _buildColumnMappedExportRow({
+    required Anlage anlage,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplines,
+    required List<Map<String, dynamic>> globalSchema,
+    required int targetLength,
+  }) {
+    final discipline = _disciplineForAnlage(anlage, disciplines);
+    final schemaFields = _orderedExportSchemaFields(
+      anlage: anlage,
+      discipline: discipline,
+      globalSchema: globalSchema,
+      csvSettings: csvSettings,
+    );
+    final row = buildAnlageExportRow(
+      anlage: anlage,
+      csvSettings: csvSettings,
+      schemaFields: schemaFields,
+    );
+    if (row.length >= targetLength) {
+      return List<String>.from(
+        row.length == targetLength ? row : row.sublist(0, targetLength),
+      );
+    }
+    return List<String>.from([
+      ...row,
+      ...List.filled(targetLength - row.length, ''),
+    ]);
+  }
+
   static List<Map<String, dynamic>> _orderedExportSchemaFields({
     required Anlage anlage,
     required Disziplin discipline,
@@ -312,6 +364,7 @@ class CsvService {
     void addField(Map<String, dynamic> field) {
       final key = _schemaFieldParamKey(field);
       if (key.isEmpty || seen.contains(key)) return;
+      if (isInternalExportParamKey(key)) return;
       seen.add(key);
       result.add(field);
     }
@@ -349,8 +402,14 @@ class CsvService {
     return maxSlots;
   }
 
-  /// Import-Header für Export: ATTn_OPTIONS → ATTn_WERT (Werte statt Optionslisten).
+  /// Import-Header für Export. Legacy (ohne ART): ATTn_OPTIONS → ATTn_WERT.
   static List<String> _templateHeadersForExport(List<String> importHeaders) {
+    final hasArtColumn = importHeaders.any(
+      (h) => h.trim().toUpperCase().endsWith('_ART'),
+    );
+    if (hasArtColumn) {
+      return List<String>.from(importHeaders);
+    }
     return importHeaders.map((raw) {
       final h = raw.trim();
       final upper = h.toUpperCase();
@@ -361,81 +420,210 @@ class CsvService {
     }).toList();
   }
 
-  static int _findHeaderIndex(List<String> headers, List<String> patterns) {
-    for (var i = 0; i < headers.length; i++) {
-      final h = headers[i].trim().toLowerCase();
-      for (final p in patterns) {
-        if (h == p || h.contains(p)) return i;
+  static void _setHeaderLabelIfEmpty(List<String> headers, int index, String label) {
+    if (index < 0) return;
+    while (headers.length <= index) {
+      headers.add('');
+    }
+    if (headers[index].trim().isEmpty) {
+      headers[index] = label;
+    }
+  }
+
+  static void _ensureHeaderRowFitsColumns(
+    List<String> headers,
+    List<_AttQuadrupletSlotIndices> slots,
+    CsvSettings csvSettings,
+  ) {
+    var maxIdx = 0;
+    for (final slot in slots) {
+      for (final col in [
+        slot.nameColumn,
+        slot.typeColumn,
+        slot.optionsColumn,
+        slot.artColumn,
+      ]) {
+        if (col > maxIdx) maxIdx = col;
       }
     }
-    return -1;
+    for (var i = 0; i < csvSettings.enabledLevelsOrdered.length; i++) {
+      final config = csvSettings.enabledLevelsOrdered[i];
+      if (config.nameColumn > maxIdx) maxIdx = config.nameColumn;
+      if (config.useIdColumn &&
+          config.idColumn != null &&
+          config.idColumn! > maxIdx) {
+        maxIdx = config.idColumn!;
+      }
+    }
+    while (headers.length <= maxIdx) {
+      headers.add('');
+    }
   }
 
-  static List<_AttTripletSlotIndices> _parseAttTripletSlotsFromHeaders(
-    List<String> headers,
+  static List<_AttQuadrupletSlotIndices> _slotsFromQuadrupletSettings(
+    List<AttributeTripletColumn> quadruplets,
   ) {
-    final namePattern = RegExp(r'^att(\d+)$', caseSensitive: false);
-    final byNumber = <int, _AttTripletSlotIndices>{};
+    return quadruplets
+        .map(
+          (q) => _AttQuadrupletSlotIndices(
+            nameColumn: q.nameColumn,
+            typeColumn: q.typeColumn,
+            optionsColumn: q.optionsColumn,
+            artColumn: q.artColumn,
+          ),
+        )
+        .toList();
+  }
 
-    for (var i = 0; i < headers.length; i++) {
-      final match = namePattern.firstMatch(headers[i].trim());
-      if (match == null) continue;
-      final n = int.tryParse(match.group(1) ?? '');
-      if (n == null) continue;
+  static _TemplateStyleExportLayout _layoutFromConfiguredQuadruplets({
+    required CsvSettings csvSettings,
+    required int minAttSlots,
+  }) {
+    var slots = _slotsFromQuadrupletSettings(csvSettings.attributeTripletColumns);
 
-      final typeIdx = headers.indexWhere(
-        (h) => h.trim().toUpperCase() == 'ATT${n}_TYPE',
-      );
-      var wertIdx = headers.indexWhere((h) {
-        final u = h.trim().toUpperCase();
-        return u == 'ATT${n}_WERT' ||
-            u == 'ATT${n}_VALUE' ||
-            u == 'ATT${n}_OPTIONS';
-      });
-      if (typeIdx < 0 || wertIdx < 0) continue;
+    int nextFreeAfterSlots() {
+      var maxIdx = 0;
+      for (final slot in slots) {
+        for (final col in [
+          slot.nameColumn,
+          slot.typeColumn,
+          slot.optionsColumn,
+          slot.artColumn,
+        ]) {
+          if (col > maxIdx) maxIdx = col;
+        }
+      }
+      for (final level in csvSettings.enabledLevelsOrdered) {
+        if (level.nameColumn > maxIdx) maxIdx = level.nameColumn;
+        if (level.useIdColumn &&
+            level.idColumn != null &&
+            level.idColumn! > maxIdx) {
+          maxIdx = level.idColumn!;
+        }
+      }
+      return maxIdx + 1;
+    }
 
-      byNumber[n] = _AttTripletSlotIndices(
-        nameColumn: i,
-        typeColumn: typeIdx,
-        wertColumn: wertIdx,
+    while (slots.length < minAttSlots) {
+      final base = nextFreeAfterSlots();
+      slots.add(
+        _AttQuadrupletSlotIndices(
+          nameColumn: base,
+          typeColumn: base + 1,
+          optionsColumn: base + 2,
+          artColumn: base + 3,
+        ),
       );
     }
 
-    final sorted = byNumber.keys.toList()..sort();
-    return [for (final n in sorted) byNumber[n]!];
+    final working = csvSettings.importHeaderRow.isNotEmpty
+        ? _templateHeadersForExport(csvSettings.importHeaderRow)
+        : <String>[];
+
+    _ensureHeaderRowFitsColumns(working, slots, csvSettings);
+
+    for (var i = 0; i < slots.length; i++) {
+      final slot = slots[i];
+      final n = i + 1;
+      _setHeaderLabelIfEmpty(working, slot.nameColumn, 'ATT$n');
+      _setHeaderLabelIfEmpty(working, slot.typeColumn, 'ATT${n}_TYPE');
+      _setHeaderLabelIfEmpty(working, slot.optionsColumn, 'ATT${n}_OPTIONS');
+      _setHeaderLabelIfEmpty(working, slot.artColumn, 'ATT${n}_ART');
+    }
+
+    final hierarchyCols = <int>[];
+    for (var i = 0; i < csvSettings.enabledLevelsOrdered.length; i++) {
+      final levelNum = csvSettings.levelNumberAtEnabledIndex(i);
+      final config = csvSettings.enabledLevelsOrdered[i];
+      final col = _resolveHierarchyColumnIndex(
+        headers: working,
+        csvSettings: csvSettings,
+        level: levelNum,
+        fallbackIndex: config.nameColumn,
+      );
+      hierarchyCols.add(col >= 0 ? col : config.nameColumn);
+    }
+
+    return _TemplateStyleExportLayout(
+      headers: working,
+      hierarchyColumnIndices: hierarchyCols,
+      attSlots: slots,
+    );
   }
 
-  static List<String> _buildDefaultTemplateExportHeaders(int attSlotCount) {
-    final headers = <String>['Revisionsfeld', 'Revisionsobjekt'];
+  static List<_AttQuadrupletSlotIndices> _attSlotsFromSettings(
+    CsvSettings csvSettings,
+  ) {
+    return _slotsFromQuadrupletSettings(csvSettings.attributeTripletColumns);
+  }
+
+  static List<String> _buildDefaultTemplateExportHeaders(
+    int attSlotCount,
+    CsvSettings csvSettings,
+  ) {
+    final headers = <String>[];
+    final l1 = csvSettings.hierarchyLevelHeaderLabel(1);
+    final l2 = csvSettings.hierarchyLevelHeaderLabel(2);
+    if (l1.isNotEmpty) headers.add(l1);
+    if (l2.isNotEmpty) headers.add(l2);
+    if (headers.isEmpty) {
+      headers.addAll([
+        csvSettings.labelGewerk,
+        csvSettings.labelAnlage,
+      ]);
+    }
+    if (csvSettings.level3.enabled) {
+      final l3 = csvSettings.hierarchyLevelHeaderLabel(3);
+      if (l3.isNotEmpty) headers.add(l3);
+    }
     for (var n = 1; n <= attSlotCount; n++) {
-      headers.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
+      headers.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_OPTIONS', 'ATT${n}_ART']);
     }
     return headers;
   }
 
+  static int _resolveHierarchyColumnIndex({
+    required List<String> headers,
+    required CsvSettings csvSettings,
+    required int level,
+    required int fallbackIndex,
+  }) {
+    final fromLabel = csvSettings.findHierarchyColumnInHeaders(headers, level);
+    if (fromLabel >= 0) return fromLabel;
+
+    if (fallbackIndex >= 0 && fallbackIndex < headers.length) {
+      return fallbackIndex;
+    }
+    return -1;
+  }
+
   static _TemplateStyleExportLayout _layoutFromHeaders(
     List<String> headers,
-    int minAttSlots,
-  ) {
-    var working = List<String>.from(headers);
-    var slots = _parseAttTripletSlotsFromHeaders(working);
-
-    while (slots.length < minAttSlots) {
-      final n = slots.length + 1;
-      working.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
-      slots = _parseAttTripletSlotsFromHeaders(working);
+    int minAttSlots, {
+    required CsvSettings csvSettings,
+  }) {
+    final working = List<String>.from(headers);
+    var slots = _attSlotsFromSettings(csvSettings);
+    if (slots.length < minAttSlots && slots.isNotEmpty) {
+      slots = List<_AttQuadrupletSlotIndices>.from(slots);
     }
 
-    final rfCol = _findHeaderIndex(
-      working,
-      ['revisionsfeld', 'gewerk'],
-    );
-    final roCol = _findHeaderIndex(working, ['revisionsobjekt', 'anlagentyp']);
+    final hierarchyCols = <int>[];
+    for (var i = 0; i < csvSettings.enabledLevelsOrdered.length; i++) {
+      final levelNum = csvSettings.levelNumberAtEnabledIndex(i);
+      final config = csvSettings.enabledLevelsOrdered[i];
+      final col = _resolveHierarchyColumnIndex(
+        headers: working,
+        csvSettings: csvSettings,
+        level: levelNum,
+        fallbackIndex: config.nameColumn,
+      );
+      hierarchyCols.add(col >= 0 ? col : config.nameColumn);
+    }
 
     return _TemplateStyleExportLayout(
       headers: working,
-      revisionsfeldColumn: rfCol >= 0 ? rfCol : 0,
-      revisionsobjektColumn: roCol >= 0 ? roCol : 1,
+      hierarchyColumnIndices: hierarchyCols,
       attSlots: slots,
     );
   }
@@ -457,20 +645,27 @@ class CsvService {
       csvSettings: csvSettings,
     );
 
-    if (projectId != null && projectId.isNotEmpty) {
-      final templateSettings =
-          await TemplateService.loadTemplateCsvSettings(projectId);
-      final savedHeader =
-          (templateSettings['importHeaderRow'] as List?)?.cast<String>() ?? [];
-      if (savedHeader.isNotEmpty) {
-        final exportHeaders = _templateHeadersForExport(savedHeader);
-        return _layoutFromHeaders(exportHeaders, minAttSlots);
-      }
+    if (csvSettings.attributeTripletColumns.isNotEmpty) {
+      return _layoutFromConfiguredQuadruplets(
+        csvSettings: csvSettings,
+        minAttSlots: minAttSlots,
+      );
+    }
+
+    if (csvSettings.importHeaderRow.isNotEmpty) {
+      final exportHeaders = _templateHeadersForExport(csvSettings.importHeaderRow);
+      final parsed = _layoutFromHeaders(
+        exportHeaders,
+        minAttSlots,
+        csvSettings: csvSettings,
+      );
+      if (parsed.attSlots.isNotEmpty) return parsed;
     }
 
     return _layoutFromHeaders(
-      _buildDefaultTemplateExportHeaders(minAttSlots),
+      _buildDefaultTemplateExportHeaders(minAttSlots, csvSettings),
       minAttSlots,
+      csvSettings: csvSettings,
     );
   }
 
@@ -484,26 +679,29 @@ class CsvService {
     final row = List<String>.filled(layout.headers.length, '', growable: true);
     final discipline = _disciplineForAnlage(anlage, disciplines);
 
-    if (layout.revisionsfeldColumn >= 0 &&
-        layout.revisionsfeldColumn < row.length) {
-      if (csvSettings.level1IsDiscipline) {
-        row[layout.revisionsfeldColumn] = anlage.discipline.label;
+    for (var i = 0; i < layout.hierarchyColumnIndices.length; i++) {
+      final col = layout.hierarchyColumnIndices[i];
+      if (col < 0 || col >= row.length) continue;
+      final levelNum = csvSettings.levelNumberAtEnabledIndex(i);
+      if (levelNum == 1 && csvSettings.level1IsDiscipline) {
+        row[col] = anlage.discipline.label;
       } else {
-        row[layout.revisionsfeldColumn] = _paramValueToCsvCell(
-          csvSettings.revisionsfeldValueFromParams(anlage.params) ??
-              csvSettings.readParamValue(
-                anlage.params,
-                csvSettings.resolveGewerkGroupingParamKey(),
-              ),
+        final value = csvSettings.hierarchyLevelValueFromParams(
+              anlage.params,
+              levelNum,
+            ) ??
+            (levelNum == csvSettings.schemaItemLevelNumber
+                ? csvSettings.schemaItemValueFromParams(anlage.params)
+                : null);
+        row[col] = _paramValueToCsvCell(
+          value ?? (levelNum == (csvSettings.leafLevel != null
+                  ? csvSettings.levelNumberAtEnabledIndex(
+                      csvSettings.enabledLevelsOrdered.length - 1)
+                  : levelNum)
+              ? anlage.name
+              : ''),
         );
       }
-    }
-
-    if (layout.revisionsobjektColumn >= 0 &&
-        layout.revisionsobjektColumn < row.length) {
-      row[layout.revisionsobjektColumn] = _paramValueToCsvCell(
-        csvSettings.schemaItemValueFromParams(anlage.params) ?? anlage.name,
-      );
     }
 
     final fields = _orderedExportSchemaFields(
@@ -513,21 +711,31 @@ class CsvService {
       csvSettings: csvSettings,
     );
 
-    for (var i = 0; i < layout.attSlots.length && i < fields.length; i++) {
+    for (var i = 0; i < layout.attSlots.length; i++) {
       final slot = layout.attSlots[i];
-      final field = fields[i];
+      final field = i < fields.length ? fields[i] : null;
+      if (field == null) continue;
+
       final paramKey = _schemaFieldParamKey(field);
+      final label = _schemaFieldLabel(field);
       if (slot.nameColumn >= 0 && slot.nameColumn < row.length) {
-        row[slot.nameColumn] = _schemaFieldLabel(field);
+        row[slot.nameColumn] = label;
       }
       if (slot.typeColumn >= 0 && slot.typeColumn < row.length) {
         row[slot.typeColumn] = _exportTypeLabelForField(field);
       }
-      if (slot.wertColumn >= 0 && slot.wertColumn < row.length) {
-        row[slot.wertColumn] = _paramValueToCsvCell(
-          csvSettings.readParamValue(anlage.params, paramKey) ??
-              anlage.params[paramKey],
-        );
+      final options = field['options'];
+      if (slot.optionsColumn >= 0 &&
+          slot.optionsColumn < row.length &&
+          slot.optionsColumn != slot.artColumn) {
+        if (options is List && options.isNotEmpty) {
+          row[slot.optionsColumn] = options.map((e) => e.toString()).join(';');
+        }
+      }
+      if (slot.artColumn >= 0 && slot.artColumn < row.length) {
+        final value = csvSettings.readParamValue(anlage.params, paramKey) ??
+            anlage.params[paramKey];
+        row[slot.artColumn] = _paramValueToCsvCell(value ?? label);
       }
     }
 
@@ -597,28 +805,6 @@ class CsvService {
       params[key] = _parseDynamicValue(raw);
     });
     return params;
-  }
-
-  static List<String> _parseKuerzel(String? raw, List<String> fallback) {
-    final tokens = (raw ?? '')
-        .split(RegExp(r'[,;]'))
-        .map((e) => e.trim().toLowerCase())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    if (tokens.isEmpty) return fallback;
-    return tokens;
-  }
-
-  static bool _matchesAnyToken(String value, List<String> tokens) {
-    final normalized = value.trim().toLowerCase();
-    if (normalized.isEmpty) return false;
-    for (final token in tokens) {
-      if (token.isEmpty) continue;
-      if (normalized == token || normalized.startsWith(token)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   static dynamic _parseDynamicValue(String value) {
@@ -749,13 +935,15 @@ class CsvService {
         throw Exception('Mindestens eine Hierarchie-Ebene muss aktiv sein.');
       }
 
-      final etageIdx = settings.etageSpalte;
-      final anlageBauteilIdx = settings.anlageBauteilSpalte;
       final delimiterMode = settings.delimiterMode;
       const headerZeile = 1;
       final useDisciplineGrouping = settings.level1.enabled;
+      final attributeQuadruplets = settings.attributeTripletColumns;
       final attributePairs = settings.attributeColumnPairs;
       final attributeColumnIndices = <int>{};
+      for (final q in attributeQuadruplets) {
+        attributeColumnIndices.addAll(q.columnIndices);
+      }
       for (final p in attributePairs) {
         attributeColumnIndices.add(p.nameColumn);
         attributeColumnIndices.add(p.valueColumn);
@@ -798,10 +986,6 @@ class CsvService {
       // Debug: Header ausgeben
       debugPrint('CSV Header: $headerRow');
       debugPrint('Anzahl Header-Spalten: ${headerRow.length}');
-      
-      final anlageKuerzel = _parseKuerzel(settings.anlageKuerzel, ['a', 'anlage']);
-      final bauteilKuerzel = _parseKuerzel(settings.bauteilKuerzel, ['b', 'bauteil']);
-
 
       // Datenzeilen: alle Zeilen nach der Header-Zeile
       var dataRows = csvData.sublist(headerRowIndex + 1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
@@ -825,25 +1009,19 @@ class CsvService {
       }
 
 
-      // Schema ausschließlich aus CSV-Header aufbauen (keine festen Schemata aus der App).
-      // Nur Spalten, die keine Attribut-Paare sind, werden als Schema-Felder übernommen.
-      // Attribut-Paare liefern pro Zeile dynamische params (Attributname → Attributwert).
-      final schemaColumns = <int, String>{};
+      // EAV: Spalten, die nicht zu Hierarchie-Ebenen oder Attribut-Paaren gehören.
+      final reservedIndices = settings.reservedImportColumnIndices();
+      final eavColumns = <int, String>{};
       for (var i = 0; i < headerRow.length; i++) {
-        if (attributeColumnIndices.contains(i)) continue;
+        if (reservedIndices.contains(i)) continue;
         final headerName = headerRow[i].trim();
-        if (headerName.isNotEmpty) {
-          schemaColumns[i] = headerName;
-        } else {
-          schemaColumns[i] = 'Spalte_${i + 1}';
-        }
+        eavColumns[i] = headerName.isNotEmpty ? headerName : 'Spalte_${i + 1}';
       }
 
-      // Schema-Einträge nur für feste Spalten (nicht für Attribut-Paare)
+      // Schema-Einträge nur für EAV-Spalten (nicht für Hierarchie/Attribut-Paare)
       final schemaFromCsv = <Map<String, dynamic>>[];
-      for (var i = 0; i < headerRow.length; i++) {
-        if (attributeColumnIndices.contains(i)) continue;
-        final headerName = schemaColumns[i]!;
+      for (final entry in eavColumns.entries) {
+        final headerName = entry.value;
         final lowerName = headerName.toLowerCase();
 
         String type = 'text';
@@ -993,19 +1171,18 @@ class CsvService {
 
         final lfdNummerValue = leafId.isNotEmpty
             ? leafId
-            : 'AUTO_${disciplineLabelValue}_${i + 1}';
+            : settings.syntheticLfdForImportRow(
+                rowIndex: i,
+                contextLabel: disciplineLabelValue,
+              );
 
-        String? etageValue;
-        if (etageIdx != null) {
-          etageValue = _safeCell(row, etageIdx).trim();
+        final params = _parseParamsFromRow(row, eavColumns);
+        for (final q in attributeQuadruplets) {
+          final attrName = _safeCell(row, q.nameColumn);
+          if (attrName.isEmpty) continue;
+          final attrValue = _safeCell(row, q.artColumn);
+          params[attrName] = _parseDynamicValue(attrValue);
         }
-
-        String? anlageBauteilValue;
-        if (anlageBauteilIdx != null) {
-          anlageBauteilValue = _safeCell(row, anlageBauteilIdx).trim();
-        }
-
-        final params = _parseParamsFromRow(row, schemaColumns);
         for (final pair in attributePairs) {
           final attrName = _safeCell(row, pair.nameColumn);
           if (attrName.isEmpty) continue;
@@ -1015,30 +1192,24 @@ class CsvService {
 
         params['lfdNummer'] = lfdNummerValue;
 
-        if (etageValue != null && etageValue.isNotEmpty) {
-          settings.writeEtageToParams(params, etageValue);
+        // Hierarchie-Werte aller aktiven Ebenen in Params schreiben
+        final levelValues = <int, String>{};
+        for (var li = 0; li < enabledLevels.length; li++) {
+          final levelNum = settings.levelNumberAtEnabledIndex(li);
+          final level = enabledLevels[li];
+          final levelName = _safeCell(row, level.nameColumn).trim();
+          if (levelName.isNotEmpty) {
+            levelValues[levelNum] = levelName;
+          }
         }
-
-        if (anlageBauteilValue != null && anlageBauteilValue.isNotEmpty) {
-          settings.writeAnlageBauteilToParams(params, anlageBauteilValue);
-        }
-
-        final revisionsobjektValue =
-            (settings.revisionsobjektValueFromParams(params) ??
-                    settings.schemaItemValueFromParams(params) ??
-                    '')
-                .trim();
-        if (revisionsobjektValue.isNotEmpty) {
-          settings.writeHierarchyLocationToParams(
-            params,
-            revisionsfeld: disciplineLabelValue,
-            revisionsobjekt: revisionsobjektValue,
-          );
-        } else {
-          final level1LabelKey = settings.labelGewerk.trim();
-          if (level1LabelKey.isNotEmpty &&
-              !settings.isLeafNameParamKey(level1LabelKey)) {
-            params[level1LabelKey] = disciplineLabelValue;
+        if (levelValues.isNotEmpty) {
+          settings.writeHierarchyPathToParams(params, levelValues: levelValues);
+        } else if (useDisciplineGrouping) {
+          final level1Key = settings.resolveHierarchyLevelParamKey(1);
+          if (level1Key != null &&
+              level1Key.isNotEmpty &&
+              !settings.isLeafNameParamKey(level1Key)) {
+            params[level1Key] = disciplineLabelValue;
           }
         }
 
@@ -1075,13 +1246,13 @@ class CsvService {
               'lfdNummer': nodeLfd,
               '__syntheticParent': true,
             };
-            if (schemaColumns.containsKey(level.nameColumn)) {
-              nodeParams[schemaColumns[level.nameColumn]!] = levelName;
-            }
+            final levelNum = settings.levelNumberForConfig(level);
+            settings.writeHierarchyLevelToParams(nodeParams, levelNum, levelName);
             if (levelId.isNotEmpty &&
                 level.idColumn != null &&
-                schemaColumns.containsKey(level.idColumn)) {
-              nodeParams[schemaColumns[level.idColumn]!] = levelId;
+                level.idColumn! < headerRow.length) {
+              final idKey = headerRow[level.idColumn!].trim();
+              if (idKey.isNotEmpty) nodeParams[idKey] = levelId;
             }
 
             if (immediateParentLfd != null) {
@@ -1107,38 +1278,6 @@ class CsvService {
 
         if (immediateParentLfd != null) {
           params['__parentLfdNummer'] = immediateParentLfd;
-        }
-
-        // Legacy A/B-Hierarchie (nur wenn konfiguriert und noch kein Eltern-Knoten gesetzt)
-        if (anlageBauteilIdx != null && !params.containsKey('__parentLfdNummer')) {
-          final abKey = settings.resolveAnlageBauteilParamKey();
-          final anlageBautel = abKey != null
-              ? (settings.anlageBauteilValueFromParams(params) ?? '')
-              : '';
-          final isBauteil = _matchesAnyToken(anlageBautel, bauteilKuerzel);
-
-          if (isBauteil) {
-            String? parentLfd;
-            for (int j = anlagen.length - 1; j >= 0; j--) {
-              final existing = anlagen[j];
-              if (existing.discipline.label != discipline.label) continue;
-
-              final existingLfd = existing.params['lfdNummer']?.toString();
-              if (existingLfd == null || existingLfd.isEmpty) continue;
-
-              final existingType = abKey != null
-                  ? (settings.anlageBauteilValueFromParams(existing.params) ?? '')
-                  : '';
-              if (_matchesAnyToken(existingType, bauteilKuerzel)) continue;
-
-              parentLfd = existingLfd;
-              break;
-            }
-
-            if (parentLfd != null) {
-              params['__parentLfdNummer'] = parentLfd;
-            }
-          }
         }
 
         debugPrint(
@@ -1204,29 +1343,16 @@ class CsvService {
         disciplineList = await dbService.getDisciplinesByBuildingId(buildingId);
       }
 
-      final attributePairs = csvSettings.attributeColumnPairs;
-      final hasImportStructure = shouldExportWithAnlagenImportStructure(
-        csvSettings: csvSettings,
-        anlagen: orderedAnlagen,
-      );
-      _TemplateStyleExportLayout? templateLayout;
-      List<String> dataColumnKeys;
       List<Map<String, dynamic>> globalSchema = [];
-      if (hasImportStructure) {
-        dataColumnKeys = csvSettings.importHeaderRow
-            .where((k) => !_isValidationParamKey(k.trim()))
-            .toList();
-      } else {
-        if (projectId != null && projectId.isNotEmpty) {
-          globalSchema = await _loadGlobalSchema(projectId);
-        }
-        templateLayout = await _resolveTemplateStyleExportLayout(
-          anlagen: orderedAnlagen,
-          csvSettings: csvSettings,
-          disciplines: disciplineList,
-          projectId: projectId,
+      if (projectId != null && projectId.isNotEmpty) {
+        globalSchema = await _loadGlobalSchema(projectId);
+      }
+
+      final dataColumnKeys = buildExportHeaderRow(csvSettings);
+      if (dataColumnKeys.isEmpty) {
+        throw Exception(
+          'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
         );
-        dataColumnKeys = templateLayout.headers;
       }
 
       final headerRow = useFotoColumns
@@ -1235,29 +1361,20 @@ class CsvService {
       final csvData = <List<String>>[headerRow];
 
       debugPrint(
-        'CSV Header (${hasImportStructure ? 'Anlagen-Import' : 'Gewerkevorlagen (ATT+WERT)'}, '
-        '${dataColumnKeys.length} Spalten): $headerRow',
+        'CSV Export (Spalten-Mapping, ${dataColumnKeys.length} Spalten): $headerRow',
       );
 
       final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
 
       for (final anlage in orderedAnlagen) {
         const emptyFotoNumbers = ['', '', '', ''];
-        final dataRow = hasImportStructure
-            ? _buildRowFromImportStructure(
-                anlage: anlage,
-                headerRow: dataColumnKeys,
-                attributePairs: attributePairs,
-                fotoLabels: fotoLabels,
-                fotoNumbers: emptyFotoNumbers,
-              )
-            : _buildTemplateStyleExportRow(
-                anlage: anlage,
-                layout: templateLayout!,
-                csvSettings: csvSettings,
-                disciplines: disciplineList,
-                globalSchema: globalSchema,
-              );
+        final dataRow = _buildColumnMappedExportRow(
+          anlage: anlage,
+          csvSettings: csvSettings,
+          disciplines: disciplineList,
+          globalSchema: globalSchema,
+          targetLength: dataColumnKeys.length,
+        );
 
         if (useFotoColumns) {
           for (final i in appendedIndices) {
@@ -1389,29 +1506,16 @@ class CsvService {
       disciplineList = await dbService.getDisciplinesByBuildingId(buildingId);
     }
 
-    final attributePairs = csvSettings.attributeColumnPairs;
-    final hasImportStructure = shouldExportWithAnlagenImportStructure(
-      csvSettings: csvSettings,
-      anlagen: orderedAnlagenForHeader,
-    );
-    _TemplateStyleExportLayout? templateLayout;
-    List<String> dataColumnKeys;
     List<Map<String, dynamic>> globalSchema = [];
-    if (hasImportStructure) {
-      dataColumnKeys = csvSettings.importHeaderRow
-          .where((k) => !_isValidationParamKey(k.trim()))
-          .toList();
-    } else {
-      if (projectId != null && projectId.isNotEmpty) {
-        globalSchema = await _loadGlobalSchema(projectId);
-      }
-      templateLayout = await _resolveTemplateStyleExportLayout(
-        anlagen: orderedAnlagenForHeader,
-        csvSettings: csvSettings,
-        disciplines: disciplineList,
-        projectId: projectId,
+    if (projectId != null && projectId.isNotEmpty) {
+      globalSchema = await _loadGlobalSchema(projectId);
+    }
+
+    final dataColumnKeys = buildExportHeaderRow(csvSettings);
+    if (dataColumnKeys.isEmpty) {
+      throw Exception(
+        'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
       );
-      dataColumnKeys = templateLayout.headers;
     }
 
     final csvData = <List<String>>[];
@@ -1432,7 +1536,7 @@ class CsvService {
     for (final anlage in orderedAnlagen) {
       String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
       if (lfdNummer.isEmpty) {
-        lfdNummer = 'Neu_${neueAnlagenZaehler.toString().padLeft(4, '0')}';
+        lfdNummer = csvSettings.exportPlaceholderLfd(neueAnlagenZaehler);
         neueAnlagenZaehler++;
       }
 
@@ -1481,21 +1585,22 @@ class CsvService {
         }
       }
 
-      var dataRow = hasImportStructure
-          ? _buildRowFromImportStructure(
-              anlage: anlage,
-              headerRow: dataColumnKeys,
-              attributePairs: attributePairs,
-              fotoLabels: fotoLabels,
-              fotoNumbers: fotoNumbers,
-            )
-          : _buildTemplateStyleExportRow(
-              anlage: anlage,
-              layout: templateLayout!,
-              csvSettings: csvSettings,
-              disciplines: disciplineList,
-              globalSchema: globalSchema,
-            );
+      var dataRow = _buildColumnMappedExportRow(
+        anlage: anlage,
+        csvSettings: csvSettings,
+        disciplines: disciplineList,
+        globalSchema: globalSchema,
+        targetLength: dataColumnKeys.length,
+      );
+      if (useFotoColumns) {
+        for (var col = 0; col < dataColumnKeys.length && col < dataRow.length; col++) {
+          final label = dataColumnKeys[col];
+          final fotoIdx = _fotoLabelIndex(label, fotoLabels);
+          if (fotoIdx != null && fotoIdx < fotoNumbers.length) {
+            dataRow[col] = fotoNumbers[fotoIdx];
+          }
+        }
+      }
 
       if (useFotoColumns) {
         for (final i in appendedIndices) {

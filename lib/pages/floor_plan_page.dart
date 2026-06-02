@@ -89,27 +89,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     setState(() => _csvSettings = settings);
   }
 
-  void _applyFloorLabelToParams(Map<String, dynamic> params) {
-    final floorLabel = widget.floor.name.trim().isNotEmpty
-        ? widget.floor.name.trim()
-        : (_currentPdfName?.trim().isNotEmpty == true
-            ? _currentPdfName!.trim()
-            : '');
-    if (floorLabel.isEmpty) return;
-    final settings = _csvSettings;
-    if (settings != null) {
-      final existing = settings.etageValueFromParams(params) ?? '';
-      if (existing.isEmpty) {
-        settings.writeEtageToParams(params, floorLabel);
-      }
-      return;
-    }
-    final existing = params['Etage']?.toString().trim() ?? '';
-    if (existing.isEmpty) {
-      params['Etage'] = floorLabel;
-    }
-  }
-
   Future<void> _loadDisziplinen() async {
     final list = await widget.dbService.getDisciplinesByBuildingId(widget.building.id);
     if (!mounted) return;
@@ -768,15 +747,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             final params = newMarker.params != null
                 ? Map<String, dynamic>.from(newMarker.params!)
                 : <String, dynamic>{};
-            // Etage automatisch setzen (Etage = Name/PDF-Name des aktuellen Grundrisses)
-            final floorLabel = widget.floor.name.trim().isNotEmpty
-                ? widget.floor.name.trim()
-                : (_currentPdfName?.trim().isNotEmpty == true
-                    ? _currentPdfName!.trim()
-                    : '');
-            if (floorLabel.isNotEmpty) {
-              _applyFloorLabelToParams(params);
-            }
 
             final leafLabel = _csvSettings?.resolveLeafLevelLabel() ?? 'Eintrag';
             final newAnlage = Anlage(
@@ -836,16 +806,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
       discipline: anlage.discipline,
     );
 
-    // Etage automatisch setzen
-    final floorLabel = widget.floor.name.trim().isNotEmpty
-        ? widget.floor.name.trim()
-        : (_currentPdfName?.trim().isNotEmpty == true
-            ? _currentPdfName!.trim()
-            : '');
-    if (floorLabel.isNotEmpty) {
-      _applyFloorLabelToParams(updatedAnlage.params);
-    }
-
     // Speichere in der Datenbank
     await widget.dbService.updateAnlage(updatedAnlage);
 
@@ -902,15 +862,6 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
               final params = updatedMarker.params != null
                   ? Map<String, dynamic>.from(updatedMarker.params!)
                   : <String, dynamic>{};
-              // Etage beim Bearbeiten ebenfalls sicherstellen
-              final floorLabel = widget.floor.name.trim().isNotEmpty
-                  ? widget.floor.name.trim()
-                  : (_currentPdfName?.trim().isNotEmpty == true
-                      ? _currentPdfName!.trim()
-                      : '');
-              if (floorLabel.isNotEmpty) {
-                _applyFloorLabelToParams(params);
-              }
               a.params = params;
               final oldMarkerInfo = a.markerInfo != null
                   ? Map<String, dynamic>.from(a.markerInfo!)
