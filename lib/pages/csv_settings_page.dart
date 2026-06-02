@@ -51,6 +51,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _labelBauteil = 'Bauteil';
   String _groupingGewerkParamKey = '';
   String _groupingAnlageParamKey = '';
+  String _displayNameParamKey = 'Name';
+  int? _displayNameSpalte;
 
   /// Explizite Spaltenpaare: welche Spalte = Attributname, welche = Attributwert (pro Zeile variabel).
   List<AttributeColumnPair> _attributeColumnPairs = [];
@@ -70,6 +72,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _labelBauteilCtrl;
   late final TextEditingController _groupingGewerkParamKeyCtrl;
   late final TextEditingController _groupingAnlageParamKeyCtrl;
+  late final TextEditingController _displayNameParamKeyCtrl;
   late final TextEditingController _foto1SpalteLabelCtrl;
   late final TextEditingController _foto2SpalteLabelCtrl;
   late final TextEditingController _foto3SpalteLabelCtrl;
@@ -121,6 +124,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelBauteilCtrl = TextEditingController(text: _labelBauteil);
     _groupingGewerkParamKeyCtrl = TextEditingController(text: _groupingGewerkParamKey);
     _groupingAnlageParamKeyCtrl = TextEditingController(text: _groupingAnlageParamKey);
+    _displayNameParamKeyCtrl = TextEditingController(text: _displayNameParamKey);
     _foto1SpalteLabelCtrl = TextEditingController(text: _foto1SpalteLabel ?? '');
     _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
@@ -142,6 +146,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _labelBauteilCtrl.dispose();
     _groupingGewerkParamKeyCtrl.dispose();
     _groupingAnlageParamKeyCtrl.dispose();
+    _displayNameParamKeyCtrl.dispose();
     _foto1SpalteLabelCtrl.dispose();
     _foto2SpalteLabelCtrl.dispose();
     _foto3SpalteLabelCtrl.dispose();
@@ -205,6 +210,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _groupingAnlageParamKeyCtrl.value = TextEditingValue(
         text: _groupingAnlageParamKey,
         selection: TextSelection.collapsed(offset: _groupingAnlageParamKey.length),
+      );
+    }
+    if (_displayNameParamKeyCtrl.text != _displayNameParamKey) {
+      _displayNameParamKeyCtrl.value = TextEditingValue(
+        text: _displayNameParamKey,
+        selection: TextSelection.collapsed(offset: _displayNameParamKey.length),
       );
     }
     final f1 = _foto1SpalteLabel ?? '';
@@ -341,6 +352,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _foto4SpalteLabel = settings.foto4SpalteLabel;
         _groupingGewerkParamKey = settings.groupingGewerkParamKey;
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
+        _displayNameParamKey = settings.displayNameParamKey;
+        _displayNameSpalte = settings.displayNameSpalte;
       });
       _syncTextControllersFromState();
       _syncGroupingKeysFromLevels();
@@ -367,10 +380,19 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   Future<void> _loadDisciplines() async {
     try {
       final dbService = ref.read(databaseServiceProvider);
-      final loaded = await dbService.getDisciplinesByBuildingId(widget.buildingId);
-      setState(() {
-        _disciplines = loaded;
-      });
+      var loaded = await dbService.getDisciplinesByBuildingId(widget.buildingId);
+      if (loaded.isEmpty) {
+        loaded = await TemplateService.ensureDisciplinesFromTemplates(
+          dbService,
+          widget.buildingId,
+          widget.projectId,
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _disciplines = loaded;
+        });
+      }
     } catch (e) {
       debugPrint('Fehler beim Laden der Disziplinen: $e');
     }
@@ -410,6 +432,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     if (roFields != null && roFields.isNotEmpty) {
       return roFields.map((f) => Map<String, dynamic>.from(f)).toList();
     }
+    for (final t in _projectTemplates) {
+      if (t.gewerk.trim() == d.label.trim() &&
+          t.anlagentyp.trim() == ro.trim()) {
+        final fromTemplate =
+            TemplateService.getSchemaFromTemplateParameter(t.parameter);
+        if (fromTemplate.isNotEmpty) return fromTemplate;
+      }
+    }
     if (d.revisionsobjektSchemas.isEmpty) {
       return d.legacyIndividualSchemaFields;
     }
@@ -446,6 +476,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         groupingEtageParamKey: current.groupingEtageParamKey,
         groupingGewerkParamKey: _groupingGewerkParamKey,
         groupingAnlageParamKey: _groupingAnlageParamKey,
+        displayNameParamKey: _displayNameParamKey,
+        displayNameSpalte: _displayNameSpalte,
       );
       await notifier.save(settings);
 
@@ -704,6 +736,31 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   _scheduleAutoSave();
                 },
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _displayNameParamKeyCtrl,
+                decoration: _themedInputDecoration(
+                  context,
+                  labelText: 'Parameter für Anzeige Ebene 3',
+                  helperText:
+                      'Key aus Gewerkevorlagen-Schema (z. B. Name, Anlagenbezeichnung). '
+                      'Wird bei Neuaufnahmen für die Beschriftung in der Anlagenliste genutzt.',
+                ),
+                onChanged: (val) {
+                  setState(() => _displayNameParamKey = val);
+                  _scheduleAutoSave();
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildColumnSelector(
+                label: 'Alternativ: CSV-Spalte (nur Anlagen-Import)',
+                value: _displayNameSpalte ?? _level3.nameColumn,
+                onChanged: (v) {
+                  setState(() => _displayNameSpalte = v);
+                  _scheduleAutoSave();
+                },
+                csvHeaders: _mappingCsvHeaders,
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -834,19 +891,34 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           
           const SizedBox(height: 32),
           Text(
-            _labelGewerk,
+            '$_labelGewerk (Ebene 1)',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Text(
-            'Entspricht Ebene 1 im CSV-Mapping (${_hierarchySubtitle()}). '
-            '$_labelGewerk aufklappen, dann $_schemaItemLevelLabel wählen, um dessen Attribute zu bearbeiten.',
+            'Nach Import der Gewerkevorlagen: $_labelGewerk aufklappen, '
+            'darunter $_schemaItemLevelLabel (Ebene 2) wählen, um die Attribute zu bearbeiten.',
             style: TextStyle(fontSize: 13, color: _mutedTextColor(context)),
           ),
           const SizedBox(height: 16),
 
-          if (_disciplines.isEmpty)
-            const Center(child: Text('Keine Gewerke vorhanden'))
+          if (_disciplines.isEmpty && _projectTemplates.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  'Importieren Sie im Tab „Gewerkevorlagen“ eine CSV, '
+                  'damit $_labelGewerk und $_schemaItemLevelLabel hier erscheinen.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _mutedTextColor(context),
+                  ),
+                ),
+              ),
+            )
+          else if (_disciplines.isEmpty)
+            const Center(child: CircularProgressIndicator())
           else
             ...List.generate(_disciplines.length, (index) {
               final d = _disciplines[index];
@@ -892,7 +964,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       ),
                       subtitle: Text(
                         roList.isEmpty
-                            ? 'Keine $_schemaItemLevelLabel'
+                            ? 'Keine $_schemaItemLevelLabel (Ebene 2)'
                             : '${roList.length} $_schemaItemLevelLabel',
                         style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
                       ),
@@ -901,7 +973,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                             child: Text(
-                              'Importieren Sie Gewerkevorlagen, damit $_schemaItemLevelLabel-Einträge erscheinen.',
+                              'Für dieses $_labelGewerk sind in den Gewerkevorlagen '
+                              'keine $_schemaItemLevelLabel-Einträge hinterlegt.',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: _mutedTextColor(context),
@@ -916,13 +989,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                                 vertical: 4,
                               ),
                               leading: Icon(
-                                Icons.category_outlined,
+                                Icons.account_tree_outlined,
                                 color: d.color.withOpacity(0.8),
                                 size: 20,
                               ),
                               title: Text(ro),
                               subtitle: Text(
-                                '${_schemaForRevisionsobjekt(d, ro).length} Felder',
+                                '${_schemaForRevisionsobjekt(d, ro).length} Attribute',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: _mutedTextColor(context),
@@ -1463,7 +1536,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
 
     try {
-      final count = await TemplateService.importTemplatesFromCsv(
+      await TemplateService.importTemplatesFromCsv(
         ref.read(databaseServiceProvider),
         widget.projectId,
         null,
@@ -1474,11 +1547,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       Navigator.of(context).pop(); // Lade-Dialog schließen
 
       if (mounted) {
-        await Future.wait([
-          _loadDisciplines(),
-          _loadProjectTemplates(),
-        ]);
+        await _loadProjectTemplates();
+        await _loadDisciplines();
         _syncGlobalSchemaToDisciplines();
+        setState(() {});
       }
     } catch (e) {
       if (!mounted) return;
@@ -1541,7 +1613,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       
       // Vorlagen löschen
       await dbService.deleteTemplatesByProjectId(widget.projectId);
-      
+      await TemplateService.clearTemplateImportHeaderRow(widget.projectId);
+
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
     } catch (e, stackTrace) {
@@ -2550,6 +2623,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       await prefs.remove(oldDisciplinesKey);
       
       debugPrint('Alle SharedPreferences-Einträge für Gebäude ${widget.buildingId} gelöscht');
+
+      // Gespeicherte Anlagen-CSV-Import-Struktur (alte Spaltenüberschriften) entfernen
+      if (widget.projectId.isNotEmpty) {
+        await ref
+            .read(csvSettingsProvider(widget.projectId).notifier)
+            .clearAnlagenCsvImportStructure();
+      }
 
       // Disziplinen neu laden und State aktualisieren
       if (mounted) {

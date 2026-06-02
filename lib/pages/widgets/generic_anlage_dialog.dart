@@ -1,10 +1,8 @@
 // lib/pages/widgets/generic_anlage_dialog.dart
 
 import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/anlage.dart';
@@ -122,13 +120,11 @@ class GenericAnlageDialog extends ConsumerStatefulWidget {
 }
 
 class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
-  late TextEditingController _nameController;
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
   late PhotoManager _photoManager;
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
-  bool _isNameEditable = true;
   bool _isDataReady = false;
   late Disziplin _currentDiscipline;
   String? _schemaItemParamKey;
@@ -153,10 +149,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     _photoManager = PhotoManager();
     // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
     _currentDiscipline = widget.discipline;
-    _nameController = TextEditingController(
-      text: widget.existingAnlage?.name ?? widget.initialName ?? '',
-    );
-    _nameController.addListener(_updateValidationStatus);
     _initData();
   }
 
@@ -377,6 +369,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     );
 
     for (final key in csv.allRevisionsobjektParamKeys()) {
+      if (csv.isLeafNameParamKey(key)) continue;
       _lockedLocationParams[key] = roValue;
       _setParamAndController(key, roValue);
     }
@@ -414,6 +407,38 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   bool _isLocationLocked(String key) => _lockedLocationParams.containsKey(key);
 
+  /// Nur importierte Blatt-Name-Spalte schreibgeschützt – Anzeige-Param aus Gewerkevorlage bleibt editierbar.
+  bool _isLeafNameField(String key) {
+    final csv = _csvSettings;
+    if (csv == null) return false;
+    final leaf = csv.leafNameParamKey?.trim();
+    if (leaf == null || leaf.isEmpty) return false;
+    return CsvSettings.paramKeysMatch(key, leaf);
+  }
+
+  /// Anzeigename der Anlage (Schema-Feld / CSV-Blattspalte).
+  String _resolvePersistedName() {
+    final csv = _csvSettings;
+    if (csv != null) {
+      final fromDisplay = csv.displayNameValueFromParams(_params)?.trim();
+      if (fromDisplay != null && fromDisplay.isNotEmpty) {
+        return fromDisplay;
+      }
+      final leafKey = csv.leafNameParamKey;
+      if (leafKey != null && leafKey.isNotEmpty) {
+        final fromParams = csv.paramValueForKey(_params, leafKey);
+        if (fromParams != null && fromParams.isNotEmpty) return fromParams;
+      }
+    }
+    if (widget.existingAnlage != null &&
+        widget.existingAnlage!.name.trim().isNotEmpty) {
+      return widget.existingAnlage!.name.trim();
+    }
+    final initial = widget.initialName?.trim();
+    if (initial != null && initial.isNotEmpty) return initial;
+    return '';
+  }
+
   void _applyLockedLocationParams() {
     final csv = _csvSettings;
     if (csv != null && _lockedLocationParams.isNotEmpty) {
@@ -435,6 +460,87 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         _controllers[entry.key]!.text = entry.value;
       }
     }
+  }
+
+  void _ensureLevelLabelParams() {
+    final csv = _csvSettings;
+    if (csv == null) return;
+
+    final level1Key = csv.labelGewerk.trim();
+    final level2Key = csv.labelAnlage.trim();
+
+    final level1Value = (csv.revisionsfeldValueFromParams(_params) ??
+            _currentDiscipline.label)
+        .trim();
+    final level2Value =
+        (csv.revisionsobjektValueFromParams(_params) ?? '').trim();
+
+    if (level1Key.isNotEmpty &&
+        level1Value.isNotEmpty &&
+        !csv.isLeafNameParamKey(level1Key)) {
+      _params[level1Key] = level1Value;
+    }
+    if (level2Key.isNotEmpty &&
+        level2Value.isNotEmpty &&
+        !csv.isLeafNameParamKey(level2Key)) {
+      _params[level2Key] = level2Value;
+    }
+  }
+
+  List<Widget> _buildReadOnlyHierarchyFields() {
+    final csv = _csvSettings;
+    if (csv == null) return const [];
+
+    final widgets = <Widget>[];
+    final level1Key = csv.labelGewerk.trim();
+    final level2Key = csv.labelAnlage.trim();
+
+    String readValue(String key, String fallback) {
+      final fromParams = _params[key]?.toString().trim() ?? '';
+      if (fromParams.isNotEmpty) return fromParams;
+      return fallback;
+    }
+
+    final level1Value = readValue(
+      level1Key,
+      (csv.revisionsfeldValueFromParams(_params) ?? _currentDiscipline.label).trim(),
+    );
+    final level2Value = readValue(
+      level2Key,
+      (csv.revisionsobjektValueFromParams(_params) ?? '').trim(),
+    );
+
+    Widget buildReadonlyField(String label, String value) {
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.withOpacity(0.25)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
+          child: TextFormField(
+            initialValue: value,
+            readOnly: true,
+            enableInteractiveSelection: false,
+            decoration: InputDecoration(
+              labelText: label,
+              border: InputBorder.none,
+              suffixIcon: Icon(Icons.lock_outline, size: 16, color: Colors.grey[500]),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (level1Key.isNotEmpty && level1Value.isNotEmpty) {
+      widgets.add(buildReadonlyField(level1Key, level1Value));
+    }
+    if (level2Key.isNotEmpty && level2Value.isNotEmpty) {
+      widgets.add(buildReadonlyField(level2Key, level2Value));
+    }
+    return widgets;
   }
 
   void _applyRevisionsobjektPrefill() {
@@ -459,6 +565,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     for (final key in keys) {
       if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) continue;
+      if (_isLeafNameField(key)) continue;
       _setParamAndController(key, ro);
     }
 
@@ -492,6 +599,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   }
 
   bool _isSchemaItemField(String key, String label) {
+    if (_isLeafNameField(key)) return false;
     if (_revisionsfeldParamKey != null && key == _revisionsfeldParamKey) return false;
     final paramKey = _revisionsobjektParamKey ?? _schemaItemParamKey?.trim();
     if (paramKey == null || paramKey.isEmpty) return false;
@@ -606,17 +714,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           }
         }
       }
-
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'csv_settings_$projectId';
-      final settingsJson = prefs.getString(key);
-      
-      if (settingsJson != null) {
-        final settings = json.decode(settingsJson) as Map<String, dynamic>;
-        setState(() {
-          _isNameEditable = settings['nameBearbeitbar'] as bool? ?? true;
-        });
-      }
     } catch (e) {
       debugPrint('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
     }
@@ -624,8 +721,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   @override
   void dispose() {
-    _nameController.removeListener(_updateValidationStatus);
-    _nameController.dispose();
     for (var c in _controllers.values) {
       c.dispose();
     }
@@ -914,7 +1009,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 var tempAnlage = Anlage(
                   id: widget.existingAnlage?.id ?? '',
                   parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-                  name: _nameController.text.trim(),
+                  name: _resolvePersistedName(),
                   params: Map<String, dynamic>.from(_params),
                   floorId: widget.floorId,
                   buildingId: widget.buildingId,
@@ -1254,7 +1349,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
       parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-      name: _nameController.text.trim(),
+      name: _resolvePersistedName(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
       buildingId: widget.buildingId,
@@ -1297,7 +1392,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
       parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-      name: _nameController.text.trim(),
+      name: _resolvePersistedName(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
       buildingId: widget.buildingId,
@@ -1322,7 +1417,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
       parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-      name: _nameController.text.trim(),
+      name: _resolvePersistedName(),
       params: Map<String, dynamic>.from(_params),
       floorId: widget.floorId,
       buildingId: widget.buildingId,
@@ -1337,15 +1432,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
       final label = fieldDef['label'] as String;
       final type = (fieldDef['type'] ?? 'string').toString();
-      final isEditable = _isLocationLocked(key)
+      final isEditable = _isLocationLocked(key) || _isLeafNameField(key)
           ? false
           : (fieldDef['editable'] ?? true);
       
       if (!_controllers.containsKey(key)) {
         _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
         _controllers[key]!.addListener(_updateValidationStatus);
-      } else if (_isLocationLocked(key)) {
-        final locked = _lockedLocationParams[key] ?? _params[key]?.toString() ?? '';
+      } else if (_isLocationLocked(key) || _isLeafNameField(key)) {
+        final locked = _isLocationLocked(key)
+            ? (_lockedLocationParams[key] ?? _params[key]?.toString() ?? '')
+            : (_params[key]?.toString() ?? '');
         if (_controllers[key]!.text != locked) {
           _controllers[key]!.text = locked;
         }
@@ -1581,7 +1678,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final tempAnlageForExtra = Anlage(
         id: widget.existingAnlage?.id ?? '',
         parentId: widget.parentId ?? widget.existingAnlage?.parentId,
-        name: _nameController.text.trim(),
+        name: _resolvePersistedName(),
         params: Map<String, dynamic>.from(_params),
         floorId: widget.floorId,
         buildingId: widget.buildingId,
@@ -1701,11 +1798,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         : (isChildCreate
             ? 'Neues $childLabel erfassen'
             : 'Neues $leafLabel erfassen');
-    final nameLabel = (widget.parentId != null ||
-            widget.existingAnlage?.parentId != null)
-        ? 'Name ($childLabel)'
-        : 'Name ($leafLabel)';
-
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       child: ConstrainedBox(
@@ -1852,47 +1944,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Name
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.grey[50],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.grey.withOpacity(0.2),
-                              width: 1,
-                            ),
-                          ),
-                          child: TextField(
-                            controller: _nameController,
-                            readOnly: !_isNameEditable,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                              color: _isNameEditable ? Colors.black87 : Colors.grey[600],
-                            ),
-                            decoration: InputDecoration(
-                              labelText: nameLabel,
-                              labelStyle: TextStyle(
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                              suffixIcon: !_isNameEditable ? Icon(Icons.lock_outline, size: 18, color: Colors.grey[400]) : null,
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Normale Schema-Felder (aus CSV-Spalten)
+                      // Schema-Felder (Anlagenbezeichnung = Blatt-Spalte aus CSV, gesperrt)
                       const SizedBox(height: 8),
+                      ..._buildReadOnlyHierarchyFields(),
                       ..._buildSchemaFields(),
 
                       // Fotos
@@ -1962,14 +2016,30 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     const SizedBox(width: 12),
                     ElevatedButton(
                       onPressed: () {
-                        final name = _nameController.text.trim();
-                        if (name.isEmpty) return;
                         _params['photoPaths'] = _photoManager.images.map((e) => e.path).toList();
 
                         // Wichtig: Alle Controller-Werte vor dem Speichern in _params übernehmen.
                         // Verhindert, dass Eingaben verloren gehen (z.B. bei Fokus-Wechsel ohne onChanged).
                         _syncControllersToParams();
                         _applyLockedLocationParams();
+                        _ensureLevelLabelParams();
+
+                        var name = _resolvePersistedName();
+                        final csv = _csvSettings;
+                        if (name.isEmpty) {
+                          name = _leafLevelLabel.isNotEmpty ? _leafLevelLabel : 'Eintrag';
+                        }
+                        if (csv != null) {
+                          csv.writeDisplayNameToParams(_params, name);
+                          final leafKey = csv.leafNameParamKey?.trim();
+                          final displayKey = csv.resolveDisplayNameParamKey()?.trim();
+                          if (leafKey != null &&
+                              leafKey.isNotEmpty &&
+                              displayKey != null &&
+                              !CsvSettings.paramKeysMatch(leafKey, displayKey)) {
+                            _params[leafKey] = name;
+                          }
+                        }
 
                         // Erstelle Anlage
                         var anlage = Anlage(

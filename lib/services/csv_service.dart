@@ -17,6 +17,7 @@ import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../database/database_service.dart';
 import '../providers/csv_settings_provider.dart';
+import 'template_service.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_utils.dart';
 
@@ -49,6 +50,44 @@ class CsvImportResult {
   });
 }
 
+/// Erzeugte Export-Datei (noch nicht geteilt/gespeichert).
+class ExportBuiltFile {
+  final File file;
+  final String fileName;
+
+  const ExportBuiltFile({
+    required this.file,
+    required this.fileName,
+  });
+}
+
+class _AttTripletSlotIndices {
+  final int nameColumn;
+  final int typeColumn;
+  final int wertColumn;
+
+  const _AttTripletSlotIndices({
+    required this.nameColumn,
+    required this.typeColumn,
+    required this.wertColumn,
+  });
+}
+
+/// Layout wie Gewerkevorlagen-CSV: Revisionsfeld, Revisionsobjekt, ATT1…ATTn (+ TYPE, WERT).
+class _TemplateStyleExportLayout {
+  final List<String> headers;
+  final int revisionsfeldColumn;
+  final int revisionsobjektColumn;
+  final List<_AttTripletSlotIndices> attSlots;
+
+  const _TemplateStyleExportLayout({
+    required this.headers,
+    required this.revisionsfeldColumn,
+    required this.revisionsobjektColumn,
+    required this.attSlots,
+  });
+}
+
 class CsvService {
   static const String _delimiter = ';';
   static const Uuid _uuid = Uuid();
@@ -69,23 +108,6 @@ class CsvService {
     if (_internalParamKeys.contains(key)) return true;
     if (key.startsWith('_field_') && key.endsWith('_validated')) return true;
     return false;
-  }
-
-  /// Sammelt alle Param-Keys aus [anlagen] für den Export – rein datengetrieben, ohne Schema.
-  /// Interne und Validierungs-Keys werden ausgeschlossen.
-  /// Rückgabe sortiert für stabile Spaltenreihenfolge.
-  static List<String> _collectAllExportParamKeys(List<Anlage> anlagen) {
-    final keys = <String>{};
-    for (final a in anlagen) {
-      for (final entry in a.params.entries) {
-        final k = entry.key.toString();
-        if (k.isEmpty || _internalParamKeys.contains(k)) continue;
-        if (_isValidationParamKey(k)) continue;
-        keys.add(k);
-      }
-    }
-    final list = keys.toList()..sort();
-    return list;
   }
 
   /// Baut die CSV-Header-Zeile: alle Daten-Spalten [dataColumnKeys] + ggf. angehängte Foto-Spalten.
@@ -235,6 +257,278 @@ class CsvService {
       final entry = dynamicAttrs[dynIndex++];
       row[pair.nameColumn] = entry.key;
       row[pair.valueColumn] = _paramValueToCsvCell(entry.value);
+    }
+
+    return row;
+  }
+
+  static String _schemaFieldParamKey(Map<String, dynamic> field) {
+    return field['key']?.toString().trim() ?? '';
+  }
+
+  static String _schemaFieldLabel(Map<String, dynamic> field) {
+    final label = field['label']?.toString().trim() ?? '';
+    final key = _schemaFieldParamKey(field);
+    return label.isNotEmpty ? label : key;
+  }
+
+  /// Import-CSV-Struktur nur, wenn Header gespeichert sind und noch importierte Zeilen existieren.
+  static bool shouldExportWithAnlagenImportStructure({
+    required CsvSettings csvSettings,
+    required List<Anlage> anlagen,
+  }) {
+    if (!csvSettings.hasAnlagenCsvImport) return false;
+    return anlagen.any((a) {
+      final lfd = a.params['lfdNummer']?.toString().trim() ?? '';
+      return lfd.isNotEmpty;
+    });
+  }
+
+  static Disziplin _disciplineForAnlage(Anlage anlage, List<Disziplin> disciplines) {
+    final normalized = anlage.discipline.label.trim().toLowerCase();
+    return disciplines.firstWhere(
+      (d) => d.label.trim().toLowerCase() == normalized,
+      orElse: () => anlage.discipline,
+    );
+  }
+
+  static String _exportTypeLabelForField(Map<String, dynamic> field) {
+    final type = field['type']?.toString().trim().toLowerCase() ?? '';
+    if (type == 'dropdown' || type == 'select') return 'option';
+    if (type.isEmpty) return 'text';
+    return type;
+  }
+
+  /// Felder für eine Zeile: zuerst manuelle globale Attribute, dann Gewerk/RO-Schema.
+  static List<Map<String, dynamic>> _orderedExportSchemaFields({
+    required Anlage anlage,
+    required Disziplin discipline,
+    required List<Map<String, dynamic>> globalSchema,
+    required CsvSettings csvSettings,
+  }) {
+    final result = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    void addField(Map<String, dynamic> field) {
+      final key = _schemaFieldParamKey(field);
+      if (key.isEmpty || seen.contains(key)) return;
+      seen.add(key);
+      result.add(field);
+    }
+
+    for (final field in globalSchema) {
+      addField(field);
+    }
+
+    final ro = csvSettings.schemaItemValueFromParams(anlage.params)?.trim() ?? '';
+    for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
+      if (field['isGlobal'] == true) continue;
+      addField(field);
+    }
+
+    return result;
+  }
+
+  static int _maxAttributeSlotsForExport({
+    required List<Anlage> anlagen,
+    required List<Disziplin> disciplines,
+    required List<Map<String, dynamic>> globalSchema,
+    required CsvSettings csvSettings,
+  }) {
+    var maxSlots = 0;
+    for (final anlage in anlagen) {
+      final discipline = _disciplineForAnlage(anlage, disciplines);
+      final count = _orderedExportSchemaFields(
+        anlage: anlage,
+        discipline: discipline,
+        globalSchema: globalSchema,
+        csvSettings: csvSettings,
+      ).length;
+      if (count > maxSlots) maxSlots = count;
+    }
+    return maxSlots;
+  }
+
+  /// Import-Header für Export: ATTn_OPTIONS → ATTn_WERT (Werte statt Optionslisten).
+  static List<String> _templateHeadersForExport(List<String> importHeaders) {
+    return importHeaders.map((raw) {
+      final h = raw.trim();
+      final upper = h.toUpperCase();
+      if (upper.endsWith('_OPTIONS')) {
+        return '${h.substring(0, h.length - '_OPTIONS'.length)}_WERT';
+      }
+      return h;
+    }).toList();
+  }
+
+  static int _findHeaderIndex(List<String> headers, List<String> patterns) {
+    for (var i = 0; i < headers.length; i++) {
+      final h = headers[i].trim().toLowerCase();
+      for (final p in patterns) {
+        if (h == p || h.contains(p)) return i;
+      }
+    }
+    return -1;
+  }
+
+  static List<_AttTripletSlotIndices> _parseAttTripletSlotsFromHeaders(
+    List<String> headers,
+  ) {
+    final namePattern = RegExp(r'^att(\d+)$', caseSensitive: false);
+    final byNumber = <int, _AttTripletSlotIndices>{};
+
+    for (var i = 0; i < headers.length; i++) {
+      final match = namePattern.firstMatch(headers[i].trim());
+      if (match == null) continue;
+      final n = int.tryParse(match.group(1) ?? '');
+      if (n == null) continue;
+
+      final typeIdx = headers.indexWhere(
+        (h) => h.trim().toUpperCase() == 'ATT${n}_TYPE',
+      );
+      var wertIdx = headers.indexWhere((h) {
+        final u = h.trim().toUpperCase();
+        return u == 'ATT${n}_WERT' ||
+            u == 'ATT${n}_VALUE' ||
+            u == 'ATT${n}_OPTIONS';
+      });
+      if (typeIdx < 0 || wertIdx < 0) continue;
+
+      byNumber[n] = _AttTripletSlotIndices(
+        nameColumn: i,
+        typeColumn: typeIdx,
+        wertColumn: wertIdx,
+      );
+    }
+
+    final sorted = byNumber.keys.toList()..sort();
+    return [for (final n in sorted) byNumber[n]!];
+  }
+
+  static List<String> _buildDefaultTemplateExportHeaders(int attSlotCount) {
+    final headers = <String>['Revisionsfeld', 'Revisionsobjekt'];
+    for (var n = 1; n <= attSlotCount; n++) {
+      headers.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
+    }
+    return headers;
+  }
+
+  static _TemplateStyleExportLayout _layoutFromHeaders(
+    List<String> headers,
+    int minAttSlots,
+  ) {
+    var working = List<String>.from(headers);
+    var slots = _parseAttTripletSlotsFromHeaders(working);
+
+    while (slots.length < minAttSlots) {
+      final n = slots.length + 1;
+      working.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
+      slots = _parseAttTripletSlotsFromHeaders(working);
+    }
+
+    final rfCol = _findHeaderIndex(
+      working,
+      ['revisionsfeld', 'gewerk'],
+    );
+    final roCol = _findHeaderIndex(working, ['revisionsobjekt', 'anlagentyp']);
+
+    return _TemplateStyleExportLayout(
+      headers: working,
+      revisionsfeldColumn: rfCol >= 0 ? rfCol : 0,
+      revisionsobjektColumn: roCol >= 0 ? roCol : 1,
+      attSlots: slots,
+    );
+  }
+
+  static Future<_TemplateStyleExportLayout> _resolveTemplateStyleExportLayout({
+    required List<Anlage> anlagen,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplines,
+    String? projectId,
+  }) async {
+    final globalSchema = projectId != null && projectId.isNotEmpty
+        ? await _loadGlobalSchema(projectId)
+        : <Map<String, dynamic>>[];
+
+    final minAttSlots = _maxAttributeSlotsForExport(
+      anlagen: anlagen,
+      disciplines: disciplines,
+      globalSchema: globalSchema,
+      csvSettings: csvSettings,
+    );
+
+    if (projectId != null && projectId.isNotEmpty) {
+      final templateSettings =
+          await TemplateService.loadTemplateCsvSettings(projectId);
+      final savedHeader =
+          (templateSettings['importHeaderRow'] as List?)?.cast<String>() ?? [];
+      if (savedHeader.isNotEmpty) {
+        final exportHeaders = _templateHeadersForExport(savedHeader);
+        return _layoutFromHeaders(exportHeaders, minAttSlots);
+      }
+    }
+
+    return _layoutFromHeaders(
+      _buildDefaultTemplateExportHeaders(minAttSlots),
+      minAttSlots,
+    );
+  }
+
+  static List<String> _buildTemplateStyleExportRow({
+    required Anlage anlage,
+    required _TemplateStyleExportLayout layout,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplines,
+    required List<Map<String, dynamic>> globalSchema,
+  }) {
+    final row = List<String>.filled(layout.headers.length, '', growable: true);
+    final discipline = _disciplineForAnlage(anlage, disciplines);
+
+    if (layout.revisionsfeldColumn >= 0 &&
+        layout.revisionsfeldColumn < row.length) {
+      if (csvSettings.level1IsDiscipline) {
+        row[layout.revisionsfeldColumn] = anlage.discipline.label;
+      } else {
+        row[layout.revisionsfeldColumn] = _paramValueToCsvCell(
+          csvSettings.revisionsfeldValueFromParams(anlage.params) ??
+              csvSettings.readParamValue(
+                anlage.params,
+                csvSettings.resolveGewerkGroupingParamKey(),
+              ),
+        );
+      }
+    }
+
+    if (layout.revisionsobjektColumn >= 0 &&
+        layout.revisionsobjektColumn < row.length) {
+      row[layout.revisionsobjektColumn] = _paramValueToCsvCell(
+        csvSettings.schemaItemValueFromParams(anlage.params) ?? anlage.name,
+      );
+    }
+
+    final fields = _orderedExportSchemaFields(
+      anlage: anlage,
+      discipline: discipline,
+      globalSchema: globalSchema,
+      csvSettings: csvSettings,
+    );
+
+    for (var i = 0; i < layout.attSlots.length && i < fields.length; i++) {
+      final slot = layout.attSlots[i];
+      final field = fields[i];
+      final paramKey = _schemaFieldParamKey(field);
+      if (slot.nameColumn >= 0 && slot.nameColumn < row.length) {
+        row[slot.nameColumn] = _schemaFieldLabel(field);
+      }
+      if (slot.typeColumn >= 0 && slot.typeColumn < row.length) {
+        row[slot.typeColumn] = _exportTypeLabelForField(field);
+      }
+      if (slot.wertColumn >= 0 && slot.wertColumn < row.length) {
+        row[slot.wertColumn] = _paramValueToCsvCell(
+          csvSettings.readParamValue(anlage.params, paramKey) ??
+              anlage.params[paramKey],
+        );
+      }
     }
 
     return row;
@@ -729,6 +1023,25 @@ class CsvService {
           settings.writeAnlageBauteilToParams(params, anlageBauteilValue);
         }
 
+        final revisionsobjektValue =
+            (settings.revisionsobjektValueFromParams(params) ??
+                    settings.schemaItemValueFromParams(params) ??
+                    '')
+                .trim();
+        if (revisionsobjektValue.isNotEmpty) {
+          settings.writeHierarchyLocationToParams(
+            params,
+            revisionsfeld: disciplineLabelValue,
+            revisionsobjekt: revisionsobjektValue,
+          );
+        } else {
+          final level1LabelKey = settings.labelGewerk.trim();
+          if (level1LabelKey.isNotEmpty &&
+              !settings.isLeafNameParamKey(level1LabelKey)) {
+            params[level1LabelKey] = disciplineLabelValue;
+          }
+        }
+
         final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
         if (discipline == null) {
           debugPrint('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
@@ -860,12 +1173,14 @@ class CsvService {
     }
   }
 
-  /// Exportiert Anlagen zu CSV – rein datengetrieben aus params (CSV-Import-Struktur).
-  /// Spalten = alle vorkommenden Param-Keys (sortiert) + 4 Foto-Spalten.
-  static Future<String?> exportAnlagenCsvForDisciplines({
+  /// Erstellt die CSV-Datei im Temp-Ordner (ohne Teilen/Speichern-Dialog).
+  static Future<ExportBuiltFile> buildAnlagenCsvExportFile({
     required List<Anlage> anlagen,
     required CsvSettings csvSettings,
-    ExportDestination destination = ExportDestination.share,
+    List<Disziplin> disciplines = const [],
+    String? projectId,
+    String? buildingId,
+    DatabaseService? dbService,
   }) async {
     if (anlagen.isEmpty) {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
@@ -881,18 +1196,48 @@ class CsvService {
       final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
       final orderedAnlagen = _orderAnlagenHierarchically(anlagen);
+      var disciplineList = List<Disziplin>.from(disciplines);
+      if (disciplineList.isEmpty &&
+          dbService != null &&
+          buildingId != null &&
+          buildingId.isNotEmpty) {
+        disciplineList = await dbService.getDisciplinesByBuildingId(buildingId);
+      }
+
       final attributePairs = csvSettings.attributeColumnPairs;
-      final importHeaderRow = csvSettings.importHeaderRow;
-      final hasImportStructure = importHeaderRow.isNotEmpty;
-      final rawDataColumnKeys =
-          hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagen);
-      final dataColumnKeys = rawDataColumnKeys.where((k) => !_isValidationParamKey(k.trim())).toList();
+      final hasImportStructure = shouldExportWithAnlagenImportStructure(
+        csvSettings: csvSettings,
+        anlagen: orderedAnlagen,
+      );
+      _TemplateStyleExportLayout? templateLayout;
+      List<String> dataColumnKeys;
+      List<Map<String, dynamic>> globalSchema = [];
+      if (hasImportStructure) {
+        dataColumnKeys = csvSettings.importHeaderRow
+            .where((k) => !_isValidationParamKey(k.trim()))
+            .toList();
+      } else {
+        if (projectId != null && projectId.isNotEmpty) {
+          globalSchema = await _loadGlobalSchema(projectId);
+        }
+        templateLayout = await _resolveTemplateStyleExportLayout(
+          anlagen: orderedAnlagen,
+          csvSettings: csvSettings,
+          disciplines: disciplineList,
+          projectId: projectId,
+        );
+        dataColumnKeys = templateLayout.headers;
+      }
+
       final headerRow = useFotoColumns
           ? _buildExportHeader(dataColumnKeys, fotoLabels)
           : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
       final csvData = <List<String>>[headerRow];
 
-      debugPrint('CSV Header: $headerRow');
+      debugPrint(
+        'CSV Header (${hasImportStructure ? 'Anlagen-Import' : 'Gewerkevorlagen (ATT+WERT)'}, '
+        '${dataColumnKeys.length} Spalten): $headerRow',
+      );
 
       final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
 
@@ -906,12 +1251,13 @@ class CsvService {
                 fotoLabels: fotoLabels,
                 fotoNumbers: emptyFotoNumbers,
               )
-            : <String>[
-                for (final key in dataColumnKeys)
-                  (useFotoColumns && _isFotoLabel(key, fotoLabels))
-                      ? _fotoNumberForLabel(key, emptyFotoNumbers, fotoLabels)
-                      : _paramValueToCsvCell(anlage.params[key]),
-              ];
+            : _buildTemplateStyleExportRow(
+                anlage: anlage,
+                layout: templateLayout!,
+                csvSettings: csvSettings,
+                disciplines: disciplineList,
+                globalSchema: globalSchema,
+              );
 
         if (useFotoColumns) {
           for (final i in appendedIndices) {
@@ -946,13 +1292,7 @@ class CsvService {
 
       debugPrint('CSV-Export abgeschlossen: ${csvData.length - 1} Anlagen exportiert');
 
-      return _deliverExportFile(
-        file: file,
-        fileName: fileName,
-        destination: destination,
-        shareText: 'Anlagen-Export',
-        shareSubject: 'Anlagen CSV Export',
-      );
+      return ExportBuiltFile(file: file, fileName: fileName);
     } catch (e, stackTrace) {
       debugPrint('CSV-Export Fehler: $e');
       debugPrint('Stack Trace: $stackTrace');
@@ -960,11 +1300,66 @@ class CsvService {
     }
   }
 
+  /// Exportiert Anlagen zu CSV (Teilen oder Speichern-Dialog).
+  static Future<String?> exportAnlagenCsvForDisciplines({
+    required List<Anlage> anlagen,
+    required CsvSettings csvSettings,
+    List<Disziplin> disciplines = const [],
+    String? projectId,
+    String? buildingId,
+    DatabaseService? dbService,
+    ExportDestination destination = ExportDestination.share,
+  }) async {
+    final built = await buildAnlagenCsvExportFile(
+      anlagen: anlagen,
+      csvSettings: csvSettings,
+      disciplines: disciplines,
+      projectId: projectId,
+      buildingId: buildingId,
+      dbService: dbService,
+    );
+    return _deliverExportFile(
+      file: built.file,
+      fileName: built.fileName,
+      destination: destination,
+      shareText: 'Anlagen-Export',
+      shareSubject: 'Anlagen CSV Export',
+    );
+  }
+
   /// Erstellt ein ZIP-Archiv mit CSV und Fotos. Gibt die temporäre ZIP-Datei zurück.
+  static Future<ExportBuiltFile> buildAnlagenZipExportFile({
+    required List<Anlage> anlagen,
+    required CsvSettings csvSettings,
+    required PhotoExportStructure structure,
+    List<Disziplin> disciplines = const [],
+    String? projectId,
+    String? buildingId,
+    DatabaseService? dbService,
+  }) async {
+    final zipFile = await _buildAnlagenZipFile(
+      anlagen: anlagen,
+      csvSettings: csvSettings,
+      structure: structure,
+      disciplines: disciplines,
+      projectId: projectId,
+      buildingId: buildingId,
+      dbService: dbService,
+    );
+    return ExportBuiltFile(
+      file: zipFile,
+      fileName: path.basename(zipFile.path),
+    );
+  }
+
   static Future<File> _buildAnlagenZipFile({
     required List<Anlage> anlagen,
     required CsvSettings csvSettings,
     required PhotoExportStructure structure,
+    List<Disziplin> disciplines = const [],
+    String? projectId,
+    String? buildingId,
+    DatabaseService? dbService,
   }) async {
     if (anlagen.isEmpty) {
       throw Exception('Keine Anlagen zum Exportieren vorhanden');
@@ -986,12 +1381,38 @@ class CsvService {
     int fotoCounter = 1;
 
     final orderedAnlagenForHeader = _orderAnlagenHierarchically(anlagen);
+    var disciplineList = List<Disziplin>.from(disciplines);
+    if (disciplineList.isEmpty &&
+        dbService != null &&
+        buildingId != null &&
+        buildingId.isNotEmpty) {
+      disciplineList = await dbService.getDisciplinesByBuildingId(buildingId);
+    }
+
     final attributePairs = csvSettings.attributeColumnPairs;
-    final importHeaderRow = csvSettings.importHeaderRow;
-    final hasImportStructure = importHeaderRow.isNotEmpty;
-    final rawDataColumnKeys =
-        hasImportStructure ? importHeaderRow : _collectAllExportParamKeys(orderedAnlagenForHeader);
-    final dataColumnKeys = rawDataColumnKeys.where((k) => !_isValidationParamKey(k.trim())).toList();
+    final hasImportStructure = shouldExportWithAnlagenImportStructure(
+      csvSettings: csvSettings,
+      anlagen: orderedAnlagenForHeader,
+    );
+    _TemplateStyleExportLayout? templateLayout;
+    List<String> dataColumnKeys;
+    List<Map<String, dynamic>> globalSchema = [];
+    if (hasImportStructure) {
+      dataColumnKeys = csvSettings.importHeaderRow
+          .where((k) => !_isValidationParamKey(k.trim()))
+          .toList();
+    } else {
+      if (projectId != null && projectId.isNotEmpty) {
+        globalSchema = await _loadGlobalSchema(projectId);
+      }
+      templateLayout = await _resolveTemplateStyleExportLayout(
+        anlagen: orderedAnlagenForHeader,
+        csvSettings: csvSettings,
+        disciplines: disciplineList,
+        projectId: projectId,
+      );
+      dataColumnKeys = templateLayout.headers;
+    }
 
     final csvData = <List<String>>[];
     final headerRow = useFotoColumns
@@ -1060,7 +1481,7 @@ class CsvService {
         }
       }
 
-      final dataRow = hasImportStructure
+      var dataRow = hasImportStructure
           ? _buildRowFromImportStructure(
               anlage: anlage,
               headerRow: dataColumnKeys,
@@ -1068,12 +1489,13 @@ class CsvService {
               fotoLabels: fotoLabels,
               fotoNumbers: fotoNumbers,
             )
-          : <String>[
-              for (final key in dataColumnKeys)
-                (useFotoColumns && _isFotoLabel(key, fotoLabels))
-                    ? _fotoNumberForLabel(key, fotoNumbers, fotoLabels)
-                    : _paramValueToCsvCell(anlage.params[key]),
-            ];
+          : _buildTemplateStyleExportRow(
+              anlage: anlage,
+              layout: templateLayout!,
+              csvSettings: csvSettings,
+              disciplines: disciplineList,
+              globalSchema: globalSchema,
+            );
 
       if (useFotoColumns) {
         for (final i in appendedIndices) {
@@ -1129,27 +1551,34 @@ class CsvService {
     required List<Anlage> anlagen,
     required CsvSettings csvSettings,
     required PhotoExportStructure structure,
+    List<Disziplin> disciplines = const [],
+    String? projectId,
+    String? buildingId,
+    DatabaseService? dbService,
     ExportDestination destination = ExportDestination.share,
   }) async {
     try {
-      final zipFile = await _buildAnlagenZipFile(
+      final built = await buildAnlagenZipExportFile(
         anlagen: anlagen,
         csvSettings: csvSettings,
         structure: structure,
+        disciplines: disciplines,
+        projectId: projectId,
+        buildingId: buildingId,
+        dbService: dbService,
       );
 
-      final timestamp = path.basenameWithoutExtension(zipFile.path).replaceFirst('anlagen_export_', '');
       try {
         return await _deliverExportFile(
-          file: zipFile,
-          fileName: 'anlagen_export_$timestamp.zip',
+          file: built.file,
+          fileName: built.fileName,
           destination: destination,
           shareText: 'Anlagen-Export mit Fotos',
           shareSubject: 'Anlagen ZIP Export',
         );
       } finally {
-        if (await zipFile.exists()) {
-          await zipFile.delete();
+        if (await built.file.exists()) {
+          await built.file.delete();
         }
       }
     } catch (e, stackTrace) {

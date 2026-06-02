@@ -80,6 +80,10 @@ class CsvSettings {
   final String groupingEtageParamKey;
   final String groupingGewerkParamKey;
   final String groupingAnlageParamKey;
+  /// Expliziter Param-Key für Anzeige Ebene 3 (Gewerkevorlagen / Neuaufnahme), z. B. „Name“.
+  final String displayNameParamKey;
+  /// Optional: Spalte aus Anlagen-CSV-Import (nur wenn importHeaderRow gesetzt ist).
+  final int? displayNameSpalte;
 
   const CsvSettings({
     required this.level1,
@@ -104,7 +108,12 @@ class CsvSettings {
     this.groupingEtageParamKey = '',
     this.groupingGewerkParamKey = '',
     this.groupingAnlageParamKey = '',
+    this.displayNameParamKey = 'Name',
+    this.displayNameSpalte,
   });
+
+  /// True, wenn mindestens einmal ein Anlagen-CSV-Import durchgeführt wurde.
+  bool get hasAnlagenCsvImport => importHeaderRow.isNotEmpty;
 
   /// Alle aktiven Ebenen in Reihenfolge (1 → 2 → 3).
   List<HierarchyLevelConfig> get enabledLevelsOrdered {
@@ -173,6 +182,86 @@ class CsvSettings {
     final leaf = leafLevel;
     if (leaf == null) return null;
     return _headerLabelAt(leaf.nameColumn);
+  }
+
+  /// Param-Key, der in der Anlagenübersicht als Beschriftung der Ebene 3 genutzt wird.
+  /// Priorität: expliziter Param-Key (Gewerkevorlage) → Anlagen-CSV-Spalte → Blatt-Spalte.
+  String? resolveDisplayNameParamKey() {
+    final explicit = displayNameParamKey.trim();
+    if (explicit.isNotEmpty) return explicit;
+    final fromDisplayColumn = _headerLabelAt(displayNameSpalte);
+    if (fromDisplayColumn != null && fromDisplayColumn.isNotEmpty) {
+      return fromDisplayColumn;
+    }
+    return resolveNameParamKey();
+  }
+
+  static bool paramKeysMatch(String a, String b) {
+    final x = a.trim().toLowerCase();
+    final y = b.trim().toLowerCase();
+    if (x.isEmpty || y.isEmpty) return false;
+    if (x == y) return true;
+    return x.startsWith('${y}_') || y.startsWith('${x}_');
+  }
+
+  /// Liest einen Param-Wert inkl. case-insensitive Key und Schema-Key mit UUID-Suffix.
+  String? paramValueForKey(Map<String, dynamic> params, String desiredKey) {
+    final trimmed = desiredKey.trim();
+    if (trimmed.isEmpty) return null;
+
+    final direct = readParamValue(params, trimmed);
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    for (final entry in params.entries) {
+      final key = entry.key.toString().trim();
+      if (!paramKeysMatch(key, trimmed)) continue;
+      final value = entry.value?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  /// Anzeigename für Ebene 3 aus Params (Neuaufnahme / Gewerkevorlagen).
+  String? displayNameValueFromParams(Map<String, dynamic> params) {
+    final configured = resolveDisplayNameParamKey();
+    if (configured != null && configured.isNotEmpty) {
+      final fromConfigured = paramValueForKey(params, configured);
+      if (fromConfigured != null && fromConfigured.isNotEmpty) {
+        return fromConfigured;
+      }
+    }
+
+    for (final candidate in const [
+      'Name',
+      'Anlagenbezeichnung',
+      'Bezeichnung',
+      'name',
+    ]) {
+      final v = paramValueForKey(params, candidate);
+      if (v != null && v.isNotEmpty) return v;
+    }
+
+    final leafKey = resolveNameParamKey();
+    if (leafKey != null && leafKey.isNotEmpty) {
+      final fromLeaf = paramValueForKey(params, leafKey);
+      if (fromLeaf != null && fromLeaf.isNotEmpty) return fromLeaf;
+    }
+    return null;
+  }
+
+  void writeDisplayNameToParams(Map<String, dynamic> params, String value) {
+    final v = value.trim();
+    if (v.isEmpty) return;
+
+    final key = resolveDisplayNameParamKey()?.trim();
+    if (key == null || key.isEmpty) return;
+
+    params[key] = v;
+    for (final entry in params.entries.toList()) {
+      if (paramKeysMatch(entry.key.toString(), key)) {
+        params[entry.key] = v;
+      }
+    }
   }
 
   /// Param-Key der Ebene, deren Wert das Attribut-Schema bestimmt (Unterebene des Gewerks).
@@ -364,7 +453,9 @@ class CsvSettings {
   void writeSchemaItemToParams(Map<String, dynamic> params, String value) {
     final key = resolveSchemaItemParamKey();
     if (key == null || key.trim().isEmpty || value.trim().isEmpty) return;
-    params[key.trim()] = value.trim();
+    final trimmedKey = key.trim();
+    if (isLeafNameParamKey(trimmedKey)) return;
+    params[trimmedKey] = value.trim();
   }
 
   /// Liest Revisionsfeld (Ebene 1) aus gespeicherten Parametern.
@@ -385,9 +476,26 @@ class CsvSettings {
     );
   }
 
-  /// Alle Param-Keys, unter denen Revisionsobjekt-Werte gespeichert sein können.
+  /// Param-Key der Blatt-Ebene (Anlagenbezeichnung aus CSV) – darf nie mit RO überschrieben werden.
+  String? get leafNameParamKey => resolveNameParamKey();
+
+  bool isLeafNameParamKey(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return false;
+
+    final display = resolveDisplayNameParamKey()?.trim();
+    if (display != null && display.isNotEmpty && paramKeysMatch(k, display)) {
+      return true;
+    }
+
+    final leaf = leafNameParamKey?.trim();
+    if (leaf == null || leaf.isEmpty) return false;
+    return paramKeysMatch(k, leaf);
+  }
+
+  /// Alle Param-Keys für Revisionsobjekt (Ebene 2), ohne Blatt-Namen-Spalte.
   List<String> allRevisionsobjektParamKeys() {
-    final keys = <String>{...legacySchemaItemParamKeys};
+    final keys = <String>{};
     for (final k in <String?>[
       resolveRevisionsobjektParamKey(),
       resolveRevisionsobjektGroupingParamKey(),
@@ -395,7 +503,10 @@ class CsvSettings {
       resolveAnlageGroupingParamKey(),
     ]) {
       final t = k?.trim() ?? '';
-      if (t.isNotEmpty) keys.add(t);
+      if (t.isNotEmpty && !isLeafNameParamKey(t)) keys.add(t);
+    }
+    for (final legacy in legacySchemaItemParamKeys) {
+      if (!isLeafNameParamKey(legacy)) keys.add(legacy);
     }
     return keys.toList();
   }
@@ -430,6 +541,19 @@ class CsvSettings {
       for (final key in allRevisionsfeldParamKeys()) {
         params[key] = rf;
       }
+    }
+
+    // Explizite Ebene-Labels als feste, lesbare Parameter mitschreiben
+    // (z. B. "Gewerk", "Anlage"), damit diese im Dialog als read-only angezeigt werden können.
+    final level1Key = labelGewerk.trim();
+    final level2Key = labelAnlage.trim();
+    if (level2Key.isNotEmpty && !isLeafNameParamKey(level2Key)) {
+      params[level2Key] = ro;
+    }
+    if (rf.isNotEmpty &&
+        level1Key.isNotEmpty &&
+        !isLeafNameParamKey(level1Key)) {
+      params[level1Key] = rf;
     }
   }
 
@@ -483,6 +607,8 @@ class CsvSettings {
     if (abKey != null && abKey.isNotEmpty) keys.add(abKey);
     final schemaKey = resolveSchemaItemParamKey();
     if (schemaKey != null && schemaKey.isNotEmpty) keys.add(schemaKey);
+    final leafKey = leafNameParamKey;
+    if (leafKey != null && leafKey.isNotEmpty) keys.add(leafKey);
     final rfKey = resolveRevisionsfeldListGroupingParamKey();
     if (rfKey != null && rfKey.isNotEmpty) keys.add(rfKey);
     return keys;
@@ -562,8 +688,11 @@ class CsvSettings {
     String? groupingEtageParamKey,
     String? groupingGewerkParamKey,
     String? groupingAnlageParamKey,
+    String? displayNameParamKey,
+    int? displayNameSpalte,
     bool clearEtageSpalte = false,
     bool clearAnlageBauteilSpalte = false,
+    bool clearDisplayNameSpalte = false,
   }) {
     return CsvSettings(
       level1: level1 ?? this.level1,
@@ -590,6 +719,10 @@ class CsvSettings {
       groupingEtageParamKey: groupingEtageParamKey ?? this.groupingEtageParamKey,
       groupingGewerkParamKey: groupingGewerkParamKey ?? this.groupingGewerkParamKey,
       groupingAnlageParamKey: groupingAnlageParamKey ?? this.groupingAnlageParamKey,
+      displayNameParamKey: displayNameParamKey ?? this.displayNameParamKey,
+      displayNameSpalte: clearDisplayNameSpalte
+          ? null
+          : (displayNameSpalte ?? this.displayNameSpalte),
     );
   }
 
@@ -617,6 +750,8 @@ class CsvSettings {
       'groupingEtageParamKey': groupingEtageParamKey,
       'groupingGewerkParamKey': groupingGewerkParamKey,
       'groupingAnlageParamKey': groupingAnlageParamKey,
+      'displayNameParamKey': displayNameParamKey,
+      'displayNameSpalte': displayNameSpalte,
     };
   }
 
@@ -668,6 +803,8 @@ class CsvSettings {
       groupingEtageParamKey: json['groupingEtageParamKey'] as String? ?? '',
       groupingGewerkParamKey: json['groupingGewerkParamKey'] as String? ?? '',
       groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
+      displayNameParamKey: json['displayNameParamKey'] as String? ?? 'Name',
+      displayNameSpalte: json['displayNameSpalte'] as int?,
     );
   }
 
@@ -753,6 +890,16 @@ class CsvSettingsNotifier extends StateNotifier<CsvSettings> {
     final prefs = await SharedPreferences.getInstance();
     final key = 'csv_settings_$projectId';
     await prefs.setString(key, json.encode(settings.toJson()));
+  }
+
+  /// Entfernt gespeicherte Anlagen-CSV-Import-Struktur (Header, Attribut-Spaltenpaare).
+  Future<void> clearAnlagenCsvImportStructure() async {
+    await save(
+      state.copyWith(
+        importHeaderRow: const [],
+        attributeColumnPairs: const [],
+      ),
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 // lib/services/template_service.dart
 
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -215,6 +216,38 @@ class TemplateService {
     return triplets;
   }
 
+  static List<String> _parseStringList(dynamic raw) {
+    if (raw is! List) return [];
+    return raw.map((e) => e.toString()).toList();
+  }
+
+  /// Lädt die CSV-Einstellungen für Vorlagen (inkl. gespeicherter Import-Headerzeile).
+  static Future<Map<String, dynamic>> loadTemplateCsvSettings(String projectId) async {
+    return _loadTemplateCsvSettings(projectId);
+  }
+
+  /// Entfernt die gespeicherte Gewerkevorlagen-Import-Headerzeile.
+  static Future<void> clearTemplateImportHeaderRow(String projectId) async {
+    await saveTemplateImportHeaderRow(projectId, const []);
+  }
+
+  /// Speichert die Header-Zeile der zuletzt importierten Gewerkevorlagen-CSV.
+  static Future<void> saveTemplateImportHeaderRow(
+    String projectId,
+    List<String> headerRow,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'template_csv_settings_$projectId';
+    final current = await _loadTemplateCsvSettings(projectId);
+    await prefs.setString(
+      key,
+      json.encode({
+        ...current,
+        'importHeaderRow': headerRow,
+      }),
+    );
+  }
+
   /// Lädt die CSV-Einstellungen für Vorlagen
   static Future<Map<String, dynamic>> _loadTemplateCsvSettings(String projectId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -243,6 +276,7 @@ class TemplateService {
           'ersteSpalteAttributDefinitionen':
               settings['ersteSpalteAttributDefinitionen'] as int? ?? defaultErsteSpalteAttribut,
           'attributeTripletColumns': attributeTripletColumns,
+          'importHeaderRow': _parseStringList(settings['importHeaderRow']),
         };
       } catch (e) {
         debugPrint('Fehler beim Laden der Vorlagen-CSV-Einstellungen: $e');
@@ -256,6 +290,7 @@ class TemplateService {
       'bezeichnungSpalte': defaultRevisionsobjektSpalte,
       'ersteSpalteAttributDefinitionen': defaultErsteSpalteAttribut,
       'attributeTripletColumns': <AttributeTripletColumn>[],
+      'importHeaderRow': <String>[],
     };
   }
 
@@ -387,6 +422,10 @@ class TemplateService {
       throw Exception('CSV-Datei ist leer');
     }
 
+    final importHeaderRow =
+        csvData[0].map((cell) => cell.toString().trim()).toList();
+    await saveTemplateImportHeaderRow(projectId, importHeaderRow);
+
     // columnIndices sind oben bereits geladen (für Delimiter-Erkennung)
 
     // Lösche alle bestehenden Vorlagen für dieses Projekt
@@ -449,54 +488,117 @@ class TemplateService {
     return count;
   }
 
+  static Disziplin _defaultDisciplineForGewerk(String gewerk) {
+    const palette = [
+      Color(0xFF5C6BC0),
+      Color(0xFF43A047),
+      Color(0xFFFB8C00),
+      Color(0xFF8E24AA),
+      Color(0xFF00ACC1),
+      Color(0xFFE53935),
+    ];
+    final color = palette[gewerk.hashCode.abs() % palette.length];
+    return Disziplin(
+      label: gewerk,
+      icon: Icons.folder_open,
+      color: color,
+      schema: const [],
+      revisionsobjektSchemas: const {},
+    );
+  }
+
+  /// Legt fehlende Gewerke aus Gewerkevorlagen an und synchronisiert Revisionsobjekt-Schemata.
+  static Future<List<Disziplin>> ensureDisciplinesFromTemplates(
+    DatabaseService dbService,
+    String buildingId,
+    String projectId,
+  ) async {
+    final templateRows = await dbService.getTemplatesByProjectId(projectId);
+    if (templateRows.isEmpty) {
+      return dbService.getDisciplinesByBuildingId(buildingId);
+    }
+
+    final existing = await dbService.getDisciplinesByBuildingId(buildingId);
+    final byLabel = <String, Disziplin>{
+      for (final d in existing) d.label.trim(): d,
+    };
+
+    final schemaByGewerkAndTyp = <String, Map<String, List<Map<String, dynamic>>>>{};
+    final allGewerke = <String>{};
+
+    for (final row in templateRows) {
+      final gewerk = row.gewerk.trim();
+      final typ = row.anlagentyp.trim();
+      if (gewerk.isEmpty) continue;
+      allGewerke.add(gewerk);
+      if (typ.isEmpty) continue;
+
+      schemaByGewerkAndTyp.putIfAbsent(gewerk, () => {});
+      final schema = getSchemaFromTemplateParameter(row.parameter);
+      if (schema.isEmpty) {
+        schemaByGewerkAndTyp[gewerk]!.putIfAbsent(typ, () => []);
+        continue;
+      }
+      final merged = mergeSchemaFieldLists(
+        schemaByGewerkAndTyp[gewerk]![typ] ?? const [],
+        schema,
+      );
+      schemaByGewerkAndTyp[gewerk]![typ] = merged;
+    }
+
+    Disziplin mergeDiscipline(String gewerk, Disziplin base) {
+      final byTyp = schemaByGewerkAndTyp[gewerk] ?? {};
+      final mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
+        base.revisionsobjektSchemas,
+      );
+      for (final entry in byTyp.entries) {
+        mergedRoSchemas[entry.key] =
+            entry.value.map((f) => Map<String, dynamic>.from(f)).toList();
+      }
+      for (final row in templateRows) {
+        if (row.gewerk.trim() != gewerk) continue;
+        final typ = row.anlagentyp.trim();
+        if (typ.isNotEmpty) {
+          mergedRoSchemas.putIfAbsent(typ, () => []);
+        }
+      }
+      return Disziplin(
+        label: base.label,
+        icon: base.icon,
+        color: base.color,
+        schema: base.globalSchemaFields,
+        groupingKey: base.groupingKey,
+        revisionsobjektSchemas: mergedRoSchemas,
+      );
+    }
+
+    final result = <Disziplin>[];
+    for (final d in existing) {
+      result.add(mergeDiscipline(d.label.trim(), d));
+    }
+
+    final sortedNewGewerke = allGewerke.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final gewerk in sortedNewGewerke) {
+      if (byLabel.containsKey(gewerk)) continue;
+      final base = _defaultDisciplineForGewerk(gewerk);
+      result.add(mergeDiscipline(gewerk, base));
+    }
+
+    await dbService.replaceDisciplines(buildingId, result);
+    debugPrint(
+      'Disziplinen aus Vorlagen: ${result.length} Gewerke für Gebäude $buildingId',
+    );
+    return result;
+  }
+
   /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (pro Revisionsobjekt).
   static Future<void> _syncDisciplineSchemasFromTemplates(
     DatabaseService dbService,
     String buildingId,
     String projectId,
   ) async {
-    final disciplines = await dbService.getDisciplinesByBuildingId(buildingId);
-    final templateRows = await dbService.getTemplatesByProjectId(projectId);
-    final schemaByGewerkAndTyp = <String, Map<String, List<Map<String, dynamic>>>>{};
-
-    for (final row in templateRows) {
-      final gewerk = row.gewerk.trim();
-      final typ = row.anlagentyp.trim();
-      if (gewerk.isEmpty || typ.isEmpty) continue;
-      final schema = getSchemaFromTemplateParameter(row.parameter);
-      if (schema.isEmpty) continue;
-
-      schemaByGewerkAndTyp.putIfAbsent(gewerk, () => {});
-      final existing = schemaByGewerkAndTyp[gewerk]![typ] ?? const <Map<String, dynamic>>[];
-      final byKey = <String, Map<String, dynamic>>{};
-      for (final f in existing) {
-        final key = (f['key'] ?? '').toString();
-        if (key.isNotEmpty) byKey[key] = Map<String, dynamic>.from(f);
-      }
-      for (final f in schema) {
-        final key = (f['key'] ?? '').toString();
-        if (key.isEmpty) continue;
-        byKey[key] = Map<String, dynamic>.from(f);
-      }
-      schemaByGewerkAndTyp[gewerk]![typ] = byKey.values.toList();
-    }
-
-    for (final d in disciplines) {
-      final gewerkLabel = d.label.trim();
-      final byTyp = schemaByGewerkAndTyp[gewerkLabel];
-      if (byTyp == null || byTyp.isEmpty) continue;
-
-      final globalFields = d.globalSchemaFields;
-      final mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(d.revisionsobjektSchemas);
-      for (final entry in byTyp.entries) {
-        mergedRoSchemas[entry.key] = entry.value.map((f) => Map<String, dynamic>.from(f)).toList();
-      }
-
-      d.revisionsobjektSchemas = mergedRoSchemas;
-      d.schema = globalFields;
-    }
-    await dbService.replaceDisciplines(buildingId, disciplines);
-    debugPrint('Disziplin-Schemata pro Revisionsobjekt synchronisiert für ${disciplines.length} Disziplinen.');
+    await ensureDisciplinesFromTemplates(dbService, buildingId, projectId);
   }
 
   /// Lädt Vorlagen aus einer CSV-Datei (ohne Speichern in DB - für temporäre Verwendung)

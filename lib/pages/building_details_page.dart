@@ -6,8 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:cross_file/cross_file.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/disziplin_manager.dart';
 import '../models/project.dart';
@@ -26,6 +29,7 @@ import '../providers/csv_settings_provider.dart';
 import '../navigation/route_observer.dart';
 import '../theme/app_theme.dart';
 import 'widgets/generic_anlage_dialog.dart';
+import 'widgets/move_anlagen_dialog.dart';
 
 // Import der Fullscreen-Version
 import 'floor_plan_page.dart';
@@ -94,6 +98,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     Map<String, dynamic> additionalParams,
     bool isSchemaItemLevel,
   })? _groupSelectionContext;
+
+  /// Zuletzt aufgeklapptes Gewerk (für Add-FAB bei mehreren Gewerken).
+  Disziplin? _lastExpandedDiscipline;
+
+  /// Gewerkevorlagen im aktuellen Projekt importiert.
+  bool _hasProjectTemplates = false;
 
   @override
   void initState() {
@@ -205,7 +215,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   String? _resolveSystemsDisplayNameParamKey() {
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
-    return settings.resolveNameParamKey();
+    return settings.resolveDisplayNameParamKey();
   }
 
   @override
@@ -252,6 +262,19 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
     final dbService = ref.read(databaseServiceProvider);
     var disciplines = await dbService.getDisciplinesByBuildingId(_building.id);
+    var hasTemplates = false;
+    if (_currentProject.id.isNotEmpty) {
+      final templates =
+          await dbService.getTemplatesByProjectId(_currentProject.id);
+      hasTemplates = templates.isNotEmpty;
+      if (hasTemplates && disciplines.isEmpty) {
+        disciplines = await TemplateService.ensureDisciplinesFromTemplates(
+          dbService,
+          _building.id,
+          _currentProject.id,
+        );
+      }
+    }
     var initialized = await dbService.isDisciplinesInitialized(_building.id);
 
     // Nur wenn Disziplinen noch nie initialisiert wurden, aus Anlagen extrahieren
@@ -280,6 +303,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     
     setState(() {
       _disciplines = disciplines;
+      _hasProjectTemplates = hasTemplates;
     });
     _reinitTechnikTabController();
     
@@ -507,6 +531,30 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     );
   }
 
+  /// Teilen oder Speichern – erst nach Schließen des Lade-Dialogs (sonst kein Speicherort-Dialog).
+  Future<String?> _deliverExportBuiltFile(
+    ExportBuiltFile built,
+    ExportDestination destination, {
+    String shareText = 'Anlagen-Export',
+    String shareSubject = 'Anlagen-Export',
+  }) async {
+    if (destination == ExportDestination.saveToDevice) {
+      // Kurz warten, bis der Lade-Dialog geschlossen ist – sonst öffnet sich kein Speicher-Dialog.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return null;
+      return CsvService.saveFileToDevice(
+        file: built.file,
+        fileName: built.fileName,
+      );
+    }
+    await Share.shareXFiles(
+      [XFile(built.file.path)],
+      text: shareText,
+      subject: shareSubject,
+    );
+    return null;
+  }
+
   void _showExportSavedMessage(String savedPath) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -555,31 +603,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final destination = await _showExportDestinationDialog();
       if (destination == null) return;
 
-      // Zeige Lade-Dialog
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-
-      // Alle Anlagen für dieses Gebäude neu aus der DB laden (inkl. zuletzt aufgenommene)
-      debugPrint('Starte Export für Building: ${_building.id}');
-      final dbService = ref.read(databaseServiceProvider);
-      final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
-
-      debugPrint('Export: ${anlagen.length} Anlagen gefunden (alle Anlagen des Gebäudes)');
-
-      // Dialog schließen
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
-
-      if (anlagen.isEmpty) {
-        return;
-      }
-
       if (_currentProject.id.isNotEmpty) {
         await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
       }
@@ -587,12 +610,49 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           ? ref.read(csvSettingsProvider(_currentProject.id))
           : CsvSettings.defaults();
 
+      final dbService = ref.read(databaseServiceProvider);
+      final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
+      debugPrint('Export: ${anlagen.length} Anlagen gefunden');
+
+      if (anlagen.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Keine Anlagen zum Exportieren')),
+          );
+        }
+        return;
+      }
+
       if (exportType == 'csv') {
-        // Nur CSV exportieren
-        final savedPath = await CsvService.exportAnlagenCsvForDisciplines(
-          anlagen: anlagen,
-          csvSettings: csvSettings,
-          destination: destination,
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+
+        late final ExportBuiltFile built;
+        try {
+          built = await CsvService.buildAnlagenCsvExportFile(
+            anlagen: anlagen,
+            csvSettings: csvSettings,
+            disciplines: _disciplines,
+            projectId:
+                _currentProject.id.isNotEmpty ? _currentProject.id : null,
+            buildingId: _building.id,
+            dbService: dbService,
+          );
+        } finally {
+          if (mounted) Navigator.of(context).pop();
+        }
+
+        if (!mounted) return;
+
+        final savedPath = await _deliverExportBuiltFile(
+          built,
+          destination,
+          shareSubject: 'Anlagen CSV Export',
         );
 
         if (savedPath != null) {
@@ -640,7 +700,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
         if (structure == null) return;
 
-        // Zeige Lade-Dialog
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -649,17 +708,36 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           ),
         );
 
-        // ZIP mit Fotos exportieren
-        final savedPath = await CsvService.exportAnlagenWithPhotos(
-          anlagen: anlagen,
-          csvSettings: csvSettings,
-          structure: structure,
-          destination: destination,
-        );
+        late final ExportBuiltFile built;
+        try {
+          built = await CsvService.buildAnlagenZipExportFile(
+            anlagen: anlagen,
+            csvSettings: csvSettings,
+            structure: structure,
+            disciplines: _disciplines,
+            projectId:
+                _currentProject.id.isNotEmpty ? _currentProject.id : null,
+            buildingId: _building.id,
+            dbService: dbService,
+          );
+        } finally {
+          if (mounted) Navigator.of(context).pop();
+        }
 
-        // Dialog schließen
-        if (mounted) {
-          Navigator.of(context).pop();
+        if (!mounted) return;
+
+        String? savedPath;
+        try {
+          savedPath = await _deliverExportBuiltFile(
+            built,
+            destination,
+            shareText: 'Anlagen-Export mit Fotos',
+            shareSubject: 'Anlagen ZIP Export',
+          );
+        } finally {
+          if (await built.file.exists()) {
+            await built.file.delete();
+          }
         }
 
         if (savedPath != null) {
@@ -671,10 +749,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     } catch (e, stackTrace) {
       debugPrint('Export Fehler: $e');
       debugPrint('Stack Trace: $stackTrace');
-      
-      // Dialog schließen
+
       if (mounted) {
-        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export fehlgeschlagen: $e')),
+        );
       }
     }
   }
@@ -695,6 +774,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   void _onDisciplineExpanded(Disziplin? discipline) {
+    if (discipline != null) {
+      _lastExpandedDiscipline = discipline;
+    }
     // Falls gerade eine Auswahl aktiv ist, merken wir uns alle aktiven Disziplinen,
     // damit wir die zugehörigen SystemsPages nach dem State-Update sauber beenden können.
     final activeDisciplines = _systemsSelectionMode 
@@ -1100,122 +1182,217 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     }
   }
 
-  Future<void> _openAddAnlageForGroupContext() async {
-    final ctx = _groupSelectionContext;
-    if (ctx == null || !ctx.isSchemaItemLevel) return;
+  Future<AnlagePlacementResult?> _pickPlacementForDiscipline(
+    Disziplin discipline, {
+    String? initialRevisionsfeld,
+    String? initialRevisionsobjekt,
+    Map<String, dynamic>? mergeExtraParams,
+  }) async {
+    final subKey = _resolveSystemsSubGroupingParamKey();
+    if (subKey == null || subKey.isEmpty) {
+      return AnlagePlacementResult(
+        discipline: discipline,
+        initialParams: Map<String, dynamic>.from(mergeExtraParams ?? {}),
+      );
+    }
 
-    final roValue = ctx.groupValue.trim();
-    if (roValue.isEmpty) return;
+    if (_currentProject.id.isEmpty) {
+      return AnlagePlacementResult(
+        discipline: discipline,
+        initialParams: Map<String, dynamic>.from(mergeExtraParams ?? {}),
+      );
+    }
+
+    await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+
+    final picked = await showModalBottomSheet<AnlagePlacementResult>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => MoveAnlagenDialog.forPlacement(
+        discipline: discipline,
+        buildingId: _building.id,
+        floorId: 'global',
+        projectId: _currentProject.id,
+        revisionsfeldGroupingKey: _resolveSystemsGroupingParamKey(),
+        revisionsobjektGroupingKey: subKey,
+        initialRevisionsfeld: initialRevisionsfeld,
+        initialRevisionsobjekt: initialRevisionsobjekt,
+      ),
+    );
+    if (picked == null) return null;
+
+    final merged = Map<String, dynamic>.from(picked.initialParams);
+    if (mergeExtraParams != null) {
+      merged.addAll(mergeExtraParams);
+    }
+    return AnlagePlacementResult(
+      discipline: picked.discipline,
+      initialParams: merged,
+    );
+  }
+
+  Disziplin _resolveDisciplineForAdd() {
+    if (_disciplines.isEmpty) {
+      throw StateError('Keine Disziplinen vorhanden');
+    }
+    return _disciplines.length == 1
+        ? _disciplines.first
+        : (_lastExpandedDiscipline ?? _disciplines.first);
+  }
+
+  Future<void> _ensureDisciplinesFromTemplatesIfNeeded() async {
+    if (_currentProject.id.isEmpty) return;
+    final dbService = ref.read(databaseServiceProvider);
+    final templates =
+        await dbService.getTemplatesByProjectId(_currentProject.id);
+    if (templates.isEmpty) return;
+    await TemplateService.ensureDisciplinesFromTemplates(
+      dbService,
+      _building.id,
+      _currentProject.id,
+    );
+    await _loadDisciplines(refreshSystemsPages: true);
+  }
+
+  Future<void> _openAnlageErfassungAfterPlacement({
+    required Disziplin discipline,
+    required Map<String, dynamic> placementParams,
+  }) async {
+    if (_currentProject.id.isEmpty) {
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => GenericAnlageDialog(
+          discipline: discipline,
+          buildingId: _building.id,
+          floorId: 'global',
+          existingAnlage: null,
+          index: null,
+          initialParams:
+              placementParams.isNotEmpty ? placementParams : null,
+          onSave: (newAnlage, _) async {
+            final dbService = ref.read(databaseServiceProvider);
+            await dbService.insertAnlage(newAnlage);
+            await _saveNewAnlageFromDialog(newAnlage);
+          },
+        ),
+      );
+      return;
+    }
 
     await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
     final csvSettings = ref.read(csvSettingsProvider(_currentProject.id));
-    // Param-Key der Long-Press-Gruppe (Schema-Ebene aus CSV-Einstellungen).
-    final schemaItemKey = ctx.groupKey.trim().isNotEmpty
-        ? ctx.groupKey.trim()
-        : (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
-            csvSettings.resolveSchemaItemParamKey());
-    final additionalParams = Map<String, dynamic>.from(ctx.additionalParams)
-      ..remove('__schemaOverride')
-      ..remove('__sampleAnlageId');
-    final sampleAnlageId = ctx.additionalParams['__sampleAnlageId']?.toString().trim();
+    final ro = (csvSettings.revisionsobjektValueFromParams(placementParams) ??
+            csvSettings.schemaItemValueFromParams(placementParams) ??
+            '')
+        .trim();
 
     final dbService = ref.read(databaseServiceProvider);
+    final gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+      dbService,
+      _currentProject.id,
+      gewerk: discipline.label,
+    );
 
-    Disziplin discipline = ctx.discipline;
-    try {
-      final disciplines =
-          await dbService.getDisciplinesByBuildingId(_building.id);
-      discipline = disciplines.firstWhere(
-        (d) => d.label == ctx.discipline.label,
-        orElse: () => ctx.discipline,
-      );
-    } catch (_) {}
-
-    List<Template> gewerkTemplates = const [];
-    if (_currentProject.id.isNotEmpty) {
-      gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
-        dbService,
-        _currentProject.id,
-        gewerk: ctx.discipline.label,
-      );
-    }
-
-    final matchedTemplate = gewerkTemplates.isNotEmpty
-        ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, roValue)
+    final matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
+        ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, ro)
         : null;
+    final schemaRo = ro.isNotEmpty
+        ? (TemplateService.resolveRevisionsobjektKeyForValue(
+              discipline,
+              ro,
+              templates: gewerkTemplates,
+            ) ??
+            matched?.anlagentyp.trim() ??
+            ro)
+        : '';
 
-    final schemaRo = TemplateService.resolveRevisionsobjektKeyForValue(
-          discipline,
-          roValue,
-          templates: gewerkTemplates,
-        ) ??
-        (matchedTemplate?.anlagentyp.trim().isNotEmpty == true
-            ? matchedTemplate!.anlagentyp.trim()
-            : roValue);
-
-    final parentTemplate = matchedTemplate ??
+    final parentTemplate = matched ??
         Template(
-          gewerk: ctx.discipline.label,
+          gewerk: discipline.label,
           anlageBauteil: '',
-          anlagentyp: schemaRo,
-          bezeichnung: schemaRo,
+          anlagentyp: schemaRo.isNotEmpty ? schemaRo : 'Neu',
+          bezeichnung: schemaRo.isNotEmpty ? schemaRo : 'Neu',
         );
 
-    var effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+    final childTemplates = schemaRo.isNotEmpty
+        ? gewerkTemplates
+            .where((t) =>
+                t.gewerk.trim() == discipline.label.trim() &&
+                t.anlagentyp.trim() == schemaRo &&
+                t.anlageBauteil == 'b')
+            .toList()
+        : <Template>[];
+
+    await _openGenericFormFromPlacement(
+      projectId: _currentProject.id,
+      selectedAnlagentyp: schemaRo.isNotEmpty ? schemaRo : ro,
+      parentTemplate: parentTemplate,
+      childTemplates: childTemplates,
+      placementParams: placementParams,
       discipline: discipline,
-      revisionsobjekt: schemaRo,
-      template: parentTemplate,
-      templatesForLookup: gewerkTemplates,
     );
+  }
 
-    Anlage? sampleAnlage;
-    if (sampleAnlageId != null && sampleAnlageId.isNotEmpty) {
-      sampleAnlage = await dbService.getAnlageById(sampleAnlageId);
-    }
+  Future<void> _saveNewAnlageFromDialog(Anlage newAnlage) async {
+    if (!mounted) return;
+    await _loadAllAnlagenForProgress();
+    _refreshSystemsPages();
+    _exitGroupSelectionMode();
+    _exitDisciplineSelectionMode();
+  }
 
-    // Sample-Anlage: nur RO-Schema-Maps mergen, nie gespeichertes Flat-Schema (Legacy-Bauteil).
-    if (sampleAnlage != null) {
-      final mergedRoSchemas =
-          Map<String, List<Map<String, dynamic>>>.from(
-        effectiveDiscipline.revisionsobjektSchemas,
-      );
-      sampleAnlage.discipline.revisionsobjektSchemas.forEach((key, fields) {
-        mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
-          mergedRoSchemas[key] ?? const [],
-          fields,
-        );
-      });
-      effectiveDiscipline = Disziplin(
-        label: effectiveDiscipline.label,
-        icon: effectiveDiscipline.icon,
-        color: effectiveDiscipline.color,
-        schema: effectiveDiscipline.schema,
-        groupingKey: effectiveDiscipline.groupingKey,
-        revisionsobjektSchemas: mergedRoSchemas,
-      );
-    }
-
-    effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-      discipline: effectiveDiscipline,
-      revisionsobjekt: schemaRo,
-      template: parentTemplate,
-      templatesForLookup: gewerkTemplates,
+  Future<void> _openAddAnlageWithPlacement(
+    Disziplin discipline, {
+    Map<String, dynamic>? prefilledParams,
+    String? initialRevisionsfeld,
+    String? initialRevisionsobjekt,
+  }) async {
+    final placement = await _pickPlacementForDiscipline(
+      discipline,
+      initialRevisionsfeld: initialRevisionsfeld,
+      initialRevisionsobjekt: initialRevisionsobjekt,
+      mergeExtraParams: prefilledParams,
     );
+    if (placement == null || !mounted) return;
 
-    final params = TemplateService.buildEmptyParamsFromTemplate(parentTemplate.parameter);
-    csvSettings.writeSchemaItemToParams(params, schemaRo);
-    if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
-      params[schemaItemKey] = roValue;
-    }
-    params.addAll(additionalParams);
+    await _openAnlageErfassungAfterPlacement(
+      discipline: placement.discipline,
+      placementParams: placement.initialParams,
+    );
+  }
 
-    if (sampleAnlage != null) {
-      final rfKey = csvSettings.resolveRevisionsfeldListGroupingParamKey();
-      if (rfKey != null && rfKey.isNotEmpty) {
-        final rf = csvSettings.readParamValue(sampleAnlage.params, rfKey);
-        if (rf != null && rf.isNotEmpty) params[rfKey] = rf;
-      }
-    }
+  Future<void> _openGenericFormFromPlacement({
+    required String projectId,
+    required String selectedAnlagentyp,
+    required Template parentTemplate,
+    required List<Template> childTemplates,
+    required Map<String, dynamic> placementParams,
+    required Disziplin discipline,
+  }) async {
+    final csvSettings = ref.read(csvSettingsProvider(projectId));
+    final schemaItemKey = csvSettings.resolveSchemaItemParamKey();
+    final params = TemplateService.buildInitialParamsForSchemaItem(
+      parentTemplate: parentTemplate,
+      selectedAnlagentyp: selectedAnlagentyp,
+      schemaItemParamKey: schemaItemKey,
+    );
+    params.addAll(placementParams);
+
+    final effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+      discipline: discipline,
+      revisionsobjekt: selectedAnlagentyp.trim(),
+      template: parentTemplate,
+    );
+    final initialName = csvSettings.displayNameValueFromParams(params) ?? '';
+    const uuid = Uuid();
 
     if (!mounted) return;
     await showModalBottomSheet<void>(
@@ -1228,12 +1405,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         discipline: effectiveDiscipline,
         buildingId: _building.id,
         floorId: 'global',
-        existingAnlage: null,
-        index: null,
         initialParams: params,
-        initialName: '',
-        initialRevisionsobjekt: schemaRo,
+        initialName: initialName.isNotEmpty ? initialName : null,
+        initialRevisionsobjekt: selectedAnlagentyp.trim(),
         onSave: (newAnlage, _) async {
+          final dbService = ref.read(databaseServiceProvider);
           final existing = await dbService.getAnlageById(newAnlage.id);
           if (existing != null) {
             await dbService.updateAnlage(newAnlage);
@@ -1241,12 +1417,70 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             await dbService.insertAnlage(newAnlage);
           }
 
-          if (!mounted) return;
-          await _loadAllAnlagenForProgress();
-          _refreshSystemsPages();
-          _exitGroupSelectionMode();
+          for (final t in childTemplates) {
+            final childName = t.bezeichnung.trim().isNotEmpty
+                ? t.bezeichnung.trim()
+                : t.anlagentyp.trim();
+            await dbService.insertAnlage(
+              Anlage(
+                id: uuid.v4(),
+                parentId: newAnlage.id,
+                name: childName,
+                params: TemplateService.buildEmptyParamsFromTemplate(t.parameter),
+                floorId: 'global',
+                buildingId: _building.id,
+                isMarker: false,
+                markerInfo: null,
+                markerType: discipline.label,
+                discipline: effectiveDiscipline.withEffectiveSchema(
+                  revisionsobjekt: t.anlagentyp.trim(),
+                ),
+              ),
+            );
+          }
+
+          await _saveNewAnlageFromDialog(newAnlage);
         },
       ),
+    );
+  }
+
+  Future<void> _openAddAnlageForGroupContext() async {
+    final ctx = _groupSelectionContext;
+    if (ctx == null || !ctx.isSchemaItemLevel) return;
+
+    final roValue = ctx.groupValue.trim();
+    if (roValue.isEmpty) return;
+
+    await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
+    final csvSettings = ref.read(csvSettingsProvider(_currentProject.id));
+
+    final additionalParams = Map<String, dynamic>.from(ctx.additionalParams)
+      ..remove('__schemaOverride')
+      ..remove('__sampleAnlageId');
+
+    String? initialRf;
+    final rfKey = csvSettings.resolveRevisionsfeldListGroupingParamKey();
+    if (rfKey != null && rfKey.isNotEmpty) {
+      initialRf = additionalParams.remove(rfKey)?.toString().trim();
+    }
+
+    final dbService = ref.read(databaseServiceProvider);
+    Disziplin discipline = ctx.discipline;
+    try {
+      final disciplines =
+          await dbService.getDisciplinesByBuildingId(_building.id);
+      discipline = disciplines.firstWhere(
+        (d) => d.label == ctx.discipline.label,
+        orElse: () => ctx.discipline,
+      );
+    } catch (_) {}
+
+    await _openAddAnlageWithPlacement(
+      discipline,
+      prefilledParams: additionalParams,
+      initialRevisionsfeld: initialRf,
+      initialRevisionsobjekt: roValue,
     );
   }
 
@@ -1841,6 +2075,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               await _loadDisciplines(refreshSystemsPages: true);
             },
             onImportCsv: _importCsv,
+            onAddAnlage: () async {
+              await _ensureDisciplinesFromTemplatesIfNeeded();
+              if (!mounted || _disciplines.isEmpty) return;
+              await _openAddAnlageWithPlacement(_resolveDisciplineForAdd());
+            },
+            hasImportedTemplates: _hasProjectTemplates,
             isAnySelectionActive: () =>
                 _systemsSelectionMode || _groupSelectionMode || _disciplineSelectionMode,
             systemsGroupingKey: _resolveSystemsGroupingParamKey(),
@@ -1949,6 +2189,35 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
     }
 
+    // Technik-Tab: Anlage hinzufügen (immer sichtbar außer im Auswahlmodus)
+    if (_tabController.index == 1 && !inSelectionMode) {
+      final leafLabel = _currentProject.id.isNotEmpty
+          ? ref.read(csvSettingsProvider(_currentProject.id)).resolveLeafLevelLabel()
+          : 'Anlage';
+      return FloatingActionButton(
+        onPressed: () async {
+          await _ensureDisciplinesFromTemplatesIfNeeded();
+          if (!mounted) return;
+          if (_disciplines.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Bitte zuerst Gewerkevorlagen unter CSV-Einstellungen importieren '
+                  'oder $leafLabel per CSV importieren.',
+                ),
+              ),
+            );
+            return;
+          }
+          final discipline = _resolveDisciplineForAdd();
+          await _openAddAnlageWithPlacement(discipline);
+        },
+        tooltip: '$leafLabel hinzufügen',
+        backgroundColor: Colors.green,
+        child: const Icon(Icons.add, color: Colors.white),
+      );
+    }
+
     // Selection Mode: Zeige mehrere Buttons vertikal angeordnet
     if (inSelectionMode) {
       final List<Widget> buttons = [];
@@ -1971,7 +2240,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           );
         }
       } else if (inDisciplineSelection) {
-        // Gewerk-Auswahl: nur Bearbeiten und Löschen (kein neues Revisionsobjekt)
         if (_selectedDisciplineLabels.length == 1) {
           buttons.add(
             _buildFloatingActionButton(
@@ -1979,6 +2247,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               tooltip: 'Gewerk bearbeiten',
               onPressed: _editSelectedDiscipline,
               backgroundColor: Colors.blue,
+            ),
+          );
+          final leafLabel = _currentProject.id.isNotEmpty
+              ? ref.read(csvSettingsProvider(_currentProject.id)).resolveLeafLevelLabel()
+              : 'Anlage';
+          buttons.add(
+            _buildFloatingActionButton(
+              icon: Icons.add,
+              tooltip: '$leafLabel hinzufügen',
+              onPressed: () async {
+                final d = _getSingleSelectedDiscipline();
+                if (d != null) {
+                  await _openAddAnlageWithPlacement(d);
+                }
+              },
+              backgroundColor: Colors.green,
             ),
           );
         }

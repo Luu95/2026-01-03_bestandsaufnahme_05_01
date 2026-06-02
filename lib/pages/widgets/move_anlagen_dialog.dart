@@ -10,6 +10,17 @@ import '../../database/database_service.dart';
 import '../../providers/database_provider.dart';
 import '../../services/template_service.dart';
 
+/// Ergebnis der Verortungs-Auswahl beim Anlegen einer neuen Anlage.
+class AnlagePlacementResult {
+  final Disziplin discipline;
+  final Map<String, dynamic> initialParams;
+
+  const AnlagePlacementResult({
+    required this.discipline,
+    required this.initialParams,
+  });
+}
+
 class MoveAnlagenDialog extends ConsumerStatefulWidget {
   final List<Anlage> anlagenToMove;
   final String currentBuildingId;
@@ -23,6 +34,15 @@ class MoveAnlagenDialog extends ConsumerStatefulWidget {
   /// Param-Key Ebene 2 (Revisionsobjekt).
   final String? revisionsobjektGroupingKey;
 
+  /// Nur Verortung wählen (neue Anlage), ohne Verschieben.
+  final bool placementMode;
+
+  /// Vorauswahl Revisionsfeld (z. B. aus Gruppen-Kontext).
+  final String? initialRevisionsfeld;
+
+  /// Vorauswahl Revisionsobjekt (z. B. aus Gruppen-Kontext).
+  final String? initialRevisionsobjekt;
+
   const MoveAnlagenDialog({
     Key? key,
     required this.anlagenToMove,
@@ -32,17 +52,43 @@ class MoveAnlagenDialog extends ConsumerStatefulWidget {
     this.projectId,
     this.revisionsfeldGroupingKey,
     this.revisionsobjektGroupingKey,
+    this.placementMode = false,
+    this.initialRevisionsfeld,
+    this.initialRevisionsobjekt,
   }) : super(key: key);
+
+  /// Dialog zur Auswahl der Ziel-Verortung für eine neue Anlage.
+  factory MoveAnlagenDialog.forPlacement({
+    required Disziplin discipline,
+    required String buildingId,
+    required String floorId,
+    String? projectId,
+    String? revisionsfeldGroupingKey,
+    String? revisionsobjektGroupingKey,
+    String? initialRevisionsfeld,
+    String? initialRevisionsobjekt,
+  }) {
+    return MoveAnlagenDialog(
+      anlagenToMove: const [],
+      currentBuildingId: buildingId,
+      currentFloorId: floorId,
+      currentDiscipline: discipline,
+      projectId: projectId,
+      revisionsfeldGroupingKey: revisionsfeldGroupingKey,
+      revisionsobjektGroupingKey: revisionsobjektGroupingKey,
+      placementMode: true,
+      initialRevisionsfeld: initialRevisionsfeld,
+      initialRevisionsobjekt: initialRevisionsobjekt,
+    );
+  }
 
   @override
   ConsumerState<MoveAnlagenDialog> createState() => _MoveAnlagenDialogState();
 }
 
 class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
-  String? _selectedParentId; // "root" bedeutet oberste Ebene, null ist initial
   Disziplin? _selectedDiscipline;
 
-  List<Anlage> _potentialParents = [];
   List<Disziplin> _availableDisciplines = [];
 
   CsvSettings? _csvSettings;
@@ -55,6 +101,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   bool _isMoving = false;
 
   bool get _areAllAnlagen {
+    if (widget.placementMode && widget.anlagenToMove.isEmpty) return true;
     return widget.anlagenToMove.every((a) => a.parentId == null);
   }
 
@@ -83,12 +130,13 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   void initState() {
     super.initState();
     _selectedDiscipline = widget.currentDiscipline;
-    if (_areAllAnlagen) {
-      _selectedParentId = 'root';
-    } else if (_areAllBauteile) {
-      _selectedParentId = null;
-    } else {
-      _selectedParentId = 'root';
+    final initialRf = widget.initialRevisionsfeld?.trim();
+    if (initialRf != null && initialRf.isNotEmpty) {
+      _selectedRevisionsfeld = initialRf;
+    }
+    final initialRo = widget.initialRevisionsobjekt?.trim();
+    if (initialRo != null && initialRo.isNotEmpty) {
+      _selectedRevisionsobjekt = initialRo;
     }
     _loadData();
   }
@@ -119,9 +167,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         _availableDisciplines = disciplines;
         _isLoading = false;
       });
-      if (_areAllAnlagen || _areAllBauteile) {
-        await _loadPotentialParents();
-      }
     }
   }
 
@@ -167,9 +212,28 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       targets.putIfAbsent('', () => {}).add(ro.trim());
     }
 
+    final projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
+    if (projectId != null && projectId.isNotEmpty) {
+      final templates = await TemplateService.loadTemplatesFromDatabase(
+        db,
+        projectId,
+        gewerk: label,
+      );
+      for (final t in templates) {
+        final typ = t.anlagentyp.trim();
+        if (typ.isNotEmpty) {
+          targets.putIfAbsent('', () => {}).add(typ);
+        }
+      }
+    }
+
     // Aktuelle Verortung der zu verschiebenden Elemente als Vorauswahl
     String? initialRf;
     String? initialRo;
+    if (widget.placementMode) {
+      initialRf = widget.initialRevisionsfeld?.trim();
+      initialRo = widget.initialRevisionsobjekt?.trim();
+    }
     if (widget.anlagenToMove.isNotEmpty) {
       final first = widget.anlagenToMove.first;
       initialRo = csv?.revisionsobjektValueFromParams(first.params) ??
@@ -244,70 +308,6 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     _selectedRevisionsobjekt = _effectiveRevisionsobjekt;
   }
 
-  Future<void> _loadPotentialParents() async {
-    if (_selectedDiscipline == null) return;
-
-    final db = ref.read(databaseServiceProvider);
-    final allInScope = await db.getAnlagenByBuildingIdAndDiscipline(
-      widget.currentBuildingId,
-      _selectedDiscipline!.label,
-    );
-
-    final onFloor = (widget.currentFloorId == 'global')
-        ? allInScope
-        : allInScope.where((a) => a.floorId == widget.currentFloorId).toList();
-
-    final movingIds = widget.anlagenToMove.map((a) => a.id).toSet();
-    final validParents = <Anlage>[];
-
-    for (final potentialParent in onFloor) {
-      final wouldCreateCircular = await _wouldCreateCircularReference(
-        potentialParent.id,
-        movingIds,
-      );
-
-      if (!wouldCreateCircular && !movingIds.contains(potentialParent.id)) {
-        if (potentialParent.parentId == null) {
-          validParents.add(potentialParent);
-        }
-      }
-    }
-
-    setState(() {
-      _potentialParents = validParents;
-      if (_areAllAnlagen) {
-        _selectedParentId = 'root';
-      } else if (_areAllBauteile) {
-        if (_selectedParentId == null ||
-            _selectedParentId == 'root' ||
-            !validParents.any((p) => p.id == _selectedParentId)) {
-          _selectedParentId =
-              validParents.isNotEmpty ? validParents.first.id : null;
-        }
-      }
-    });
-  }
-
-  Future<bool> _wouldCreateCircularReference(
-    String potentialParentId,
-    Set<String> movingIds,
-  ) async {
-    if (movingIds.contains(potentialParentId)) return true;
-
-    String? currentParentId = potentialParentId;
-    final visited = <String>{};
-    final db = ref.read(databaseServiceProvider);
-
-    while (currentParentId != null && !visited.contains(currentParentId)) {
-      visited.add(currentParentId);
-      if (movingIds.contains(currentParentId)) return true;
-      final parent = await db.getAnlageById(currentParentId);
-      currentParentId = parent?.parentId;
-    }
-
-    return false;
-  }
-
   bool _areSchemasCompatible(Disziplin source, Disziplin target) {
     final sourceKeys = source.schema.map((e) => e['key']).toSet();
     final targetKeys = target.schema.map((e) => e['key']).toSet();
@@ -327,6 +327,65 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     return true;
   }
 
+  Future<Map<String, dynamic>> _buildHierarchyParamsForSelection() async {
+    final db = ref.read(databaseServiceProvider);
+    var projectId = widget.projectId;
+    if (projectId == null || projectId.isEmpty) {
+      projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
+    }
+    final params = <String, dynamic>{};
+    if (projectId == null) return params;
+
+    final csvSettings = await CsvSettings.loadForProject(projectId);
+    final gewerkKey = csvSettings.resolveGewerkGroupingParamKey();
+    if (gewerkKey.isNotEmpty && !csvSettings.isLeafNameParamKey(gewerkKey)) {
+      params[gewerkKey] = _selectedDiscipline!.label;
+    }
+
+    if (_hasHierarchyMove) {
+      _syncHierarchySelectionFromDropdowns();
+      final ro = _effectiveRevisionsobjekt?.trim();
+      if (ro != null && ro.isNotEmpty) {
+        final rfKey = widget.revisionsfeldGroupingKey?.trim();
+        final rf = rfKey != null && rfKey.isNotEmpty
+            ? _effectiveRevisionsfeld?.trim()
+            : null;
+        final hierarchy = csvSettings.buildHierarchyLocationParams(
+          revisionsfeld: rf?.isNotEmpty == true ? rf : null,
+          revisionsobjekt: ro,
+        );
+        hierarchy.forEach((key, value) {
+          if (!csvSettings.isLeafNameParamKey(key)) {
+            params[key] = value;
+          }
+        });
+      }
+    }
+    return params;
+  }
+
+  Future<void> _executePlacement() async {
+    if (_selectedDiscipline == null) return;
+    if (_hasHierarchyMove && !_canExecuteHierarchyMove) return;
+
+    setState(() => _isMoving = true);
+
+    try {
+      final params = await _buildHierarchyParamsForSelection();
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        AnlagePlacementResult(
+          discipline: _disciplineForMove(),
+          initialParams: params,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isMoving = false);
+      }
+    }
+  }
+
   Disziplin _disciplineForMove() {
     var discipline = _selectedDiscipline!;
     final ro = _effectiveRevisionsobjekt?.trim();
@@ -340,19 +399,12 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
   }
 
   Future<void> _executeMove() async {
+    if (widget.placementMode) {
+      await _executePlacement();
+      return;
+    }
     if (_selectedDiscipline == null) return;
     if (!_canExecuteHierarchyMove) return;
-
-    if (_areAllAnlagen && _selectedParentId != null && _selectedParentId != 'root') {
-      return;
-    }
-
-    if (_areAllBauteile &&
-        (_selectedParentId == null ||
-            _selectedParentId == 'root' ||
-            !_potentialParents.any((p) => p.id == _selectedParentId))) {
-      return;
-    }
 
     setState(() {
       _isMoving = true;
@@ -365,10 +417,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       String? targetParentId;
       if (!_areAllAnlagen && !_areAllBauteile) {
         targetParentId = null; // null bedeutet: nicht ändern
-      } else if (_areAllAnlagen) {
-        targetParentId = null;
       } else {
-        targetParentId = _selectedParentId;
+        // Anlagen und Bauteile: Parent-Hierarchie bleibt unverändert
+        targetParentId = null;
       }
 
       // Schema-Kompatibilität prüfen
@@ -418,51 +469,13 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       if (projectId != null) {
         final csvSettings = await CsvSettings.loadForProject(projectId);
 
-        // Der eindeutige Key für den Namen der Ebene 3 (darf NIEMALS überschrieben werden)
-        final leafNameKey = csvSettings.resolveNameParamKey();
-
         // 1. Feld für Ebene 1 (Gewerk-Tab): Disziplin-Label
         final gewerkKey = csvSettings.resolveGewerkGroupingParamKey();
-        if (gewerkKey.isNotEmpty && gewerkKey != leafNameKey) {
+        if (gewerkKey.isNotEmpty && !csvSettings.isLeafNameParamKey(gewerkKey)) {
           paramsToUpdate[gewerkKey] = _selectedDiscipline!.label;
         }
 
-        // 2. Ebene 1+2 vom Ziel-Parent (Bauteil-Verschiebung unter neue Anlage)
-        if (targetParentId != null && targetParentId != 'root') {
-          try {
-            final parent =
-                _potentialParents.firstWhere((p) => p.id == targetParentId);
-
-            final rfKey = csvSettings.resolveRevisionsfeldListGroupingParamKey();
-            if (rfKey != null && rfKey.isNotEmpty && rfKey != leafNameKey) {
-              final rf = csvSettings.revisionsfeldValueFromParams(parent.params);
-              if (rf != null && rf.isNotEmpty) {
-                paramsToUpdate[rfKey] = rf;
-              }
-            }
-
-            String? ebene2Key =
-                csvSettings.resolveRevisionsobjektGroupingParamKey();
-            if (ebene2Key == null || ebene2Key.isEmpty) {
-              ebene2Key = csvSettings.resolveAnlageGroupingParamKey();
-            }
-
-            final ebene2Value =
-                csvSettings.revisionsobjektValueFromParams(parent.params) ??
-                    csvSettings.schemaItemValueFromParams(parent.params) ??
-                    parent.name;
-
-            if (ebene2Key != null &&
-                ebene2Key.isNotEmpty &&
-                ebene2Key != leafNameKey) {
-              paramsToUpdate[ebene2Key] = ebene2Value;
-            }
-          } catch (e) {
-            // Parent nicht im Scope gefunden
-          }
-        }
-
-        // 3. Listen-Blätter (parentId == null): Ziel aus Dropdown, Blatt-Name unangetastet
+        // 2. Listen-Blätter (parentId == null): Ziel aus Dropdown, Blatt-Name unangetastet
         if (_hasHierarchyMove && _areAllAnlagen) {
           _syncHierarchySelectionFromDropdowns();
           final ro = _effectiveRevisionsobjekt?.trim();
@@ -476,7 +489,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               revisionsobjekt: ro,
             );
             hierarchy.forEach((key, value) {
-              if (leafNameKey == null || key != leafNameKey) {
+              if (!csvSettings.isLeafNameParamKey(key)) {
                 paramsToUpdate[key] = value;
               }
             });
@@ -548,7 +561,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
-                  Icons.drive_file_move,
+                  widget.placementMode
+                      ? Icons.add_location_alt
+                      : Icons.drive_file_move,
                   color: Colors.blue[700],
                   size: 24,
                 ),
@@ -556,7 +571,9 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  '${widget.anlagenToMove.length} Element(e) verschieben',
+                  widget.placementMode
+                      ? 'Neue Anlage anlegen'
+                      : '${widget.anlagenToMove.length} Element(e) verschieben',
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
@@ -576,12 +593,13 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
             )
           else ...[
             DropdownButtonFormField<Disziplin>(
+              isExpanded: true,
               value: _availableDisciplines.firstWhere(
                 (d) => d.label == _selectedDiscipline?.label,
                 orElse: () => _availableDisciplines.first,
               ),
               decoration: InputDecoration(
-                labelText: 'Ziel-Gewerk',
+                labelText: widget.placementMode ? 'Gewerk' : 'Ziel-Gewerk',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -589,27 +607,30 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 filled: true,
                 fillColor: Colors.grey[50],
               ),
+              selectedItemBuilder: (context) {
+                return _availableDisciplines.map((d) {
+                  return Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      d.label,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  );
+                }).toList();
+              },
               items: _availableDisciplines.map((d) {
                 return DropdownMenuItem(
                   value: d,
-                  child: Row(
-                    children: [
-                      Icon(d.icon, color: d.color, size: 20),
-                      const SizedBox(width: 12),
-                      Text(d.label),
-                    ],
+                  child: Text(
+                    d.label,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 );
               }).toList(),
               onChanged: (val) async {
-                setState(() {
-                  _selectedDiscipline = val;
-                  if (_areAllAnlagen) {
-                    _selectedParentId = 'root';
-                  } else if (_areAllBauteile) {
-                    _selectedParentId = null;
-                  }
-                });
+                setState(() => _selectedDiscipline = val);
                 if (_hasHierarchyMove && val != null) {
                   await _loadHierarchyTargets(
                     ref.read(databaseServiceProvider),
@@ -617,18 +638,18 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                     disciplines: _availableDisciplines,
                   );
                 }
-                if (_areAllAnlagen || _areAllBauteile) {
-                  await _loadPotentialParents();
-                }
               },
             ),
             if (_hasHierarchyMove) ...[
               const SizedBox(height: 16),
               if (showRevisionsfeldPicker) ...[
                 DropdownButtonFormField<String>(
+                  isExpanded: true,
                   value: _effectiveRevisionsfeld,
                   decoration: InputDecoration(
-                    labelText: 'Ziel-$_revisionsfeldLabel',
+                    labelText: widget.placementMode
+                        ? _revisionsfeldLabel
+                        : 'Ziel-$_revisionsfeldLabel',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -636,9 +657,30 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                     filled: true,
                     fillColor: Colors.grey[50],
                   ),
+                  selectedItemBuilder: (context) {
+                    return _sortedRevisionsfelder.map((rf) {
+                      final label =
+                          rf.isEmpty ? '(Ohne $_revisionsfeldLabel)' : rf;
+                      return Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          label,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      );
+                    }).toList();
+                  },
                   items: _sortedRevisionsfelder.map((rf) {
                     final label = rf.isEmpty ? '(Ohne $_revisionsfeldLabel)' : rf;
-                    return DropdownMenuItem(value: rf, child: Text(label));
+                    return DropdownMenuItem(
+                      value: rf,
+                      child: Text(
+                        label,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    );
                   }).toList(),
                   onChanged: (val) {
                     setState(() {
@@ -651,31 +693,60 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                 ),
                 const SizedBox(height: 16),
               ],
-              DropdownButtonFormField<String>(
-                value: _effectiveRevisionsobjekt,
-                decoration: InputDecoration(
-                  labelText: 'Ziel-$_revisionsobjektLabel',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+              if (revisionsobjekte.isNotEmpty)
+                DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  value: _effectiveRevisionsobjekt,
+                  decoration: InputDecoration(
+                    labelText: widget.placementMode
+                        ? _revisionsobjektLabel
+                        : 'Ziel-$_revisionsobjektLabel',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    prefixIcon: const Icon(Icons.account_tree_outlined),
+                    helperText: widget.placementMode
+                        ? 'Anschließend öffnet sich der Erfassungsdialog.'
+                        : '$_revisionsfeldLabel und $_revisionsobjektLabel werden in den Datensätzen automatisch gesetzt.',
+                    filled: true,
+                    fillColor: Colors.grey[50],
                   ),
-                  prefixIcon: const Icon(Icons.account_tree_outlined),
-                  helperText:
-                      '$_revisionsfeldLabel und $_revisionsobjektLabel werden in den Datensätzen automatisch gesetzt.',
-                  filled: true,
-                  fillColor: Colors.grey[50],
-                  errorText: revisionsobjekte.isEmpty
-                      ? 'Keine Ziele vorhanden'
-                      : null,
+                  selectedItemBuilder: (context) {
+                    return revisionsobjekte.map((ro) {
+                      return Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          ro,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      );
+                    }).toList();
+                  },
+                  items: revisionsobjekte
+                      .map(
+                        (ro) => DropdownMenuItem(
+                          value: ro,
+                          child: Text(
+                            ro,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (val) {
+                    setState(() => _selectedRevisionsobjekt = val);
+                  },
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Keine $_revisionsobjektLabel in den Gewerkevorlagen vorhanden.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                  ),
                 ),
-                items: revisionsobjekte
-                    .map((ro) => DropdownMenuItem(value: ro, child: Text(ro)))
-                    .toList(),
-                onChanged: revisionsobjekte.isEmpty
-                    ? null
-                    : (val) {
-                        setState(() => _selectedRevisionsobjekt = val);
-                      },
-              ),
             ],
             const SizedBox(height: 16),
             if (!_areAllAnlagen && !_areAllBauteile) ...[
@@ -703,45 +774,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                   ],
                 ),
               ),
-            ] else if (_areAllBauteile) ...[
-              DropdownButtonFormField<String>(
-                value: _potentialParents.any((p) => p.id == _selectedParentId)
-                    ? _selectedParentId
-                    : (_potentialParents.isNotEmpty
-                        ? _potentialParents.first.id
-                        : null),
-                decoration: InputDecoration(
-                  labelText: 'Zuordnen zu (Parent)',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  prefixIcon: const Icon(Icons.account_tree),
-                  helperText: 'Bauteile müssen einer Anlage zugeordnet werden.',
-                  filled: true,
-                  fillColor: Colors.grey[50],
-                  errorText: _selectedParentId == null ||
-                          _selectedParentId == 'root' ||
-                          !_potentialParents
-                              .any((p) => p.id == _selectedParentId)
-                      ? 'Bitte wähle eine Anlage aus'
-                      : null,
-                ),
-                items: _potentialParents
-                    .map((p) => DropdownMenuItem(
-                          value: p.id,
-                          child: Text(
-                            p.name,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ))
-                    .toList(),
-                onChanged: (val) {
-                  setState(() {
-                    _selectedParentId = val;
-                  });
-                },
-              ),
-            ] else if (!_hasHierarchyMove) ...[
+            ] else if (!_hasHierarchyMove && _areAllAnlagen) ...[
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -808,7 +841,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                                   AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
                           )
-                        : const Text('Verschieben'),
+                        : Text(widget.placementMode ? 'Erstellen' : 'Verschieben'),
                   ),
                 ),
               ],

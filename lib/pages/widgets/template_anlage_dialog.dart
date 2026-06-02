@@ -13,6 +13,26 @@ typedef TemplateFormProceedCallback = void Function({
   required List<Template> childTemplates,
 });
 
+/// Ergebnis der Vorlagen-Auswahl vor Verortung / Erfassungsdialog.
+class TemplateSelectionForNewAnlage {
+  final bool manual;
+  final String? selectedAnlagentyp;
+  final Template? parentTemplate;
+  final List<Template> childTemplates;
+
+  const TemplateSelectionForNewAnlage({
+    required this.selectedAnlagentyp,
+    required this.parentTemplate,
+    this.childTemplates = const [],
+  }) : manual = false;
+
+  const TemplateSelectionForNewAnlage.manual()
+      : manual = true,
+        selectedAnlagentyp = null,
+        parentTemplate = null,
+        childTemplates = const [];
+}
+
 class TemplateAnlageDialog extends StatefulWidget {
   final DatabaseService dbService;
   final String projectId;

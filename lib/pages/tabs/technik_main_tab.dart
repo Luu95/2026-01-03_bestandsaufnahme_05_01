@@ -23,6 +23,10 @@ class TechnikMainTab extends StatefulWidget {
   final VoidCallback? onExitDisciplineSelectionMode; // Callback um Gewerk-Auswahl zu beenden
   final VoidCallback? onSchemaUpdated; // Callback für Schema-Update
   final Future<void> Function()? onImportCsv; // Callback für CSV-Import
+  /// Neue Anlage anlegen (Verortung + Formular), auch wenn noch keine Gewerke in der DB sind.
+  final Future<void> Function()? onAddAnlage;
+  /// Gewerkevorlagen wurden im Projekt importiert (leere Übersicht mit + ermöglichen).
+  final bool hasImportedTemplates;
   final bool Function()? isAnySelectionActive; // Callback um zu prüfen, ob bereits eine Selection aktiv ist
   final bool disciplineSelectionMode;
   final Set<String> selectedDisciplineLabels;
@@ -66,6 +70,8 @@ class TechnikMainTab extends StatefulWidget {
     this.onExitDisciplineSelectionMode,
     this.onSchemaUpdated,
     this.onImportCsv,
+    this.onAddAnlage,
+    this.hasImportedTemplates = false,
     this.isAnySelectionActive,
     this.disciplineSelectionMode = false,
     this.selectedDisciplineLabels = const {},
@@ -159,27 +165,42 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Erstelle ein neues ${widget.labelGewerk} oder\nimportiere ${widget.labelLeafLevelPlural} über CSV',
+                widget.hasImportedTemplates
+                    ? 'Gewerkevorlagen sind importiert.\nLegen Sie eine ${widget.labelLeafLevel} an oder importieren Sie Bestand per CSV.'
+                    : 'Erstelle ein neues ${widget.labelGewerk} oder\nimportiere ${widget.labelLeafLevelPlural} über CSV',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 14, color: Colors.grey[500]),
               ),
               const SizedBox(height: 32),
-              ElevatedButton.icon(
-                icon: Icon(Icons.add_circle_outline),
-                label: Text('${widget.labelGewerk} erstellen'),
-                style: ElevatedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              if (widget.onAddAnlage != null)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.add),
+                  label: Text('${widget.labelLeafLevel} hinzufügen'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  onPressed: widget.onAddAnlage,
                 ),
-                onPressed: _addDisziplin,
-              ),
-              const SizedBox(height: 16),
+              if (widget.onAddAnlage != null) const SizedBox(height: 16),
+              if (!widget.hasImportedTemplates)
+                ElevatedButton.icon(
+                  icon: Icon(Icons.add_circle_outline),
+                  label: Text('${widget.labelGewerk} erstellen'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  onPressed: _addDisziplin,
+                ),
+              if (!widget.hasImportedTemplates) const SizedBox(height: 16),
               ElevatedButton.icon(
                 icon: Icon(Icons.download),
                 label: Text('CSV importieren'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green.shade50,
                   foregroundColor: Colors.green.shade700,
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
                 onPressed: widget.onImportCsv,
               ),

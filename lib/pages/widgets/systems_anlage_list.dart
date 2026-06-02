@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
+import '../../providers/csv_settings_provider.dart';
 
 typedef AnlageItemBuilder = Widget Function(
   Anlage anlage,
@@ -309,8 +310,13 @@ class SystemsAnlageList extends StatelessWidget {
   String _resolveDisplayName(Anlage anlage) {
     final key = displayNameParamKey;
     if (key != null && key.isNotEmpty) {
-      final fromParams = anlage.params[key]?.toString().trim() ?? '';
-      if (fromParams.isNotEmpty) return fromParams;
+      final direct = anlage.params[key]?.toString().trim() ?? '';
+      if (direct.isNotEmpty) return direct;
+      for (final entry in anlage.params.entries) {
+        if (!CsvSettings.paramKeysMatch(entry.key.toString(), key)) continue;
+        final value = entry.value?.toString().trim() ?? '';
+        if (value.isNotEmpty) return value;
+      }
     }
     return anlage.name;
   }

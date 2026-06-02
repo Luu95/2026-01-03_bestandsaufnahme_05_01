@@ -18,7 +18,6 @@ import '../services/template_service.dart';
 // Widgets für Anlage-Dialoge (relativ zu lib/pages/)
 import 'widgets/generic_anlage_dialog.dart';
 import 'widgets/move_anlagen_dialog.dart';
-import 'widgets/template_anlage_dialog.dart';
 import 'widgets/anlage_hierarchical_item.dart';
 import 'widgets/systems_anlage_list.dart';
 import 'systems_ui_store.dart';
@@ -673,29 +672,116 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     );
   }
 
-  Future<void> _openGenericFormFromTemplateSelection({
-    required String projectId,
-    required String selectedAnlagentyp,
-    required Template parentTemplate,
-    required List<Template> childTemplates,
+  Future<AnlagePlacementResult?> _pickPlacementForNewAnlage() async {
+    final subKey = widget.subGroupingKey?.trim();
+    if (subKey == null || subKey.isEmpty) return null;
+
+    final dbService = ref.read(databaseServiceProvider);
+    final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
+    if (!mounted) return null;
+
+    return showModalBottomSheet<AnlagePlacementResult>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => MoveAnlagenDialog.forPlacement(
+        discipline: widget.discipline,
+        buildingId: widget.building.id,
+        floorId: widget.floor.id,
+        projectId: projectId,
+        revisionsfeldGroupingKey: widget.groupingKey,
+        revisionsobjektGroupingKey: widget.subGroupingKey,
+      ),
+    );
+  }
+
+  Future<void> _openAnlageErfassungAfterPlacement({
+    required Disziplin discipline,
+    required Map<String, dynamic> placementParams,
+    required String? projectId,
   }) async {
+    final params = Map<String, dynamic>.from(placementParams);
+
+    if (projectId == null || projectId.isEmpty) {
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => GenericAnlageDialog(
+          discipline: discipline,
+          buildingId: widget.building.id,
+          floorId: widget.floor.id,
+          existingAnlage: null,
+          index: null,
+          initialParams: params.isNotEmpty ? params : null,
+          onSave: (newAnlage, _) async {
+            setState(() => _alleAnlagen.add(newAnlage));
+            await _saveAnlagen();
+            await _loadAnlagen();
+            widget.onAnlageCreated?.call();
+          },
+        ),
+      );
+      return;
+    }
+
+    await ref.read(csvSettingsProvider(projectId).notifier).load();
     final csvSettings = ref.read(csvSettingsProvider(projectId));
-    final schemaItemKey = csvSettings.resolveSchemaItemParamKey();
-    final params = TemplateService.buildInitialParamsForSchemaItem(
+    final ro = (csvSettings.revisionsobjektValueFromParams(params) ??
+            csvSettings.schemaItemValueFromParams(params) ??
+            '')
+        .trim();
+
+    final dbService = ref.read(databaseServiceProvider);
+    final gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+      dbService,
+      projectId,
+      gewerk: discipline.label,
+    );
+
+    final matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
+        ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, ro)
+        : null;
+    final schemaRo = ro.isNotEmpty
+        ? (TemplateService.resolveRevisionsobjektKeyForValue(
+              discipline,
+              ro,
+              templates: gewerkTemplates,
+            ) ??
+            matched?.anlagentyp.trim() ??
+            ro)
+        : '';
+
+    final parentTemplate = matched ??
+        Template(
+          gewerk: discipline.label,
+          anlageBauteil: '',
+          anlagentyp: schemaRo.isNotEmpty ? schemaRo : 'Neu',
+          bezeichnung: schemaRo.isNotEmpty ? schemaRo : 'Neu',
+        );
+
+    final effectiveDiscipline = schemaRo.isNotEmpty
+        ? TemplateService.disciplineWithSchemaForRevisionsobjekt(
+            discipline: discipline,
+            revisionsobjekt: schemaRo,
+            template: parentTemplate,
+            templatesForLookup: gewerkTemplates,
+          )
+        : discipline;
+
+    final formParams = TemplateService.buildInitialParamsForSchemaItem(
       parentTemplate: parentTemplate,
-      selectedAnlagentyp: selectedAnlagentyp,
-      schemaItemParamKey: schemaItemKey,
+      selectedAnlagentyp: schemaRo.isNotEmpty ? schemaRo : ro,
+      schemaItemParamKey: csvSettings.resolveSchemaItemParamKey(),
     );
-    final effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-      discipline: widget.discipline,
-      revisionsobjekt: selectedAnlagentyp.trim(),
-      template: parentTemplate,
-    );
-    final initialName = TemplateService.resolveParentNameFromTemplate(
-      parentTemplate,
-      selectedAnlagentyp,
-    );
-    const uuid = Uuid();
+    formParams.addAll(params);
+
+    final initialName = csvSettings.displayNameValueFromParams(formParams) ?? '';
 
     if (!mounted) return;
     await showModalBottomSheet<void>(
@@ -708,48 +794,11 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         discipline: effectiveDiscipline,
         buildingId: widget.building.id,
         floorId: widget.floor.id,
-        initialParams: params,
-        initialName: initialName,
-        initialRevisionsobjekt: selectedAnlagentyp.trim(),
+        initialParams: formParams,
+        initialName: initialName.isNotEmpty ? initialName : null,
+        initialRevisionsobjekt: schemaRo.isNotEmpty ? schemaRo : null,
         onSave: (newAnlage, _) async {
-          final dbService = ref.read(databaseServiceProvider);
-          final existing = await dbService.getAnlageById(newAnlage.id);
-          if (existing != null) {
-            await dbService.updateAnlage(newAnlage);
-          } else {
-            await dbService.insertAnlage(newAnlage);
-          }
-
-          final children = <Anlage>[];
-          for (final t in childTemplates) {
-            final childName = t.bezeichnung.trim().isNotEmpty
-                ? t.bezeichnung.trim()
-                : t.anlagentyp.trim();
-            children.add(Anlage(
-              id: uuid.v4(),
-              parentId: newAnlage.id,
-              name: childName,
-              params: TemplateService.buildEmptyParamsFromTemplate(t.parameter),
-              floorId: widget.floor.id,
-              buildingId: widget.building.id,
-              isMarker: false,
-              markerInfo: null,
-              markerType: widget.discipline.label,
-              discipline: effectiveDiscipline.withEffectiveSchema(
-                revisionsobjekt: t.anlagentyp.trim(),
-              ),
-            ));
-          }
-          for (final child in children) {
-            await dbService.insertAnlage(child);
-          }
-
-          if (!mounted) return;
-          setState(() {
-            _alleAnlagen.add(newAnlage);
-            _alleAnlagen.addAll(children);
-            _expandedAnlagenIds.add(newAnlage.id);
-          });
+          setState(() => _alleAnlagen.add(newAnlage));
           await _saveAnlagen();
           await _loadAnlagen();
           widget.onAnlageCreated?.call();
@@ -764,78 +813,17 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
     if (!mounted) return;
 
-    void openManual() {
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (_) => GenericAnlageDialog(
-          discipline: widget.discipline,
-          buildingId: widget.building.id,
-          floorId: widget.floor.id,
-          existingAnlage: null,
-          index: null,
-          onSave: (newAnlage, _) async {
-            setState(() => _alleAnlagen.add(newAnlage));
-            await _saveAnlagen();
-            await _loadAnlagen();
-            widget.onAnlageCreated?.call();
-          },
-        ),
-      );
-    }
-
-    if (projectId == null || projectId.isEmpty) {
-      openManual();
+    final placement = await _pickPlacementForNewAnlage();
+    if (widget.subGroupingKey != null &&
+        widget.subGroupingKey!.trim().isNotEmpty &&
+        placement == null) {
       return;
     }
 
-    await ref.read(csvSettingsProvider(projectId).notifier).load();
-    final csvSettings = ref.read(csvSettingsProvider(projectId));
-
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => TemplateAnlageDialog(
-        dbService: ref.read(databaseServiceProvider),
-        projectId: projectId,
-        discipline: widget.discipline,
-        buildingId: widget.building.id,
-        floorId: widget.floor.id,
-        gewerkLevelLabel: csvSettings.schemaDisciplineLevelLabel,
-        anlageLevelLabel: csvSettings.resolveSchemaItemLevelLabel(),
-        schemaItemParamKey: csvSettings.resolveSchemaItemParamKey(),
-        onProceedToForm: ({
-          required selectedGewerk,
-          required selectedAnlagentyp,
-          required parentTemplate,
-          required childTemplates,
-        }) {
-          _openGenericFormFromTemplateSelection(
-            projectId: projectId,
-            selectedAnlagentyp: selectedAnlagentyp,
-            parentTemplate: parentTemplate,
-            childTemplates: childTemplates,
-          );
-        },
-        onCreate: (created) async {
-          setState(() {
-            _alleAnlagen.addAll(created);
-            for (final parent in created.where((a) => a.parentId == null)) {
-              _expandedAnlagenIds.add(parent.id);
-            }
-          });
-          await _saveAnlagen();
-          await _loadAnlagen();
-          widget.onAnlageCreated?.call();
-        },
-        onCreateManual: openManual,
-      ),
+    await _openAnlageErfassungAfterPlacement(
+      discipline: placement?.discipline ?? widget.discipline,
+      placementParams: placement?.initialParams ?? const {},
+      projectId: projectId,
     );
   }
 
