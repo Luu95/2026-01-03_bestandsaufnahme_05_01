@@ -218,13 +218,29 @@ class TemplateService {
     );
   }
 
-  static List<AttributeTripletColumn> _attributeQuadrupletsFromSettings(
-    CsvSettings csvSettings,
+  /// Schema aus Anlagen-Zeile (ATT + ATT_wert): Feldname steht in der Namen-Spalte.
+  static String _buildParameterJsonFromAnlagenPairsRow(
+    List<dynamic> row,
+    List<AttributeColumnPair> pairs,
   ) {
-    if (csvSettings.attributeTripletColumns.isNotEmpty) {
-      return csvSettings.attributeTripletColumns;
+    final schema = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final pair in pairs) {
+      final label = _safeCell(row, pair.nameColumn);
+      if (label.isEmpty || CsvSettings.isAnlagenCsvColumnParamKey(label)) {
+        continue;
+      }
+      final key = label;
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      schema.add({
+        'key': key,
+        'label': label,
+        'type': 'text',
+      });
     }
-    return const [];
+    if (schema.isEmpty) return '';
+    return json.encode({'_schema': schema});
   }
 
   static int _firstAttributeScanColumn(CsvSettings csvSettings) {
@@ -238,11 +254,25 @@ class TemplateService {
 
   static String _buildParameterJsonForRow(
     List<dynamic> row,
-    CsvSettings csvSettings,
-  ) {
-    final quadruplets = _attributeQuadrupletsFromSettings(csvSettings);
-    if (quadruplets.isNotEmpty) {
-      return _buildParameterJsonFromConfiguredQuadruplets(row, quadruplets);
+    CsvSettings csvSettings, {
+    List<String>? headerRow,
+  }) {
+    final header = headerRow ?? csvSettings.importHeaderRow;
+    final mapping = CsvSettings.resolveImportAttributeMapping(
+      headerRow: header,
+      settings: csvSettings,
+    );
+
+    if (CsvSettings.headerLooksLikeAnlagenWertFormat(header) &&
+        mapping.pairs.isNotEmpty) {
+      return _buildParameterJsonFromAnlagenPairsRow(row, mapping.pairs);
+    }
+
+    if (mapping.quadruplets.isNotEmpty) {
+      return _buildParameterJsonFromConfiguredQuadruplets(
+        row,
+        mapping.quadruplets,
+      );
     }
     return _buildParameterJsonFromAttributeQuadruplets(
       row,
@@ -398,6 +428,7 @@ class TemplateService {
           final parameterJson = _buildParameterJsonForRow(
             row,
             csvSettings,
+            headerRow: importHeaderRow,
           );
           await dbService.insertTemplate(
             projectId,
@@ -603,6 +634,7 @@ class TemplateService {
         final parameterOverride = _buildParameterJsonForRow(
           row,
           csvSettings,
+          headerRow: headerRow,
         );
         final template = Template.fromCsvRowWithSettings(
           row,
@@ -851,21 +883,29 @@ class TemplateService {
       mergedRoSchemas[resolvedKey] = roFields;
     }
 
-    // Flaches Schema direkt zusammenbauen – withEffectiveSchema würde bei fehlendem
-    // Map-Eintrag sonst auf nur globale Felder zurückfallen.
+    // Flaches Schema: global + aktuelles RO (+ Legacy ohne RO-Zuordnung).
+    // Nicht discipline.schema mergen – dort liegen oft alle RO-Felder und CSV-Duplikate.
     var flatSchema = mergeSchemaFieldLists(
       discipline.globalSchemaFields,
       roFields,
     );
-    flatSchema = mergeSchemaFieldLists(flatSchema, discipline.schema);
+    final legacy = discipline.legacyIndividualSchemaFields;
+    if (legacy.isNotEmpty) {
+      flatSchema = mergeSchemaFieldLists(flatSchema, legacy);
+    }
 
     return Disziplin(
       label: discipline.label,
       icon: discipline.icon,
       color: discipline.color,
-      schema: flatSchema,
+      schema: CsvSettings.filterSchemaFieldsForDialog(flatSchema),
       groupingKey: discipline.groupingKey,
-      revisionsobjektSchemas: mergedRoSchemas,
+      revisionsobjektSchemas: mergedRoSchemas.map(
+        (key, fields) => MapEntry(
+          key,
+          CsvSettings.filterSchemaFieldsForDialog(fields),
+        ),
+      ),
     );
   }
 

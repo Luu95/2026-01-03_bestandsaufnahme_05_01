@@ -30,6 +30,9 @@ class SystemsAnlageList extends StatelessWidget {
   /// Param-Key für den Anzeigenamen, wenn Name und Untergruppe identisch sind.
   final String? displayNameParamKey;
 
+  /// Auflösung des Listen-Anzeigenamens (z. B. aus CSV-Einstellungen Ebene 3).
+  final String Function(Anlage anlage)? resolveListDisplayName;
+
   final Set<String> expandedGroups;
   final Set<String> expandedAnlagenIds;
 
@@ -58,6 +61,7 @@ class SystemsAnlageList extends StatelessWidget {
     this.groupingKey,
     this.subGroupingKey,
     this.displayNameParamKey,
+    this.resolveListDisplayName,
     required this.expandedGroups,
     required this.expandedAnlagenIds,
     required this.onGroupExpansionChanged,
@@ -252,23 +256,37 @@ class SystemsAnlageList extends StatelessWidget {
     );
   }
 
+  Anlage _withDisplayName(Anlage anlage, String name) {
+    if (name == anlage.name) return anlage;
+    return Anlage(
+      id: anlage.id,
+      parentId: anlage.parentId,
+      name: name,
+      params: anlage.params,
+      floorId: anlage.floorId,
+      buildingId: anlage.buildingId,
+      isMarker: anlage.isMarker,
+      markerInfo: anlage.markerInfo,
+      markerType: anlage.markerType,
+      discipline: anlage.discipline,
+    );
+  }
+
+  String _listDisplayName(Anlage anlage, {String? override}) {
+    if (override != null && override.isNotEmpty) return override;
+    final resolver = resolveListDisplayName;
+    if (resolver != null) return resolver(anlage);
+    return _resolveDisplayName(anlage);
+  }
+
   Widget _buildParentWithChildren(Anlage parent, {String? displayNameOverride}) {
     final children = getChildren(parent);
     final hasChildren = children.isNotEmpty;
     final isExpanded = expandedAnlagenIds.contains(parent.id);
-    final displayParent = displayNameOverride != null
-        ? Anlage(
-            id: parent.id,
-            parentId: parent.parentId,
-            name: displayNameOverride,
-            params: parent.params,
-            floorId: parent.floorId,
-            buildingId: parent.buildingId,
-            isMarker: parent.isMarker,
-            markerInfo: parent.markerInfo,
-            markerType: parent.markerType,
-            discipline: parent.discipline,
-          )
+    final resolvedParentName = displayNameOverride ??
+        (!hasChildren ? _listDisplayName(parent) : null);
+    final displayParent = resolvedParentName != null
+        ? _withDisplayName(parent, resolvedParentName)
         : parent;
 
     return Column(
@@ -288,7 +306,7 @@ class SystemsAnlageList extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 32),
               child: itemBuilder(
-                child,
+                _withDisplayName(child, _listDisplayName(child)),
                 disc,
                 isChild: true,
                 hasChildren: false,
@@ -490,7 +508,7 @@ class SystemsAnlageList extends StatelessWidget {
                   for (final anlage in subGroupAnlagen)
                     _buildParentWithChildren(
                       anlage,
-                      displayNameOverride: _resolveDisplayName(anlage),
+                      displayNameOverride: _listDisplayName(anlage),
                     ),
                 ],
               ),

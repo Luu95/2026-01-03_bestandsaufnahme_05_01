@@ -879,7 +879,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             await _loadAllAnlagen();
           },
           onDelete: (Marker toDelete) async {
-            await widget.dbService.deleteAnlage(a.id);
+            await widget.dbService.hardDeleteAnlage(a.id);
             setState(() {
               _allAnlagen.removeWhere((e) => e.id == a.id);
             });

@@ -67,6 +67,17 @@ class AttributeTripletColumn {
   List<int> get columnIndices => [nameColumn, typeColumn, optionsColumn, artColumn];
 }
 
+/// Ergebnis der Header-Analyse: Zweier- oder Vierer-Mapping für einen Import.
+class ImportAttributeMapping {
+  final List<AttributeColumnPair> pairs;
+  final List<AttributeTripletColumn> quadruplets;
+
+  const ImportAttributeMapping({
+    this.pairs = const [],
+    this.quadruplets = const [],
+  });
+}
+
 class CsvSettings {
   final HierarchyLevelConfig level1;
   final HierarchyLevelConfig level2;
@@ -190,28 +201,35 @@ class CsvSettings {
   List<int> hierarchyNameColumnIndices() =>
       enabledLevelsOrdered.map((l) => l.nameColumn).toList();
 
+  void _addDistinctParamKey(Set<String> keys, String candidate) {
+    final c = candidate.trim();
+    if (c.isEmpty) return;
+    for (final existing in keys) {
+      if (paramKeysMatch(existing, c)) return;
+    }
+    keys.add(c);
+  }
+
   /// Param-Keys für Import/Export – nur aus Einstellungen, nicht aus CSV-Überschriften.
   List<String> configuredHierarchyParamKeys(int level) {
     final keys = <String>{};
     switch (level) {
       case 1:
-        final gk = groupingGewerkParamKey.trim();
-        if (gk.isNotEmpty) keys.add(gk);
-        keys.add(labelGewerk);
+        _addDistinctParamKey(keys, groupingGewerkParamKey);
+        _addDistinctParamKey(keys, labelGewerk);
         break;
       case 2:
-        final ak = groupingAnlageParamKey.trim();
-        if (ak.isNotEmpty) keys.add(ak);
-        keys.add(labelAnlage);
-        keys.addAll(legacySchemaItemParamKeys);
+        _addDistinctParamKey(keys, groupingAnlageParamKey);
+        _addDistinctParamKey(keys, labelAnlage);
+        for (final legacy in legacySchemaItemParamKeys) {
+          _addDistinctParamKey(keys, legacy);
+        }
         break;
       case 3:
-        final dn = displayNameParamKey.trim();
-        if (dn.isNotEmpty) keys.add(dn);
-        keys.add(labelBauteil);
+        _addDistinctParamKey(keys, displayNameParamKey);
+        _addDistinctParamKey(keys, labelBauteil);
         break;
     }
-    keys.removeWhere((k) => k.trim().isEmpty);
     return keys.toList();
   }
 
@@ -392,6 +410,18 @@ class CsvSettings {
     return _headerLabelAt(leaf.nameColumn);
   }
 
+  /// Ob [key] ein Param-Key der oberen Hierarchie (Ebene 1–2) ist – nicht für Ebene-3-Anzeige.
+  bool isUpperHierarchyParamKey(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return false;
+    for (var level = 1; level <= 2; level++) {
+      for (final hk in allParamKeysForHierarchyLevel(level)) {
+        if (paramKeysMatch(k, hk)) return true;
+      }
+    }
+    return false;
+  }
+
   /// Param-Key, der in der Anlagenübersicht als Beschriftung der Ebene 3 genutzt wird.
   /// Priorität: expliziter Param-Key (Gewerkevorlage) → Anlagen-CSV-Spalte → Blatt-Spalte.
   String? resolveDisplayNameParamKey() {
@@ -401,7 +431,13 @@ class CsvSettings {
     if (fromDisplayColumn != null && fromDisplayColumn.isNotEmpty) {
       return fromDisplayColumn;
     }
-    return resolveNameParamKey();
+    final leafKey = resolveNameParamKey();
+    if (leafKey != null &&
+        leafKey.isNotEmpty &&
+        !isUpperHierarchyParamKey(leafKey)) {
+      return leafKey;
+    }
+    return null;
   }
 
   static bool paramKeysMatch(String a, String b) {
@@ -410,6 +446,298 @@ class CsvSettings {
     if (x.isEmpty || y.isEmpty) return false;
     if (x == y) return true;
     return x.startsWith('${y}_') || y.startsWith('${x}_');
+  }
+
+  /// Spalten-Header/Param-Keys aus Anlagen-CSV (ATT1, ATT1_wert, ATT_WERT12) – keine Dialog-Felder.
+  static bool isAnlagenCsvColumnParamKey(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return false;
+    final lower = k.toLowerCase();
+    if (RegExp(r'^att\d+$').hasMatch(lower)) return true;
+    if (RegExp(r'^att\d+_wert$').hasMatch(lower)) return true;
+    if (RegExp(r'^att_wert\d+$').hasMatch(lower)) return true;
+    return false;
+  }
+
+  /// Normalisiert CSV-Header für ATT-Erkennung (Leerzeichen → Unterstrich).
+  static String normalizeAttHeaderToken(String header) {
+    return header.trim().replaceAll(RegExp(r'\s+'), '_').toUpperCase();
+  }
+
+  /// Anlagen-Import: Header mit ATTn + ATTn_wert (Zweier-Format).
+  static bool headerLooksLikeAnlagenWertFormat(List<String> headers) {
+    for (final h in headers) {
+      final u = normalizeAttHeaderToken(h);
+      if (RegExp(r'^ATT\d+_WERT$').hasMatch(u)) return true;
+      if (RegExp(r'^ATT_WERT\d+$').hasMatch(u)) return true;
+    }
+    return false;
+  }
+
+  /// Gewerkevorlagen: Header mit TYPE/OPTIONS/ART je Attribut.
+  static bool headerLooksLikeGewerkeQuadrupletFormat(List<String> headers) {
+    for (final h in headers) {
+      final u = normalizeAttHeaderToken(h);
+      if (u.contains('_TYPE') || u.contains('_OPTIONS') || u.endsWith('_ART')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Vierergruppen aus Gewerke-Header (ATTn, ATTn_TYPE, ATTn_OPTIONS, ATTn_ART).
+  static List<AttributeTripletColumn> detectQuadrupletsFromHeader(
+    List<String> headers,
+  ) {
+    final groups = <AttributeTripletColumn>[];
+    for (var i = 0; i < headers.length; i++) {
+      final h = normalizeAttHeaderToken(headers[i]);
+      final m = RegExp(r'^ATT(\d+)$').firstMatch(h);
+      if (m == null) continue;
+      final n = int.parse(m.group(1)!);
+      int indexWhere(String suffix) {
+        return headers.indexWhere(
+          (x) => normalizeAttHeaderToken(x) == 'ATT${n}$suffix',
+        );
+      }
+
+      final typeIdx = indexWhere('_TYPE');
+      final optIdx = indexWhere('_OPTIONS');
+      var artIdx = indexWhere('_ART');
+      if (artIdx < 0) {
+        artIdx = headers.indexWhere(
+          (x) => normalizeAttHeaderToken(x) == 'ATT${n}_WERT',
+        );
+      }
+      if (typeIdx >= 0 && artIdx >= 0) {
+        groups.add(AttributeTripletColumn(
+          nameColumn: i,
+          typeColumn: typeIdx,
+          optionsColumn: optIdx >= 0 ? optIdx : typeIdx + 1,
+          artColumn: artIdx,
+        ));
+      }
+    }
+    return groups;
+  }
+
+  /// Gespeicherte Vierergruppen passen zum Header (kein ATT/ATT_wert-Zweier-Mix).
+  static bool quadrupletsMatchHeader(
+    List<AttributeTripletColumn> quadruplets,
+    List<String> headers,
+  ) {
+    if (quadruplets.isEmpty || headers.isEmpty) return false;
+    for (final g in quadruplets) {
+      if (g.nameColumn < 0 || g.nameColumn >= headers.length) return false;
+      if (g.typeColumn < 0 || g.typeColumn >= headers.length) return false;
+      final typeToken = normalizeAttHeaderToken(headers[g.typeColumn]);
+      if (typeToken.contains('WERT') && !typeToken.contains('_TYPE')) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Wählt Zweier- oder Vierer-Mapping passend zum Import-Header.
+  static ImportAttributeMapping resolveImportAttributeMapping({
+    required List<String> headerRow,
+    required CsvSettings settings,
+  }) {
+    if (headerRow.isEmpty) {
+      return ImportAttributeMapping(
+        pairs: settings.attributeColumnPairs,
+        quadruplets: settings.attributeTripletColumns,
+      );
+    }
+
+    if (headerLooksLikeAnlagenWertFormat(headerRow)) {
+      final detected = detectAnlagenAttributePairsFromHeader(headerRow);
+      return ImportAttributeMapping(
+        pairs: detected.isNotEmpty ? detected : settings.attributeColumnPairs,
+        quadruplets: const [],
+      );
+    }
+
+    if (headerLooksLikeGewerkeQuadrupletFormat(headerRow)) {
+      final detected = detectQuadrupletsFromHeader(headerRow);
+      if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
+        return ImportAttributeMapping(
+          pairs: const [],
+          quadruplets: settings.attributeTripletColumns,
+        );
+      }
+      if (detected.isNotEmpty) {
+        return ImportAttributeMapping(pairs: const [], quadruplets: detected);
+      }
+    } else if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
+      return ImportAttributeMapping(
+        pairs: const [],
+        quadruplets: settings.attributeTripletColumns,
+      );
+    }
+
+    return ImportAttributeMapping(
+      pairs: settings.attributeColumnPairs,
+      quadruplets: settings.attributeTripletColumns,
+    );
+  }
+
+  /// Erkennt ATT/ATT_wert-Spaltenpaare aus der Import-Headerzeile (0-basierte Indizes).
+  static List<AttributeColumnPair> detectAnlagenAttributePairsFromHeader(
+    List<String> headers,
+  ) {
+    final nameColByN = <int, int>{};
+    final valueColByN = <int, int>{};
+
+    for (var i = 0; i < headers.length; i++) {
+      final raw = headers[i].trim();
+      if (raw.isEmpty) continue;
+      final upper = normalizeAttHeaderToken(raw);
+
+      final attOnly = RegExp(r'^ATT(\d+)$').firstMatch(upper);
+      if (attOnly != null) {
+        nameColByN[int.parse(attOnly.group(1)!)] = i;
+        continue;
+      }
+      final attWert = RegExp(r'^ATT(\d+)_WERT$').firstMatch(upper);
+      if (attWert != null) {
+        valueColByN[int.parse(attWert.group(1)!)] = i;
+        continue;
+      }
+      final attWertAlt = RegExp(r'^ATT_WERT(\d+)$').firstMatch(upper);
+      if (attWertAlt != null) {
+        valueColByN[int.parse(attWertAlt.group(1)!)] = i;
+      }
+    }
+
+    final nums = {...nameColByN.keys, ...valueColByN.keys}.toList()..sort();
+    final pairs = <AttributeColumnPair>[];
+    for (final n in nums) {
+      final valueCol = valueColByN[n];
+      if (valueCol == null) continue;
+      final nameCol = nameColByN[n] ?? valueCol;
+      pairs.add(AttributeColumnPair(nameColumn: nameCol, valueColumn: valueCol));
+    }
+    return pairs;
+  }
+
+  /// Param-Keys, die nicht als Dialog-Felder angezeigt werden sollen.
+  static bool isReservedDialogParamKey(String key, CsvSettings? settings) {
+    final k = key.trim();
+    if (k.isEmpty || k.startsWith('_')) return true;
+    if (k == 'lfdNummer' ||
+        k == 'photoPaths' ||
+        k == '__parentLfdNummer' ||
+        k == '__syntheticParent') {
+      return true;
+    }
+    if (isAnlagenCsvColumnParamKey(k)) return true;
+    if (settings != null) {
+      if (settings.isLeafNameParamKey(k)) return true;
+      for (var level = 1; level <= 3; level++) {
+        final levelKey = settings.resolveHierarchyLevelParamKey(level);
+        if (levelKey != null && levelKey == k) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Dialog-Schema aus vorhandenen Parametern (Fallback ohne Gewerkevorlage).
+  static List<Map<String, dynamic>> schemaFieldsFromParams(
+    Map<String, dynamic> params, {
+    CsvSettings? settings,
+  }) {
+    final fields = <Map<String, dynamic>>[];
+    for (final entry in params.entries) {
+      final key = entry.key.toString();
+      if (isReservedDialogParamKey(key, settings)) continue;
+      final value = entry.value;
+      if (value == null || value.toString().trim().isEmpty) continue;
+      fields.add({
+        'key': key,
+        'label': key,
+        'type': 'text',
+      });
+    }
+    return fields;
+  }
+
+  /// Nummer aus Param-Key ATT7, ATT7_wert, ATT_WERT7 (sonst null).
+  static int? anlagenColumnIndexFromParamKey(String key) {
+    final raw = key.trim();
+    if (raw.isEmpty) return null;
+    final att = RegExp(r'^ATT(\d+)$', caseSensitive: false).firstMatch(raw);
+    if (att != null) return int.parse(att.group(1)!);
+    final upper = raw.toUpperCase();
+    final w1 = RegExp(r'^ATT(\d+)_WERT$').firstMatch(upper);
+    if (w1 != null) return int.parse(w1.group(1)!);
+    final w2 = RegExp(r'^ATT_WERT(\d+)$').firstMatch(upper);
+    if (w2 != null) return int.parse(w2.group(1)!);
+    return null;
+  }
+
+  /// Entfernt CSV-Spalten-Keys (ATT/ATT_wert) aus Schema-Listen für den Dialog.
+  static List<Map<String, dynamic>> filterSchemaFieldsForDialog(
+    List<Map<String, dynamic>> fields,
+  ) {
+    return fields
+        .where((f) {
+          final key = (f['key'] ?? '').toString();
+          final label = (f['label'] ?? '').toString();
+          return !isAnlagenCsvColumnParamKey(key) &&
+              !isAnlagenCsvColumnParamKey(label);
+        })
+        .map((f) => Map<String, dynamic>.from(f))
+        .toList();
+  }
+
+  /// Verschiebt Werte von ATT/ATT_wert-Param-Keys auf Schema-Felder und löscht Spalten-Keys.
+  static void migrateParamsFromAnlagenColumnKeys({
+    required Map<String, dynamic> params,
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    final nonGlobal = schemaFields
+        .where((f) => f['isGlobal'] != true)
+        .toList();
+
+    final wertBySlot = <int, String>{};
+    final nameBySlot = <int, String>{};
+    final keysToRemove = <String>[];
+
+    for (final entry in params.entries) {
+      final k = entry.key.toString();
+      if (!isAnlagenCsvColumnParamKey(k)) continue;
+      keysToRemove.add(k);
+      final slot = anlagenColumnIndexFromParamKey(k);
+      if (slot == null) continue;
+      final v = entry.value?.toString().trim() ?? '';
+      if (v.isEmpty) continue;
+      final upper = k.toUpperCase();
+      if (upper.contains('_WERT') || upper.startsWith('ATT_WERT')) {
+        wertBySlot[slot] = v;
+      } else {
+        nameBySlot[slot] = v;
+      }
+    }
+
+    for (final slot in {...wertBySlot.keys, ...nameBySlot.keys}) {
+      final idx = slot - 1;
+      if (idx < 0 || idx >= nonGlobal.length) continue;
+      final schemaKey = (nonGlobal[idx]['key'] ?? '').toString();
+      if (schemaKey.isEmpty || isAnlagenCsvColumnParamKey(schemaKey)) continue;
+      final existing = params[schemaKey]?.toString().trim() ?? '';
+      if (existing.isNotEmpty) continue;
+      final preferred = wertBySlot[slot]?.isNotEmpty == true
+          ? wertBySlot[slot]
+          : nameBySlot[slot];
+      if (preferred != null && preferred.isNotEmpty) {
+        params[schemaKey] = preferred;
+      }
+    }
+
+    for (final k in keysToRemove) {
+      params.remove(k);
+    }
   }
 
   /// Liest einen Param-Wert inkl. case-insensitive Key und Schema-Key mit UUID-Suffix.
@@ -430,14 +758,44 @@ class CsvSettings {
   }
 
   /// Anzeigename für Ebene 3 aus Params (Neuaufnahme / Gewerkevorlagen).
-  String? displayNameValueFromParams(Map<String, dynamic> params) {
+  String? displayNameValueFromParams(
+    Map<String, dynamic> params, {
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    final explicit = displayNameParamKey.trim();
+    if (explicit.isNotEmpty) {
+      final fromExplicit = paramValueForKey(params, explicit);
+      if (fromExplicit != null && fromExplicit.isNotEmpty) {
+        return fromExplicit;
+      }
+      for (final field in schemaFields) {
+        final fieldKey = (field['key'] ?? '').toString();
+        final fieldLabel = (field['label'] ?? fieldKey).toString();
+        if (fieldKey.isEmpty) continue;
+        if (!paramKeysMatch(fieldKey, explicit) &&
+            !paramKeysMatch(fieldLabel, explicit)) {
+          continue;
+        }
+        final fromField = paramValueForKey(params, fieldKey);
+        if (fromField != null && fromField.isNotEmpty) return fromField;
+      }
+    }
+
     final configured = resolveDisplayNameParamKey();
-    if (configured != null && configured.isNotEmpty) {
+    if (configured != null &&
+        configured.isNotEmpty &&
+        !isUpperHierarchyParamKey(configured)) {
       final fromConfigured = paramValueForKey(params, configured);
       if (fromConfigured != null && fromConfigured.isNotEmpty) {
         return fromConfigured;
       }
     }
+
+    final schemaValue = schemaItemValueFromParams(params)?.trim();
+    bool isSchemaDuplicate(String value) =>
+        schemaValue != null &&
+        schemaValue.isNotEmpty &&
+        schemaValue.toLowerCase() == value.trim().toLowerCase();
 
     for (final candidate in const [
       'Name',
@@ -446,13 +804,32 @@ class CsvSettings {
       'name',
     ]) {
       final v = paramValueForKey(params, candidate);
-      if (v != null && v.isNotEmpty) return v;
+      if (v != null && v.isNotEmpty && !isSchemaDuplicate(v)) return v;
+    }
+
+    for (final field in schemaFields) {
+      final fieldKey = (field['key'] ?? '').toString();
+      if (fieldKey.isEmpty) continue;
+      if (isUpperHierarchyParamKey(fieldKey)) continue;
+      if (isLeafNameParamKey(fieldKey)) {
+        final fromLeafField = paramValueForKey(params, fieldKey);
+        if (fromLeafField != null &&
+            fromLeafField.isNotEmpty &&
+            !isSchemaDuplicate(fromLeafField)) {
+          return fromLeafField;
+        }
+        continue;
+      }
     }
 
     final leafKey = resolveNameParamKey();
-    if (leafKey != null && leafKey.isNotEmpty) {
+    if (leafKey != null &&
+        leafKey.isNotEmpty &&
+        !isUpperHierarchyParamKey(leafKey)) {
       final fromLeaf = paramValueForKey(params, leafKey);
-      if (fromLeaf != null && fromLeaf.isNotEmpty) return fromLeaf;
+      if (fromLeaf != null && fromLeaf.isNotEmpty && !isSchemaDuplicate(fromLeaf)) {
+        return fromLeaf;
+      }
     }
     return null;
   }
@@ -741,6 +1118,9 @@ class CsvSettings {
       'photoPaths',
       '__etageName',
     };
+    for (final h in importHeaderRow) {
+      if (isAnlagenCsvColumnParamKey(h)) keys.add(h.trim());
+    }
     for (var level = 1; level <= 3; level++) {
       keys.addAll(allParamKeysForHierarchyLevel(level));
     }

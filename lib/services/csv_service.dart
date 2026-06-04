@@ -807,6 +807,140 @@ class CsvService {
     return params;
   }
 
+  /// Anlagen-CSV: nur die erste Spalte je Vierergruppe (z. B. ATT1) = Wert;
+  /// Attribut-Code/Schema kommt aus Gewerkevorlagen, nicht aus TYPE/OPTIONS/ART.
+  static void _applyAnlagenAttributeParamsFromRow({
+    required Map<String, dynamic> params,
+    required List<dynamic> row,
+    required List<String> headerRow,
+    required List<AttributeTripletColumn> quadruplets,
+    required Disziplin discipline,
+    required CsvSettings settings,
+  }) {
+    final ro = settings.schemaItemValueFromParams(params)?.trim() ??
+        settings.revisionsobjektValueFromParams(params)?.trim() ??
+        '';
+    final schemaFields = <Map<String, dynamic>>[];
+    for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
+      if (field['isGlobal'] == true) continue;
+      schemaFields.add(field);
+    }
+
+    for (var i = 0; i < quadruplets.length; i++) {
+      final col = quadruplets[i].nameColumn;
+      if (col < 0) continue;
+      final cellValue = _safeCell(row, col);
+      if (cellValue.isEmpty) continue;
+
+      var paramKey = '';
+      if (i < schemaFields.length) {
+        paramKey = _schemaFieldParamKey(schemaFields[i]);
+      }
+      if (paramKey.isEmpty && col < headerRow.length) {
+        final header = headerRow[col].trim();
+        if (header.isNotEmpty) {
+          for (final field in schemaFields) {
+            final key = _schemaFieldParamKey(field);
+            final label = (field['label'] ?? '').toString();
+            if (CsvSettings.paramKeysMatch(key, header) ||
+                CsvSettings.paramKeysMatch(label, header)) {
+              paramKey = key;
+              break;
+            }
+          }
+          if (paramKey.isEmpty) {
+            paramKey = _paramKeyForHeaderLabel(header);
+          }
+        }
+      }
+      if (paramKey.isEmpty) continue;
+      params[paramKey] = _parseDynamicValue(cellValue);
+    }
+  }
+
+  /// Anlagen-CSV (ATTn + ATTn_wert): Wert aus Wert-Spalte, Zuordnung über Gewerkevorlagen-Schema.
+  static void _applyAnlagenAttributePairsFromRow({
+    required Map<String, dynamic> params,
+    required List<dynamic> row,
+    required List<String> headerRow,
+    required List<AttributeColumnPair> pairs,
+    required Disziplin discipline,
+    required CsvSettings settings,
+  }) {
+    final ro = settings.schemaItemValueFromParams(params)?.trim() ??
+        settings.revisionsobjektValueFromParams(params)?.trim() ??
+        '';
+    final schemaFields = <Map<String, dynamic>>[];
+    for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
+      if (field['isGlobal'] == true) continue;
+      schemaFields.add(field);
+    }
+
+    for (var i = 0; i < pairs.length; i++) {
+      final pair = pairs[i];
+      final attrValue = _safeCell(row, pair.valueColumn);
+      if (attrValue.isEmpty) continue;
+
+      var paramKey = '';
+      if (i < schemaFields.length) {
+        paramKey = _schemaFieldParamKey(schemaFields[i]);
+      }
+      if (paramKey.isEmpty) {
+        final nameCell = _safeCell(row, pair.nameColumn);
+        if (nameCell.isNotEmpty) {
+          for (final field in schemaFields) {
+            final key = _schemaFieldParamKey(field);
+            final label = (field['label'] ?? '').toString();
+            if (CsvSettings.paramKeysMatch(key, nameCell) ||
+                CsvSettings.paramKeysMatch(label, nameCell)) {
+              paramKey = key;
+              break;
+            }
+          }
+        }
+      }
+      if (paramKey.isEmpty) {
+        final nameCell = _safeCell(row, pair.nameColumn);
+        if (nameCell.isNotEmpty &&
+            !CsvSettings.isAnlagenCsvColumnParamKey(nameCell)) {
+          paramKey = _paramKeyForHeaderLabel(nameCell);
+        }
+      }
+      if (paramKey.isEmpty &&
+          pair.nameColumn >= 0 &&
+          pair.nameColumn < headerRow.length) {
+        final header = headerRow[pair.nameColumn].trim();
+        if (header.isNotEmpty && !CsvSettings.isAnlagenCsvColumnParamKey(header)) {
+          paramKey = _paramKeyForHeaderLabel(header);
+        }
+      }
+      if (paramKey.isEmpty) continue;
+      params[paramKey] = _parseDynamicValue(attrValue);
+    }
+  }
+
+  static Set<int> _reservedImportIndices({
+    required CsvSettings settings,
+    required List<AttributeColumnPair> attributePairs,
+    required List<AttributeTripletColumn> attributeQuadruplets,
+  }) {
+    final indices = <int>{};
+    for (final level in settings.enabledLevelsOrdered) {
+      indices.add(level.nameColumn);
+      if (level.useIdColumn && level.idColumn != null) {
+        indices.add(level.idColumn!);
+      }
+    }
+    for (final pair in attributePairs) {
+      indices.add(pair.nameColumn);
+      indices.add(pair.valueColumn);
+    }
+    for (final group in attributeQuadruplets) {
+      indices.addAll(group.columnIndices);
+    }
+    return indices;
+  }
+
   static dynamic _parseDynamicValue(String value) {
     final lower = value.toLowerCase();
     if (lower == 'true' || lower == 'false') {
@@ -938,16 +1072,6 @@ class CsvService {
       final delimiterMode = settings.delimiterMode;
       const headerZeile = 1;
       final useDisciplineGrouping = settings.level1.enabled;
-      final attributeQuadruplets = settings.attributeTripletColumns;
-      final attributePairs = settings.attributeColumnPairs;
-      final attributeColumnIndices = <int>{};
-      for (final q in attributeQuadruplets) {
-        attributeColumnIndices.addAll(q.columnIndices);
-      }
-      for (final p in attributePairs) {
-        attributeColumnIndices.add(p.nameColumn);
-        attributeColumnIndices.add(p.valueColumn);
-      }
 
       // Trennzeichen: Auto oder explizit
       String delimiter = _delimiter;
@@ -1008,13 +1132,24 @@ class CsvService {
         throw Exception('Keine Datenzeilen gefunden');
       }
 
+      final importMapping = CsvSettings.resolveImportAttributeMapping(
+        headerRow: headerRow,
+        settings: settings,
+      );
+      final attributePairs = importMapping.pairs;
+      final attributeQuadruplets = importMapping.quadruplets;
 
-      // EAV: Spalten, die nicht zu Hierarchie-Ebenen oder Attribut-Paaren gehören.
-      final reservedIndices = settings.reservedImportColumnIndices();
+      // EAV: Spalten, die nicht zu Hierarchie-Ebenen oder Attribut-Spalten gehören.
+      final reservedIndices = _reservedImportIndices(
+        settings: settings,
+        attributePairs: attributePairs,
+        attributeQuadruplets: attributeQuadruplets,
+      );
       final eavColumns = <int, String>{};
       for (var i = 0; i < headerRow.length; i++) {
         if (reservedIndices.contains(i)) continue;
         final headerName = headerRow[i].trim();
+        if (CsvSettings.isAnlagenCsvColumnParamKey(headerName)) continue;
         eavColumns[i] = headerName.isNotEmpty ? headerName : 'Spalte_${i + 1}';
       }
 
@@ -1030,6 +1165,8 @@ class CsvService {
             lowerName.contains('anzahl') || lowerName.contains('jahr')) {
           type = 'number';
         }
+
+        if (CsvSettings.isAnlagenCsvColumnParamKey(headerName)) continue;
 
         schemaFromCsv.add({
           'key': headerName,
@@ -1176,23 +1313,16 @@ class CsvService {
                 contextLabel: disciplineLabelValue,
               );
 
-        final params = _parseParamsFromRow(row, eavColumns);
-        for (final q in attributeQuadruplets) {
-          final attrName = _safeCell(row, q.nameColumn);
-          if (attrName.isEmpty) continue;
-          final attrValue = _safeCell(row, q.artColumn);
-          params[attrName] = _parseDynamicValue(attrValue);
-        }
-        for (final pair in attributePairs) {
-          final attrName = _safeCell(row, pair.nameColumn);
-          if (attrName.isEmpty) continue;
-          final attrValue = _safeCell(row, pair.valueColumn);
-          params[attrName] = _parseDynamicValue(attrValue);
+        final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
+        if (discipline == null) {
+          debugPrint('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
+          continue;
         }
 
+        final params = _parseParamsFromRow(row, eavColumns);
         params['lfdNummer'] = lfdNummerValue;
 
-        // Hierarchie-Werte aller aktiven Ebenen in Params schreiben
+        // Hierarchie vor Attributen (Revisionsobjekt → Schema aus Gewerkevorlage)
         final levelValues = <int, String>{};
         for (var li = 0; li < enabledLevels.length; li++) {
           final levelNum = settings.levelNumberAtEnabledIndex(li);
@@ -1213,10 +1343,24 @@ class CsvService {
           }
         }
 
-        final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
-        if (discipline == null) {
-          debugPrint('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
-          continue;
+        if (attributePairs.isNotEmpty) {
+          _applyAnlagenAttributePairsFromRow(
+            params: params,
+            row: row,
+            headerRow: headerRow,
+            pairs: attributePairs,
+            discipline: discipline,
+            settings: settings,
+          );
+        } else if (attributeQuadruplets.isNotEmpty) {
+          _applyAnlagenAttributeParamsFromRow(
+            params: params,
+            row: row,
+            headerRow: headerRow,
+            quadruplets: attributeQuadruplets,
+            discipline: discipline,
+            settings: settings,
+          );
         }
 
         // Hierarchie über aktive Ebenen (Eltern-Knoten pro Pfad deduplizieren)

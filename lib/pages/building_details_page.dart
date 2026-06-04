@@ -19,6 +19,7 @@ import '../models/floor_plan.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../models/anlage.dart';
 import '../services/floor_plan_service.dart';
+import '../services/anlagen_csv_import_service.dart';
 import '../services/csv_service.dart';
 import '../services/template_service.dart';
 import '../utils/delete_utils.dart';
@@ -345,108 +346,22 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final importCsvSettings = _currentProject.id.isNotEmpty
           ? ref.read(csvSettingsProvider(_currentProject.id))
           : CsvSettings.defaults();
-      final importResult = await CsvService.importAnlagenCsvForDisciplines(
-        dbService: ref.read(databaseServiceProvider),
+      final dbService = ref.read(databaseServiceProvider);
+      final persistResult = await AnlagenCsvImportService.runFullImport(
+        dbService: dbService,
+        projectId: _currentProject.id,
         buildingId: _building.id,
         csvSettings: importCsvSettings,
+        saveSettings: (updated) async {
+          if (_currentProject.id.isNotEmpty) {
+            await ref.read(csvSettingsProvider(_currentProject.id).notifier).save(updated);
+          }
+        },
       );
-      if (_currentProject.id.isNotEmpty) {
-        await ref.read(csvSettingsProvider(_currentProject.id).notifier).save(
-              importCsvSettings.copyWith(
-                importHeaderRow: importResult.importHeaderRow,
-                exportDelimiter: importResult.detectedDelimiter,
-              ),
-            );
-      }
-      final anlagen = importResult.anlagen;
-
-      debugPrint('CSV-Import abgeschlossen: ${anlagen.length} Anlagen gefunden');
-
-      // Anlagen in Datenbank speichern (mit hierarchischer Struktur)
-      // WICHTIG: Es werden nur neue Anlagen hinzugefügt (wenn lfdNummer nicht existiert)
-      // Bestehende Anlagen werden nicht gelöscht, um Datenverlust zu vermeiden
-      final dbService = ref.read(databaseServiceProvider);
-      int savedCount = 0;
-      int skippedCount = 0;
-      int errorCount = 0;
-      final List<String> failedRows = [];
-      // Einmalig alle lfdNummern laden (statt pro Zeile die komplette Anlagenliste)
-      final lfdToId = await dbService.getLfdNummerToIdMap(_building.id);
-      final pendingInserts = <Anlage>[];
-
-      for (final anlage in anlagen) {
-          try {
-            final resolvedFloorId = anlage.floorId;
-
-            // Prüfe, ob eine lfdNummer in den Params vorhanden ist
-            final lfdNummer = anlage.params['lfdNummer']?.toString().trim();
-            if (lfdNummer != null && lfdNummer.isNotEmpty) {
-              final existingId = lfdToId[lfdNummer];
-              if (existingId != null) {
-                skippedCount++;
-                continue;
-              }
-
-              final parentLfd = anlage.params['__parentLfdNummer']?.toString().trim();
-              String? resolvedParentId;
-              if (parentLfd != null && parentLfd.isNotEmpty) {
-                resolvedParentId = lfdToId[parentLfd];
-              }
-
-              final cleanedParams = Map<String, dynamic>.from(anlage.params);
-              cleanedParams.remove('__parentLfdNummer');
-              cleanedParams.remove('__etageName');
-
-              pendingInserts.add(Anlage(
-                id: anlage.id,
-                parentId: resolvedParentId,
-                name: anlage.name,
-                params: cleanedParams,
-                floorId: resolvedFloorId,
-                buildingId: anlage.buildingId,
-                isMarker: anlage.isMarker,
-                markerInfo: anlage.markerInfo,
-                markerType: anlage.markerType,
-                discipline: anlage.discipline,
-              ));
-              lfdToId[lfdNummer] = anlage.id;
-            } else {
-              final cleanedParams = Map<String, dynamic>.from(anlage.params);
-              cleanedParams.remove('__etageName');
-
-              pendingInserts.add(Anlage(
-                id: anlage.id,
-                parentId: anlage.parentId,
-                name: anlage.name,
-                params: cleanedParams,
-                floorId: resolvedFloorId,
-                buildingId: anlage.buildingId,
-                isMarker: anlage.isMarker,
-                markerInfo: anlage.markerInfo,
-                markerType: anlage.markerType,
-                discipline: anlage.discipline,
-              ));
-            }
-          } catch (e) {
-            errorCount++;
-            final info = '${anlage.name} (lfd: ${anlage.params['lfdNummer']}): $e';
-            failedRows.add(info);
-            debugPrint('Fehler beim Vorbereiten der Anlage $info');
-          }
-        }
-
-        if (pendingInserts.isNotEmpty) {
-          try {
-            await dbService.insertAnlagenBatch(pendingInserts);
-            savedCount = pendingInserts.length;
-          } catch (e) {
-            errorCount += pendingInserts.length;
-            failedRows.add('Batch-Speichern: $e');
-            debugPrint('Fehler beim Batch-Speichern: $e');
-          }
-        }
-
-        debugPrint('CSV-Import: $savedCount importiert, $skippedCount übersprungen, $errorCount Fehler. Fehlgeschlagen: $failedRows');
+      debugPrint(
+        'CSV-Import: ${persistResult.savedCount} importiert, '
+        '${persistResult.skippedCount} übersprungen, ${persistResult.errorCount} Fehler',
+      );
 
       // Dialog schließen
       if (mounted) {
@@ -1767,10 +1682,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
       if (confirmed != true) return;
 
-      // Anlagen aus der Datenbank löschen
+      // Anlagen endgültig aus der Datenbank löschen
       for (final entry in anlagenPerLabel.entries) {
         for (final a in entry.value) {
-          await dbService.deleteAnlage(a.id);
+          await dbService.hardDeleteAnlage(a.id);
         }
       }
     } else {

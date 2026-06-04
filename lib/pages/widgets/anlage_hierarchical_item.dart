@@ -22,6 +22,8 @@ class AnlageHierarchicalItem extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final String? typeHint;
+  /// Wert aus „Parameter für Anzeige Ebene 3“ (Vorschauzeile unter dem Titel).
+  final String? previewText;
 
   const AnlageHierarchicalItem({
     super.key,
@@ -34,6 +36,7 @@ class AnlageHierarchicalItem extends StatelessWidget {
     required     this.onTap,
     this.onLongPress,
     this.typeHint,
+    this.previewText,
     this.scrollKey,
     this.isChild = false,
     this.hasChildren = false,
@@ -44,6 +47,10 @@ class AnlageHierarchicalItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final typeDisplay = typeHint?.trim() ?? '';
+    final previewDisplay = previewText?.trim() ?? '';
+    final titleName = anlage.name.trim();
+    final showPreview = previewDisplay.isNotEmpty &&
+        previewDisplay.toLowerCase() != titleName.toLowerCase();
 
     final baseTrailing = showSelectionCircles
         ? (isSelected
@@ -429,11 +436,14 @@ class AnlageHierarchicalItem extends StatelessWidget {
                                     .where((e) =>
                                         e.key.toLowerCase() == 'hersteller')
                                     .toList();
-                                return herstellerEntries.isEmpty
-                                    ? (typeDisplay.isNotEmpty
-                                        ? 'Typ: $typeDisplay'
-                                        : '')
-                                    : herstellerEntries.first.value.toString();
+                                if (herstellerEntries.isNotEmpty) {
+                                  return herstellerEntries.first.value.toString();
+                                }
+                                if (showPreview) return previewDisplay;
+                                if (typeDisplay.isNotEmpty) {
+                                  return 'Typ: $typeDisplay';
+                                }
+                                return '';
                               }(),
                               style: TextStyle(
                                 color: Colors.grey[600],

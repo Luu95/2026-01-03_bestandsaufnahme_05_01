@@ -98,6 +98,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   List<Anlage> _parentAnlagen = [];
   Map<String, List<Anlage>> _childrenByParentId = {};
   CsvSettings? _cachedCsvSettings;
+  String? _cachedProjectId;
   final Map<String, bool> _validationByAnlageId = {};
   bool _isSelectionMode = false;    // Gibt an, ob sich die Seite im Auswahlmodus befindet
   bool _isLoading = false;           // Gibt an, ob die Anlagen gerade geladen werden
@@ -348,6 +349,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
 
       setState(() {
         _alleAnlagen = filtered;
+        _cachedProjectId = projectId;
         _cachedCsvSettings = csvSettings;
         _rebuildAnlagenIndexes();
         _isLoading = false;
@@ -503,10 +505,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final dbService = ref.read(databaseServiceProvider);
     final toDeleteIds = _selectedAnlagenIds.toList();
 
-    // Alle ausgewählten Anlagen aus der Datenbank löschen
-    // deleteAnlage löscht rekursiv alle Kinder (Bauteile) automatisch
+    // Endgültig aus der DB (inkl. Kinder/Bauteile)
     for (final id in toDeleteIds) {
-      await dbService.deleteAnlage(id);
+      await dbService.hardDeleteAnlage(id);
     }
 
     setState(() {
@@ -928,6 +929,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       groupingKey: widget.groupingKey,
       subGroupingKey: widget.subGroupingKey,
       displayNameParamKey: widget.displayNameParamKey,
+      resolveListDisplayName: _resolveListDisplayName,
       expandedGroups: _expandedGroups,
       expandedAnlagenIds: _expandedAnlagenIds,
       onGroupExpansionChanged: (groupKey, expanded) {
@@ -957,12 +959,85 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     );
   }
 
-  String? _resolveTypeHint(Anlage anlage) {
-    if (anlage.parentId != null && anlage.parentId!.isNotEmpty) {
-      return _cachedCsvSettings?.labelBauteil;
+  CsvSettings? _liveCsvSettings() {
+    final projectId = _cachedProjectId;
+    if (projectId != null && projectId.isNotEmpty) {
+      return ref.read(csvSettingsProvider(projectId));
     }
-    return null;
+    return _cachedCsvSettings;
   }
+
+  String? _resolveDisplayNameValue(Anlage anlage, Disziplin disc) {
+    final csv = _liveCsvSettings();
+    if (csv == null) return null;
+
+    final explicitKey =
+        widget.displayNameParamKey?.trim() ?? csv.displayNameParamKey.trim();
+    if (explicitKey.isNotEmpty) {
+      final direct = csv.paramValueForKey(anlage.params, explicitKey);
+      if (direct != null && direct.isNotEmpty) return direct;
+      for (final field in disc.schema) {
+        final fieldKey = (field['key'] ?? '').toString();
+        final fieldLabel = (field['label'] ?? fieldKey).toString();
+        if (fieldKey.isEmpty) continue;
+        if (!CsvSettings.paramKeysMatch(fieldKey, explicitKey) &&
+            !CsvSettings.paramKeysMatch(fieldLabel, explicitKey)) {
+          continue;
+        }
+        final fromField = csv.paramValueForKey(anlage.params, fieldKey);
+        if (fromField != null && fromField.isNotEmpty) return fromField;
+      }
+    }
+
+    return csv.displayNameValueFromParams(
+      anlage.params,
+      schemaFields: disc.schema,
+    );
+  }
+
+  bool _isHierarchyLevelLabel(String text, CsvSettings csv) {
+    final t = text.trim();
+    if (t.isEmpty) return false;
+    if (t == csv.labelGewerk || t == csv.labelAnlage || t == csv.labelBauteil) {
+      return true;
+    }
+    for (var level = 1; level <= 3; level++) {
+      if (t == csv.hierarchyLevelHeaderLabel(level)) return true;
+    }
+    return false;
+  }
+
+  String _resolveListDisplayName(Anlage anlage) {
+    final csv = _liveCsvSettings();
+    final fromParams = _resolveDisplayNameValue(anlage, anlage.discipline);
+    if (fromParams != null && fromParams.isNotEmpty) {
+      return fromParams;
+    }
+
+    final name = anlage.name.trim();
+    if (csv != null && _isHierarchyLevelLabel(name, csv)) {
+      for (final field in anlage.discipline.schema) {
+        final fieldKey = (field['key'] ?? '').toString();
+        if (fieldKey.isEmpty) continue;
+        if (csv.isUpperHierarchyParamKey(fieldKey)) continue;
+        final v = csv.paramValueForKey(anlage.params, fieldKey);
+        if (v != null && v.isNotEmpty && v.trim() != name) return v;
+      }
+    }
+    return name;
+  }
+
+  String? _resolvePreviewText(
+    Anlage anlage,
+    Disziplin disc, {
+    required bool isChild,
+    required bool hasChildren,
+  }) {
+    if (!isChild && hasChildren) return null;
+    return _resolveDisplayNameValue(anlage, disc);
+  }
+
+  String? _resolveTypeHint(Anlage anlage) => null;
 
   Widget _buildHierarchicalAnlageItem(
     Anlage a,
@@ -990,6 +1065,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       anlage: a,
       discipline: disc,
       typeHint: _resolveTypeHint(a),
+      previewText: _resolvePreviewText(
+        a,
+        disc,
+        isChild: isChild,
+        hasChildren: hasChildren,
+      ),
       isChild: isChild,
       hasChildren: hasChildren,
       isExpanded: isExpanded,

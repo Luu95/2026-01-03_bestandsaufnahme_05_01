@@ -185,7 +185,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
 
       if (confirmed) {
         for (final anlage in anlagen) {
-          await dbService.deleteAnlage(anlage.id);
+          await dbService.hardDeleteAnlage(anlage.id);
         }
       }
     } else {
@@ -220,7 +220,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     for (final d in disziplinen) {
       final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(widget.buildingId, d.label);
       for (final anlage in anlagen) {
-        await dbService.deleteAnlage(anlage.id);
+        await dbService.hardDeleteAnlage(anlage.id);
       }
     }
   }
@@ -244,7 +244,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     for (final label in toDeleteLabels) {
       final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(widget.buildingId, label);
       for (final anlage in anlagen) {
-        await dbService.deleteAnlage(anlage.id);
+        await dbService.hardDeleteAnlage(anlage.id);
       }
     }
 

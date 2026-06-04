@@ -184,23 +184,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       Disziplin effectiveDiscipline = updatedDiscipline;
 
       if (widget.existingAnlage != null) {
-        final existingDisc = widget.existingAnlage!.discipline;
-        for (final f in existingDisc.schema) {
-          final key = (f['key'] ?? '').toString();
-          if (key.isNotEmpty && !mergedKeys.contains(key)) {
-            mergedKeys.add(key);
-            mergedSchema.add(Map<String, dynamic>.from(f));
-          }
-        }
-
-        effectiveDiscipline = Disziplin(
-          label: updatedDiscipline.label,
-          icon: updatedDiscipline.icon,
-          color: updatedDiscipline.color,
-          schema: mergedSchema,
-          groupingKey: updatedDiscipline.groupingKey,
-          revisionsobjektSchemas: updatedDiscipline.revisionsobjektSchemas,
-        );
+        // Schema wird nach dem Laden der Params auf das aktuelle RO reduziert
+        // (_applyEffectiveSchemaFromParams), nicht das gesamte Flat-Schema anzeigen.
+        effectiveDiscipline = updatedDiscipline;
       } else {
         final ro = widget.initialRevisionsobjekt?.trim() ?? '';
         var mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
@@ -227,18 +213,6 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
             discipline: baseForRo,
             revisionsobjekt: ro,
-          );
-          final finalSchema = TemplateService.mergeSchemaFieldLists(
-            effectiveDiscipline.schema,
-            mergedSchema,
-          );
-          effectiveDiscipline = Disziplin(
-            label: effectiveDiscipline.label,
-            icon: effectiveDiscipline.icon,
-            color: effectiveDiscipline.color,
-            schema: finalSchema,
-            groupingKey: effectiveDiscipline.groupingKey,
-            revisionsobjektSchemas: mergedRoSchemas,
           );
         } else {
           effectiveDiscipline = Disziplin(
@@ -305,6 +279,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     if (widget.existingAnlage == null) {
       _finalizeSchemaForRevisionsobjekt();
     }
+    _sanitizeAnlagenImportParamsAndSchema();
     } finally {
       if (mounted) {
         setState(() => _isDataReady = true);
@@ -1360,10 +1335,87 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     setState(() {});
   }
 
+  void _sanitizeAnlagenImportParamsAndSchema() {
+    final ro = _resolveRevisionsobjektFromParams();
+    final schemaFields = ro != null && ro.trim().isNotEmpty
+        ? _currentDiscipline.effectiveSchemaFor(revisionsobjekt: ro.trim())
+        : _currentDiscipline.schema;
+
+    CsvSettings.migrateParamsFromAnlagenColumnKeys(
+      params: _params,
+      schemaFields: schemaFields,
+    );
+
+    final filteredRoSchemas = <String, List<Map<String, dynamic>>>{};
+    for (final entry in _currentDiscipline.revisionsobjektSchemas.entries) {
+      filteredRoSchemas[entry.key] =
+          CsvSettings.filterSchemaFieldsForDialog(entry.value);
+    }
+
+    _currentDiscipline = Disziplin(
+      label: _currentDiscipline.label,
+      icon: _currentDiscipline.icon,
+      color: _currentDiscipline.color,
+      schema: CsvSettings.filterSchemaFieldsForDialog(_currentDiscipline.schema),
+      groupingKey: _currentDiscipline.groupingKey,
+      revisionsobjektSchemas: filteredRoSchemas,
+    );
+
+    final keysToDrop = _controllers.keys
+        .where((k) => CsvSettings.isAnlagenCsvColumnParamKey(k))
+        .toList();
+    for (final k in keysToDrop) {
+      _controllers[k]?.dispose();
+      _controllers.remove(k);
+    }
+  }
+
+  /// Nur Felder für das aktuelle Revisionsobjekt (nicht alle RO-Schemata aus der DB).
+  List<Map<String, dynamic>> _dialogSchemaFields() {
+    final ro = _resolveRevisionsobjektFromParams();
+    var fields = ro != null && ro.trim().isNotEmpty
+        ? _currentDiscipline.effectiveSchemaFor(revisionsobjekt: ro.trim())
+        : List<Map<String, dynamic>>.from(_currentDiscipline.schema);
+    fields = CsvSettings.filterSchemaFieldsForDialog(fields);
+
+    final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
+    if (nonGlobal.isEmpty) {
+      final fromParams = CsvSettings.schemaFieldsFromParams(
+        _params,
+        settings: _csvSettings,
+      );
+      if (fromParams.isNotEmpty) return fromParams;
+    }
+    return fields;
+  }
+
+  String _textForSchemaField(String key, String label) {
+    final csv = _csvSettings;
+    if (csv != null) {
+      final fromKey = csv.paramValueForKey(_params, key);
+      if (fromKey != null && fromKey.isNotEmpty) return fromKey;
+      if (label.trim().isNotEmpty) {
+        final fromLabel = csv.paramValueForKey(_params, label);
+        if (fromLabel != null && fromLabel.isNotEmpty) return fromLabel;
+      }
+    }
+    return _params[key]?.toString() ?? '';
+  }
+
+  bool _schemaDefinesParamKey(List<Map<String, dynamic>> schema, String paramKey) {
+    for (final f in schema) {
+      final key = (f['key'] ?? '').toString();
+      final label = (f['label'] ?? '').toString();
+      if (CsvSettings.paramKeysMatch(key, paramKey) ||
+          CsvSettings.paramKeysMatch(label, paramKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   List<Widget> _buildSchemaFields() {
-    // Verwende nur die Felder aus dem Schema - keine extraKeys mehr hinzufügen
-    // Das stellt sicher, dass nur die definierten Felder angezeigt werden
-    final schema = List<Map<String, dynamic>>.from(_currentDiscipline.schema);
+    final schema = _dialogSchemaFields();
     
     final fields = <Widget>[];
     final tempAnlage = Anlage(
@@ -1389,12 +1441,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           : (fieldDef['editable'] ?? true);
       
       if (!_controllers.containsKey(key)) {
-        _controllers[key] = TextEditingController(text: _params[key]?.toString() ?? '');
+        _controllers[key] = TextEditingController(text: _textForSchemaField(key, label));
         _controllers[key]!.addListener(_updateValidationStatus);
       } else if (_isLocationLocked(key) || _isLeafNameField(key)) {
         final locked = _isLocationLocked(key)
-            ? (_lockedLocationParams[key] ?? _params[key]?.toString() ?? '')
-            : (_params[key]?.toString() ?? '');
+            ? (_lockedLocationParams[key] ?? _textForSchemaField(key, label))
+            : _textForSchemaField(key, label);
         if (_controllers[key]!.text != locked) {
           _controllers[key]!.text = locked;
         }
@@ -1608,16 +1660,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       );
     }
 
-    // Zusätzliche Felder: Params, die nicht im Schema sind (z. B. aus CSV-Attribut-Spaltenpaaren)
-    final schemaKeys = schema.map((f) => (f['key'] as String?).toString()).where((k) => k.isNotEmpty).toSet();
+    // Zusätzliche Felder: Params ohne Schema-Definition (nicht per Key/Label doppelt anzeigen)
     final reservedKeys = _csvSettings?.reservedParamKeysForDialog() ??
         const {'lfdNummer', 'photoPaths'};
     for (final key in _params.keys) {
-      if (schemaKeys.contains(key)) continue;
+      if (_schemaDefinesParamKey(schema, key)) continue;
       if (_isLocationLocked(key)) continue;
       if (key.startsWith('__')) continue;
       if (key.startsWith('_')) continue; // interne/Validierungs-Felder nicht als Extra-Felder anzeigen
       if (reservedKeys.contains(key)) continue;
+      if (CsvSettings.isAnlagenCsvColumnParamKey(key)) continue;
       final value = _params[key];
       if (value is Map || value is List) continue; // keine komplexen Typen als einfaches Textfeld
 
@@ -1973,6 +2025,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         // Wichtig: Alle Controller-Werte vor dem Speichern in _params übernehmen.
                         // Verhindert, dass Eingaben verloren gehen (z.B. bei Fokus-Wechsel ohne onChanged).
                         _syncControllersToParams();
+                        _sanitizeAnlagenImportParamsAndSchema();
                         _applyLockedLocationParams();
                         _ensureLevelLabelParams();
 
@@ -1993,12 +2046,18 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           }
                         }
 
+                        final saveParams = Map<String, dynamic>.from(_params);
+                        CsvSettings.migrateParamsFromAnlagenColumnKeys(
+                          params: saveParams,
+                          schemaFields: _dialogSchemaFields(),
+                        );
+
                         // Erstelle Anlage
                         var anlage = Anlage(
                           id: widget.existingAnlage?.id ?? const Uuid().v4(),
                           parentId: widget.parentId ?? widget.existingAnlage?.parentId,
                           name: name,
-                          params: _params,
+                          params: saveParams,
                           floorId: widget.floorId,
                           buildingId: widget.buildingId,
                           isMarker: widget.existingAnlage?.isMarker ?? false,

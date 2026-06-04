@@ -1,6 +1,7 @@
 // lib/services/database_service.dart
 
 import 'dart:convert';
+import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:flutter/material.dart' show Icons, Colors;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -781,6 +782,86 @@ class DatabaseService {
   /// Hartes Löschen einer Anlage inkl. Kinder (nur Papierkorb / endgültig löschen).
   Future<void> hardDeleteAnlage(String id) async {
     await permanentlyDeleteAnlage(id);
+  }
+
+  void _deletePhotoFilesFromParamsJson(String? paramsJson) {
+    if (paramsJson == null || paramsJson.trim().isEmpty) return;
+    try {
+      final params = json.decode(paramsJson) as Map<String, dynamic>;
+      final photoPaths = params['photoPaths'];
+      if (photoPaths is! List) return;
+      for (final p in photoPaths) {
+        final path = p?.toString().trim() ?? '';
+        if (path.isEmpty) continue;
+        final file = File(path);
+        if (file.existsSync()) {
+          try {
+            file.deleteSync();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Löscht alle Anlagen-Zeilen eines Gebäudes (aktiv + Papierkorb/soft-deleted).
+  Future<int> countAllAnlagenRowsForBuilding(String buildingId) async {
+    final active = await _db.getAnlagenByBuildingId(buildingId);
+    final deleted = await _db.getDeletedAnlagenByBuildingId(buildingId);
+    return active.length + deleted.length;
+  }
+
+  /// Endgültiges Löschen aller gebäudebezogenen Betriebsdaten (kein Soft-Delete).
+  ///
+  /// Entfernt: alle Anlagen (inkl. Bauteile/Marker), Gewerke/Disziplinen,
+  /// Grundrisse (DB), Anhänge, zugehörige Fotodateien.
+  Future<void> permanentlyDeleteAllBuildingOperationalData(
+    String buildingId, {
+    List<models.FloorPlan>? floorPlansForFileCleanup,
+  }) async {
+    final activeRows = await _db.getAnlagenByBuildingId(buildingId);
+    final deletedRows = await _db.getDeletedAnlagenByBuildingId(buildingId);
+    for (final row in [...activeRows, ...deletedRows]) {
+      _deletePhotoFilesFromParamsJson(row.params);
+    }
+
+    if (floorPlansForFileCleanup != null) {
+      for (final floor in floorPlansForFileCleanup) {
+        final path = floor.pdfPath?.trim();
+        if (path == null || path.isEmpty) continue;
+        final file = File(path);
+        if (file.existsSync()) {
+          try {
+            file.deleteSync();
+          } catch (_) {}
+        }
+      }
+    }
+
+    await _db.transaction(() async {
+      await _db.deleteAnlagenByBuildingId(buildingId);
+      await _db.deleteDisziplinenByBuildingId(buildingId);
+      await _db.deleteFloorPlansByBuildingId(buildingId);
+      await _db.deleteAttachmentsByBuildingId(buildingId);
+    });
+
+    _invalidateAnlagenListCache(buildingId);
+    _disciplinesCache.remove(buildingId);
+  }
+
+  /// Endgültiges Löschen aller Gewerkevorlagen und globalem Import-Schema (projektweit).
+  Future<void> permanentlyDeleteProjectImportData(String projectId) async {
+    final id = projectId.trim();
+    if (id.isEmpty) return;
+
+    await _db.deleteTemplatesByProjectId(id);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('global_schema_$id');
+  }
+
+  Future<int> countTemplatesByProjectId(String projectId) async {
+    final rows = await _db.getTemplatesByProjectId(projectId);
+    return rows.length;
   }
 
   // ========== DISZIPLINEN ==========

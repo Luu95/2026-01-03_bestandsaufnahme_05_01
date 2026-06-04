@@ -2,7 +2,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +9,7 @@ import '../models/csv_hierarchy_level.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
 import '../providers/database_provider.dart';
+import '../services/anlagen_csv_import_service.dart';
 import '../services/template_service.dart';
 import '../providers/projects_provider.dart';
 import 'widgets/schema_editor_dialog.dart';
@@ -55,6 +55,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   /// Attribut-Vierergruppen: Name, Typ, Optionen, Art (z. B. ATT1 … ATT1_ART).
   List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
+  /// Attribut-Zweierpaare: ATTn + ATTn_wert (Anlagen-CSV).
+  List<AttributeColumnPair> _attributeColumnPairs = [];
 
   /// Spalten-Labels für Fotonummern beim CSV-Export (1–4). Leer = Spalte nicht verwendet.
   String? _foto1SpalteLabel;
@@ -78,6 +80,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _foto4SpalteLabelCtrl;
   late final TextEditingController _attrPairGenStartCtrl;
   late final TextEditingController _attrPairGenEndCtrl;
+  late final TextEditingController _attrQuadGenStartCtrl;
+  late final TextEditingController _attrQuadGenEndCtrl;
 
   // Bearbeitbar-Flags (für Kompatibilität)
   bool _lfdNummerBearbeitbar = true;
@@ -93,7 +97,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String? _editingRevisionsobjekt;
   final Set<int> _expandedSchemaDisciplineIndices = {};
   List<Template> _projectTemplates = [];
-  
+  bool _hasAnlagenCsvImported = false;
+
   // CSV-Header aus letztem Import (Anlagen oder Gewerkevorlagen)
   List<String>? _mappingCsvHeaders;
 
@@ -116,8 +121,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
     _foto4SpalteLabelCtrl = TextEditingController(text: _foto4SpalteLabel ?? '');
-    _attrPairGenStartCtrl = TextEditingController(text: '24');
-    _attrPairGenEndCtrl = TextEditingController(text: '63');
+    _attrPairGenStartCtrl = TextEditingController(text: '4');
+    _attrPairGenEndCtrl = TextEditingController(text: '17');
+    _attrQuadGenStartCtrl = TextEditingController(text: '4');
+    _attrQuadGenEndCtrl = TextEditingController(text: '63');
     _loadAllData();
   }
 
@@ -138,6 +145,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto4SpalteLabelCtrl.dispose();
     _attrPairGenStartCtrl.dispose();
     _attrPairGenEndCtrl.dispose();
+    _attrQuadGenStartCtrl.dispose();
+    _attrQuadGenEndCtrl.dispose();
     super.dispose();
   }
 
@@ -226,27 +235,31 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _loadDisciplines(),
       _loadProjectTemplates(),
     ]);
+    await _loadImportStatus();
     if (mounted) {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadImportStatus() async {
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      final hasAnlagen = await AnlagenCsvImportService.hasBuildingAnlagenCsvImport(
+        dbService,
+        widget.buildingId,
+      );
+      if (mounted) {
+        setState(() => _hasAnlagenCsvImported = hasAnlagen);
+      }
+    } catch (e) {
+      debugPrint('Fehler beim Laden des Import-Status: $e');
     }
   }
 
   List<AttributeTripletColumn> _loadAttributeQuadrupletColumnsFromSettings(
     CsvSettings settings,
   ) {
-    if (settings.attributeTripletColumns.isNotEmpty) {
-      return List<AttributeTripletColumn>.from(settings.attributeTripletColumns);
-    }
-    if (settings.attributeColumnPairs.isEmpty) return [];
-    return settings.attributeColumnPairs.map((pair) {
-      final start = pair.nameColumn;
-      return AttributeTripletColumn(
-        nameColumn: start,
-        typeColumn: start + 1,
-        optionsColumn: start + 2,
-        artColumn: start + 3,
-      );
-    }).toList();
+    return List<AttributeTripletColumn>.from(settings.attributeTripletColumns);
   }
 
   Future<void> _loadCsvSettings() async {
@@ -265,6 +278,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _labelAnlage = settings.labelAnlage;
         _labelBauteil = settings.labelBauteil;
         _attributeQuadrupletColumns = _loadAttributeQuadrupletColumnsFromSettings(settings);
+        _attributeColumnPairs = List<AttributeColumnPair>.from(settings.attributeColumnPairs);
         _foto1SpalteLabel = settings.foto1SpalteLabel;
         _foto2SpalteLabel = settings.foto2SpalteLabel;
         _foto3SpalteLabel = settings.foto3SpalteLabel;
@@ -282,6 +296,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       if (_mappingCsvHeaders != null) {
         _syncGroupingGewerkKeyFromColumn();
         _syncGroupingAnlageKeyFromColumn();
+        _syncAttributeMappingFromHeaders(_mappingCsvHeaders!);
       }
 
       final prefs = await SharedPreferences.getInstance();
@@ -390,7 +405,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         labelGewerk: _labelGewerk,
         labelAnlage: _labelAnlage,
         labelBauteil: _labelBauteil,
-        attributeColumnPairs: const [],
+        attributeColumnPairs: List<AttributeColumnPair>.from(_attributeColumnPairs),
         attributeTripletColumns:
             List<AttributeTripletColumn>.from(_attributeQuadrupletColumns),
         foto1SpalteLabel: _foto1SpalteLabel,
@@ -526,13 +541,26 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             'Nach einem CSV-Import werden die Spaltenüberschriften für die Auswahl übernommen.',
           ),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _buildHeaderAction(
-              icon: Icons.upload_file,
-              label: 'Gewerkevorlagen importieren',
-              onPressed: _importTemplates,
-            ),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildHeaderAction(
+                icon: Icons.upload_file,
+                label: 'Gewerkevorlagen',
+                color: Colors.orange,
+                imported: _projectTemplates.isNotEmpty,
+                onPressed: _importTemplates,
+              ),
+              _buildHeaderAction(
+                icon: Icons.download,
+                label: 'Anlagen-CSV',
+                color: Colors.green,
+                imported: _hasAnlagenCsvImported,
+                onPressed: _importAnlagenCsv,
+              ),
+            ],
           ),
           const SizedBox(height: 20),
           _buildSectionHeader(
@@ -949,6 +977,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         await _loadCsvSettings();
         await _loadProjectTemplates();
         await _loadDisciplines();
+        await _loadImportStatus();
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Gewerkevorlagen importiert')),
@@ -957,6 +986,50 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
+    }
+  }
+
+  Future<void> _importAnlagenCsv() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final dbService = ref.read(databaseServiceProvider);
+      await ref.read(csvSettingsProvider(widget.projectId).notifier).load();
+      final csvSettings = ref.read(csvSettingsProvider(widget.projectId));
+
+      final result = await AnlagenCsvImportService.runFullImport(
+        dbService: dbService,
+        projectId: widget.projectId,
+        buildingId: widget.buildingId,
+        csvSettings: csvSettings,
+        saveSettings: (updated) =>
+            ref.read(csvSettingsProvider(widget.projectId).notifier).save(updated),
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+
+      await ref.read(csvSettingsProvider(widget.projectId).notifier).load();
+      await _loadCsvSettings();
+      await _loadDisciplines();
+      await _loadImportStatus();
+
+      if (!mounted) return;
+      setState(() {});
+
+      final msg =
+          'Anlagen-CSV: ${result.savedCount} neu, ${result.skippedCount} übersprungen';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Anlagen-Import fehlgeschlagen: $e')),
+      );
     }
   }
 
@@ -1013,9 +1086,16 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     try {
       final dbService = ref.read(databaseServiceProvider);
       
-      // Vorlagen löschen
-      await dbService.deleteTemplatesByProjectId(widget.projectId);
+      await dbService.permanentlyDeleteProjectImportData(widget.projectId);
       await TemplateService.clearTemplateImportHeaderRow(widget.projectId);
+      await ref
+          .read(csvSettingsProvider(widget.projectId).notifier)
+          .clearAnlagenCsvImportStructure();
+
+      if (mounted) {
+        await _loadProjectTemplates();
+        setState(() {});
+      }
 
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
@@ -1264,9 +1344,12 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   Widget _buildCollapsibleAttributeQuadrupletsSection() {
     const color = Colors.deepPurple;
     final groupCount = _attributeQuadrupletColumns.length;
-    final subtitle = groupCount == 0
-        ? 'Keine Vierergruppen – zum Konfigurieren aufklappen'
-        : '$groupCount Vierergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
+    final pairCount = _attributeColumnPairs.length;
+    final subtitle = pairCount > 0
+        ? '$pairCount Zweierpaar${pairCount == 1 ? '' : 'e'} (Anlagen-CSV)'
+        : groupCount == 0
+            ? 'Keine Vierergruppen – zum Konfigurieren aufklappen'
+            : '$groupCount Vierergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
 
     return Container(
       decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
@@ -1291,9 +1374,110 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
-              'Pro Attribut vier Spalten: Name (z. B. ATT1), Typ (ATT1_TYPE), '
-              'Optionen (ATT1_OPTIONS), Art (ATT1_ART). Gilt für Gewerkevorlagen, Anlagen-Import und Export.',
+              'Gewerkevorlagen: vier Spalten pro Attribut (ATT1, ATT1_TYPE, ATT1_OPTIONS, ATT1_ART) – unten als Vierergruppen eintragen. '
+              'Anlagen-Import: Zweier-Format (ATT1 + ATT1_wert) wird aus der Import-CSV automatisch erkannt; Werte werden den Feldern aus den Gewerkevorlagen zugeordnet.',
               style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.teal.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.teal.withValues(alpha: 0.2)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Zweierpaare aus Spaltenbereich erzeugen (Anlagen-CSV)',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Colors.teal.shade700,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Reihenfolge: ATTn, ATTn_wert (z. B. Spalten 4–17). '
+                    'Die Spaltenanzahl muss gerade sein.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 90,
+                        child: TextField(
+                          controller: _attrPairGenStartCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Erste Spalte',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const Text('…'),
+                      SizedBox(
+                        width: 90,
+                        child: TextField(
+                          controller: _attrPairGenEndCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Letzte Spalte',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.auto_fix_high, size: 18),
+                        label: const Text('Zweierpaare generieren'),
+                        onPressed: () {
+                          final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
+                          final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
+                          if (start == null || end == null || start >= end) {
+                            _showAttrGenError(
+                              'Ungültiger Spaltenbereich (Erste < Letzte).',
+                            );
+                            return;
+                          }
+                          final count = end - start + 1;
+                          if (count % 2 != 0) {
+                            _showAttrGenError(
+                              'Anzahl Spalten ($count) muss gerade sein (ATT + ATT_wert).',
+                            );
+                            return;
+                          }
+                          final startIndex = start - 1;
+                          final endIndex = end - 1;
+                          final pairs = <AttributeColumnPair>[];
+                          for (var i = startIndex; i <= endIndex; i += 2) {
+                            pairs.add(AttributeColumnPair(
+                              nameColumn: i,
+                              valueColumn: i + 1,
+                            ));
+                          }
+                          setState(() => _attributeColumnPairs = pairs);
+                          _scheduleAutoSave();
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '${pairs.length} Zweierpaar${pairs.length == 1 ? '' : 'e'} erzeugt',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 16),
             Container(
@@ -1330,7 +1514,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       SizedBox(
                         width: 90,
                         child: TextField(
-                          controller: _attrPairGenStartCtrl,
+                          controller: _attrQuadGenStartCtrl,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                             labelText: 'Erste Spalte',
@@ -1343,7 +1527,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       SizedBox(
                         width: 90,
                         child: TextField(
-                          controller: _attrPairGenEndCtrl,
+                          controller: _attrQuadGenEndCtrl,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                             labelText: 'Letzte Spalte',
@@ -1356,11 +1540,21 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                         icon: const Icon(Icons.auto_fix_high, size: 18),
                         label: const Text('Vierergruppen generieren'),
                         onPressed: () {
-                          final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
-                          final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
-                          if (start == null || end == null || start >= end) return;
+                          final start = int.tryParse(_attrQuadGenStartCtrl.text.trim());
+                          final end = int.tryParse(_attrQuadGenEndCtrl.text.trim());
+                          if (start == null || end == null || start >= end) {
+                            _showAttrGenError(
+                              'Ungültiger Spaltenbereich (Erste < Letzte).',
+                            );
+                            return;
+                          }
                           final count = end - start + 1;
-                          if (count % 4 != 0) return;
+                          if (count % 4 != 0) {
+                            _showAttrGenError(
+                              'Anzahl Spalten ($count) muss durch 4 teilbar sein.',
+                            );
+                            return;
+                          }
                           final startIndex = start - 1;
                           final endIndex = end - 1;
                           final groups = <AttributeTripletColumn>[];
@@ -1374,6 +1568,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           }
                           setState(() => _attributeQuadrupletColumns = groups);
                           _scheduleAutoSave();
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '${groups.length} Vierergruppe${groups.length == 1 ? '' : 'n'} erzeugt',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
                         },
                       ),
                     ],
@@ -1573,9 +1776,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     return used;
   }
 
-  /// Alle reservierten Spalten inkl. Attribut-Vierergruppen (für freie Spalte suchen).
+  /// Alle reservierten Spalten inkl. Attribut-Mappings (für freie Spalte suchen).
   List<int> _allReservedColumnIndices() {
     final used = _mappingColumnIndices();
+    for (final p in _attributeColumnPairs) {
+      used.add(p.nameColumn);
+      used.add(p.valueColumn);
+    }
     for (final g in _attributeQuadrupletColumns) {
       used.addAll(g.columnIndices);
     }
@@ -1837,16 +2044,77 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     required IconData icon,
     required String label,
     required VoidCallback onPressed,
+    required Color color,
+    bool imported = false,
   }) {
-    return TextButton.icon(
+    return OutlinedButton(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      label: Text(label),
-      style: TextButton.styleFrom(
-        foregroundColor: Colors.orange,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(
+          color: imported ? Colors.green.shade400 : color.withValues(alpha: 0.5),
+          width: imported ? 1.5 : 1,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 6),
+          Text(label),
+          if (imported) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+          ],
+        ],
       ),
     );
+  }
+
+  void _showAttrGenError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  /// Header nur ergänzen, wenn noch kein passendes Mapping existiert (nicht gegenseitig löschen).
+  void _syncAttributeMappingFromHeaders(List<String> headers) {
+    if (CsvSettings.headerLooksLikeAnlagenWertFormat(headers)) {
+      final pairs = CsvSettings.detectAnlagenAttributePairsFromHeader(headers);
+      if (pairs.isEmpty) return;
+      final needsUpdate = _attributeColumnPairs.isEmpty ||
+          !_pairsMatchHeader(_attributeColumnPairs, headers);
+      if (!needsUpdate) return;
+      setState(() => _attributeColumnPairs = pairs);
+      _scheduleAutoSave();
+      return;
+    }
+    if (CsvSettings.headerLooksLikeGewerkeQuadrupletFormat(headers)) {
+      final quadruplets = CsvSettings.detectQuadrupletsFromHeader(headers);
+      if (quadruplets.isEmpty) return;
+      if (CsvSettings.quadrupletsMatchHeader(_attributeQuadrupletColumns, headers)) {
+        return;
+      }
+      setState(() => _attributeQuadrupletColumns = quadruplets);
+      _scheduleAutoSave();
+    }
+  }
+
+  bool _pairsMatchHeader(
+    List<AttributeColumnPair> pairs,
+    List<String> headers,
+  ) {
+    final detected = CsvSettings.detectAnlagenAttributePairsFromHeader(headers);
+    if (detected.length != pairs.length) return false;
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i].nameColumn != detected[i].nameColumn ||
+          pairs[i].valueColumn != detected[i].valueColumn) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _syncGroupingGewerkKeyFromColumn() {
@@ -1862,7 +2130,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   void _syncGroupingAnlageKeyFromColumn() {
     final headers = _mappingCsvHeaders;
-    if (headers == null || !_level2.enabled || !_level3.enabled) return;
+    if (headers == null || !_level2.enabled) return;
     final col = _level2.nameColumn;
     if (col < 0 || col >= headers.length) return;
     final label = headers[col].trim();
@@ -1957,7 +2225,11 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ],
         ),
         content: const Text(
-          'Möchten Sie wirklich ALLE Gewerke, Anlagen und Grundrisse (Ebenen) für dieses Gebäude löschen?\n\n'
+          'Möchten Sie wirklich ALLES für dieses Gebäude und Projekt löschen?\n\n'
+          '• Alle Anlagen und Gewerke (Gebäude)\n'
+          '• Alle Grundrisse/Ebenen\n'
+          '• Alle Gewerkevorlagen (Projekt)\n'
+          '• Gespeicherte CSV-Import-Struktur\n\n'
           'Diese Aktion kann nicht rückgängig gemacht werden!',
         ),
         actions: [
@@ -1996,66 +2268,37 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       final building = await dbService.getBuildingById(widget.buildingId);
       if (building == null) throw Exception('Gebäude nicht gefunden');
 
-      // Anzahl vor dem Löschen speichern für die Meldung
-      final anlagen = await dbService.getAnlagenByBuildingId(widget.buildingId);
       final disciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
       final floorsCount = building.floors.length;
-      final anlagenCount = anlagen.length;
-      final disciplinesCount = disciplines.length;
-      
-      debugPrint('Lösche $anlagenCount Anlagen, $disciplinesCount Gewerke und $floorsCount Grundrisse für Gebäude ${widget.buildingId}');
-      
-      // 1. Alle Grundrisse löschen (Dateisystem + Liste im Building)
-      // Wir löschen die Dateien physisch vom Gerät
-      for (final floor in building.floors) {
-        if (floor.pdfPath != null) {
-          final file = File(floor.pdfPath!);
-          if (await file.exists()) {
-            try {
-              await file.delete();
-              debugPrint('Datei gelöscht: ${floor.pdfPath}');
-            } catch (e) {
-              debugPrint('Fehler beim Löschen der Datei ${floor.pdfPath}: $e');
-            }
-          }
-        }
+      final anlagenCount =
+          await dbService.countAllAnlagenRowsForBuilding(widget.buildingId);
+      final templateCount = widget.projectId.isNotEmpty
+          ? await dbService.countTemplatesByProjectId(widget.projectId)
+          : 0;
+
+      debugPrint(
+        'Endgültiges Löschen: $anlagenCount Anlagen, ${disciplines.length} Gewerke, '
+        '$floorsCount Grundrisse, $templateCount Vorlagen',
+      );
+
+      // 1. Alle Betriebsdaten endgültig aus der DB (inkl. soft-deleted Anlagen)
+      await dbService.permanentlyDeleteAllBuildingOperationalData(
+        widget.buildingId,
+        floorPlansForFileCleanup: List.from(building.floors),
+      );
+
+      // 2. Gewerkevorlagen + globales Schema (projektweit)
+      if (widget.projectId.isNotEmpty) {
+        await dbService.permanentlyDeleteProjectImportData(widget.projectId);
+        await TemplateService.clearTemplateImportHeaderRow(widget.projectId);
+        await ref
+            .read(csvSettingsProvider(widget.projectId).notifier)
+            .clearAnlagenCsvImportStructure();
       }
-      
-      // Liste der Grundrisse im Building-Objekt leeren
+
+      // 3. Grundrisse im Building-Modell leeren und persistieren
       building.floors.clear();
-      
-      // 2. Gebäude in DB und Provider aktualisieren
-      // Dies löscht die Einträge aus der floorPlans-Tabelle in der DB
-      // und informiert alle Listener (wie BuildingDetailsPage), dass sich das Gebäude geändert hat
       await ref.read(projectsProvider.notifier).updateBuilding(building);
-
-      // 3. Alle Anlagen für dieses Gebäude löschen
-      for (final anlage in anlagen) {
-        await dbService.deleteAnlage(anlage.id);
-      }
-
-      // 4. Alle Disziplinen für dieses Gebäude löschen (mit replaceDisciplines mit leerer Liste)
-      await dbService.replaceDisciplines(widget.buildingId, []);
-      
-      // Cache explizit leeren (wird zwar schon in replaceDisciplines gemacht, aber zur Sicherheit)
-      // Der Cache wird in _getDisciplinesMap verwendet, daher müssen wir sicherstellen, dass er leer ist
-      
-      // Warte kurz, damit die Datenbank-Operation abgeschlossen ist
-      await Future.delayed(const Duration(milliseconds: 200));
-      
-      debugPrint('Alle Disziplinen gelöscht. Lade Disziplinen neu...');
-      
-      // Verifiziere, dass wirklich alle Disziplinen gelöscht wurden
-      final verifyDisciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
-      if (verifyDisciplines.isNotEmpty) {
-        debugPrint('WARNUNG: Nach dem Löschen sind noch ${verifyDisciplines.length} Disziplinen vorhanden!');
-        // Versuche es nochmal mit explizitem Löschen
-        for (final disc in verifyDisciplines) {
-          await dbService.deleteDiscipline(widget.buildingId, disc.label);
-        }
-        await dbService.replaceDisciplines(widget.buildingId, []);
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
 
       // Alle SharedPreferences-Einträge für dieses Gebäude löschen
       final prefs = await SharedPreferences.getInstance();
@@ -2081,15 +2324,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       
       debugPrint('Alle SharedPreferences-Einträge für Gebäude ${widget.buildingId} gelöscht');
 
-      // Gespeicherte Anlagen-CSV-Import-Struktur (alte Spaltenüberschriften) entfernen
-      if (widget.projectId.isNotEmpty) {
-        await ref
-            .read(csvSettingsProvider(widget.projectId).notifier)
-            .clearAnlagenCsvImportStructure();
-      }
-
-      // Disziplinen neu laden und State aktualisieren
+      // Disziplinen und Vorlagen neu laden
       if (mounted) {
+        await _loadProjectTemplates();
         await _loadDisciplines();
         
         // Zusätzlich setState aufrufen, um sicherzustellen, dass die UI aktualisiert wird
@@ -2105,21 +2342,42 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       Navigator.of(context).pop(); // Lade-Dialog schließen
 
       if (mounted) {
-        // Prüfen, ob wirklich alle gelöscht wurden
-        final remainingDisciplines = await dbService.getDisciplinesByBuildingId(widget.buildingId);
-        final remainingAnlagen = await dbService.getAnlagenByBuildingId(widget.buildingId);
-        
-        debugPrint('Nach dem Löschen: ${remainingDisciplines.length} Gewerke, ${remainingAnlagen.length} Anlagen verbleibend');
-        
-        // Wenn noch Disziplinen vorhanden sind, zeige Warnung
-        if (remainingDisciplines.isNotEmpty) {
-          debugPrint('FEHLER: Es sind noch Disziplinen vorhanden: ${remainingDisciplines.map((d) => d.label).join(", ")}');
-          for (final disc in remainingDisciplines) {
-            debugPrint('  - ${disc.label} (groupingKey: ${disc.groupingKey})');
-          }
+        final remainingDisciplines =
+            await dbService.getDisciplinesByBuildingId(widget.buildingId);
+        final remainingAnlagen =
+            await dbService.countAllAnlagenRowsForBuilding(widget.buildingId);
+        final remainingTemplates = widget.projectId.isNotEmpty
+            ? await dbService.countTemplatesByProjectId(widget.projectId)
+            : 0;
+
+        debugPrint(
+          'Nach dem Löschen: ${remainingDisciplines.length} Gewerke, '
+          '$remainingAnlagen Anlagen, $remainingTemplates Vorlagen verbleibend',
+        );
+
+        if (remainingDisciplines.isNotEmpty ||
+            remainingAnlagen > 0 ||
+            remainingTemplates > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Warnung: Noch $remainingAnlagen Anlagen, '
+                '${remainingDisciplines.length} Gewerke, '
+                '$remainingTemplates Vorlagen in der DB.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Alle Gewerke, Anlagen, Grundrisse und Gewerkevorlagen wurden gelöscht.',
+              ),
+            ),
+          );
         }
-        
-        // Seite schließen, damit beim nächsten Öffnen alles neu geladen wird
+
         if (mounted) {
           Navigator.of(context).pop();
         }
