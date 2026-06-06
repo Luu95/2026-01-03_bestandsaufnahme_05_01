@@ -761,10 +761,11 @@ class CsvService {
     return _orderAnlagenHierarchically(leaves);
   }
 
-  /// CSV-Daten 1:1 aus gespeicherten Import-Zellen (Header + Zeilen).
+  /// CSV-Daten im Import-Layout: Reihenfolge/Spalten wie Import, Werte aus aktuellen params.
   static List<List<String>>? _buildRoundTripCsvData(
     List<Anlage> orderedAnlagen,
     CsvSettings csvSettings,
+    List<Disziplin> disciplines,
   ) {
     if (!canRoundTripAnlagenCsvExport(csvSettings, orderedAnlagen)) {
       return null;
@@ -773,7 +774,11 @@ class CsvService {
     final csvData = <List<String>>[headerRow];
     for (final anlage in orderedAnlagen) {
       csvData.add(
-        buildExportRowFromCsvRowCells(anlage.params, headerRow),
+        buildAnlageExportRow(
+          anlage: anlage,
+          csvSettings: csvSettings,
+          discipline: _disciplineForAnlage(anlage, disciplines),
+        ),
       );
     }
     return csvData;
@@ -1563,7 +1568,8 @@ class CsvService {
         globalSchema = await _loadGlobalSchema(projectId);
       }
 
-      final roundTripCsv = _buildRoundTripCsvData(orderedAnlagen, csvSettings);
+      final roundTripCsv =
+          _buildRoundTripCsvData(orderedAnlagen, csvSettings, disciplineList);
       final List<List<String>> csvData;
       if (roundTripCsv != null) {
         csvData = roundTripCsv;
@@ -1842,7 +1848,11 @@ class CsvService {
       }
 
       var dataRow = useRoundTrip
-          ? buildExportRowFromCsvRowCells(anlage.params, headerRow)
+          ? buildAnlageExportRow(
+              anlage: anlage,
+              csvSettings: csvSettings,
+              discipline: _disciplineForAnlage(anlage, disciplineList),
+            )
           : _buildColumnMappedExportRow(
               anlage: anlage,
               csvSettings: csvSettings,

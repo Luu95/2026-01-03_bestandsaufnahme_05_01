@@ -490,17 +490,20 @@ String _resolveTripletExportValue({
 }
 
 /// Export-Zeile in Struktur ohne TYPE/OPTIONS-Spalten (Bezeichnung + Wert).
+/// Mit [preserveFullImportHeader] bleibt das exakte Import-Spaltenlayout erhalten;
+/// geänderte Werte kommen aus [params], leere Metadaten-Spalten aus gespeicherten Import-Zellen.
 List<String> buildAnlageExportRowFromImportStructure({
   required Anlage anlage,
   required CsvSettings csvSettings,
   Disziplin? discipline,
+  bool preserveFullImportHeader = false,
 }) {
   final importHeaders = csvSettings.importHeaderRow;
   if (importHeaders.isEmpty) return const [];
 
-  final useGewerkeTriplets =
+  final useGewerkeTriplets = !preserveFullImportHeader &&
       csvSettings.attributeTripletColumns.isNotEmpty &&
-          CsvSettings.headerLooksLikeGewerkeQuadrupletFormat(importHeaders);
+      CsvSettings.headerLooksLikeGewerkeQuadrupletFormat(importHeaders);
   final headers = useGewerkeTriplets
       ? CsvSettings.headersForAnlagenExport(importHeaders)
       : importHeaders;
@@ -522,7 +525,7 @@ List<String> buildAnlageExportRowFromImportStructure({
   final handledImportCols = <int>{};
 
   int exportColForImportIndex(int importIndex) {
-    if (!useGewerkeTriplets) return importIndex;
+    if (preserveFullImportHeader || !useGewerkeTriplets) return importIndex;
     var exportCol = 0;
     for (var i = 0; i < importHeaders.length; i++) {
       if (CsvSettings.isGewerkeTypeDefinitionHeader(importHeaders[i])) {
@@ -655,7 +658,10 @@ List<String> buildAnlageExportRowFromImportStructure({
 
     final header = importHeaders[i].trim();
     if (header.isEmpty) continue;
-    if (CsvSettings.isGewerkeTypeDefinitionHeader(header)) continue;
+    if (!preserveFullImportHeader &&
+        CsvSettings.isGewerkeTypeDefinitionHeader(header)) {
+      continue;
+    }
 
     String? cellValue;
     if (CsvSettings.paramKeysMatch(header, CsvSettings.qrCodeNummerParamKey)) {
@@ -679,6 +685,24 @@ List<String> buildAnlageExportRowFromImportStructure({
     }
   }
 
+  if (preserveFullImportHeader) {
+    // Nur Metadaten-Spalten (TYPE/OPTIONS) aus Import-Zellen auffüllen,
+    // wenn sie in params nicht vorkommen – Attributwerte bleiben aus params.
+    final stored = csvRowCellsFromParams(params);
+    for (var i = 0; i < importHeaders.length; i++) {
+      final header = importHeaders[i].trim();
+      if (header.isEmpty) continue;
+      if (!CsvSettings.isGewerkeTypeDefinitionHeader(header)) continue;
+      final exportCol = exportColForImportIndex(i);
+      if (exportCol < 0 || exportCol >= row.length) continue;
+      if (row[exportCol].isNotEmpty) continue;
+      final fallback = stored[header];
+      if (fallback != null && fallback.isNotEmpty) {
+        row[exportCol] = fallback;
+      }
+    }
+  }
+
   return row;
 }
 
@@ -688,19 +712,12 @@ List<String> buildAnlageExportRow({
   required CsvSettings csvSettings,
   Disziplin? discipline,
 }) {
-  if (csvSettings.importHeaderRow.isNotEmpty &&
-      hasCsvRowCellsForExport(anlage.params)) {
-    return buildExportRowFromCsvRowCells(
-      anlage.params,
-      csvSettings.importHeaderRow,
-    );
-  }
-
   if (csvSettings.importHeaderRow.isNotEmpty) {
     return buildAnlageExportRowFromImportStructure(
       anlage: anlage,
       csvSettings: csvSettings,
       discipline: discipline,
+      preserveFullImportHeader: hasCsvRowCellsForExport(anlage.params),
     );
   }
 
