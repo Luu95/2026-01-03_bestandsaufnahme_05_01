@@ -90,28 +90,39 @@ class _TemplateStyleExportLayout {
   });
 }
 
+enum _AnlagenExportRowMode {
+  /// Export strikt nach gespeichertem [CsvSettings.importHeaderRow].
+  importHeader,
+  /// Gewerkevorlage ohne vorherigen Anlagen-CSV-Import.
+  templateStyle,
+  /// Spalten-Mapping ohne Import-Header.
+  columnMapped,
+}
+
+class _AnlagenExportContext {
+  final _AnlagenExportRowMode mode;
+  final List<String> headerRow;
+  final List<String> dataColumnKeys;
+  final _TemplateStyleExportLayout? templateLayout;
+  final bool useExtraExportColumns;
+  final bool qrAppended;
+  final List<int> appendedFotoIndices;
+
+  const _AnlagenExportContext({
+    required this.mode,
+    required this.headerRow,
+    required this.dataColumnKeys,
+    this.templateLayout,
+    this.useExtraExportColumns = false,
+    this.qrAppended = false,
+    this.appendedFotoIndices = const [],
+  });
+}
+
 class CsvService {
   static const String _delimiter = ';';
   static const Uuid _uuid = Uuid();
-
-  /// Interne Param-Keys, die nicht als eigene Spalten exportiert werden.
-  static const Set<String> _internalParamKeys = {
-    '__parentLfdNummer',
-    '__etageName',
-    'photoPaths',
-    CsvSettings.qrCodeNummerParamKey,
-    '_validated',
-    '_validatedAt',
-    'validated',
-  };
-
-  /// True, wenn der Key ein internes Validierungs-Feld ist (nicht exportieren).
-  static bool _isValidationParamKey(String key) {
-    if (key.isEmpty) return false;
-    if (_internalParamKeys.contains(key)) return true;
-    if (key.startsWith('_field_') && key.endsWith('_validated')) return true;
-    return false;
-  }
+  static const List<String> _emptyFotoNumbers = ['', '', '', ''];
 
   /// Baut die CSV-Header-Zeile: alle Daten-Spalten [dataColumnKeys] + ggf. angehängte Foto-/QR-Spalten.
   static List<String> _buildExportHeader(
@@ -170,27 +181,12 @@ class CsvService {
     return null;
   }
 
-  static String _fotoNumberForLabel(
-    String label,
-    List<String> fotoNumbers,
-    List<String?> fotoLabels,
-  ) {
-    final idx = _fotoLabelIndex(label, fotoLabels);
-    if (idx == null || idx >= fotoNumbers.length) return '';
-    return fotoNumbers[idx];
-  }
-
   /// Formatiert einen Param-Wert für eine CSV-Zelle.
   static String _paramValueToCsvCell(dynamic val) {
     if (val == null) return '';
     if (val is Map || val is List) return json.encode(val);
     return val.toString();
   }
-
-  static const Set<String> _nonDynamicParamKeys = {
-    'lfdNummer',
-    '__etageName',
-  };
 
   /// Mapping von CSV-Header-Labels zu internen Param-Keys (Legacy-Aliase).
   static const Map<String, String> _headerLabelToCanonicalKey = {
@@ -205,100 +201,6 @@ class CsvService {
     return _headerLabelToCanonicalKey[trimmed] ?? trimmed;
   }
 
-  /// Parameter, die weder im Import-Header noch in festen Keys (lfdNummer, Etage, etc.) vorkommen,
-  /// z. B. in der App hinzugefügte Felder. Beim Export mit Import-Struktur landen diese nur in
-  /// den konfigurierten Attribut-Spalten (Name/Value). Sind keine Attribut-Paare definiert,
-  /// werden solche Keys nicht in festen Spalten exportiert.
-  static List<MapEntry<String, dynamic>> _collectDynamicAttributeEntries(
-    Anlage anlage,
-    Set<String> headerLabels,
-    List<String?> fotoLabels, {
-    String? qrCodeLabel,
-  }) {
-    final fotoSet = fotoLabels
-        .map((e) => (e ?? '').trim())
-        .where((e) => e.isNotEmpty)
-        .toSet();
-    final qrSet = (qrCodeLabel?.trim().isNotEmpty ?? false)
-        ? {qrCodeLabel!.trim()}
-        : <String>{};
-    final attrs = <MapEntry<String, dynamic>>[];
-    for (final entry in anlage.params.entries) {
-      final key = entry.key.toString();
-      if (key.isEmpty) continue;
-      if (_internalParamKeys.contains(key)) continue;
-      if (_isValidationParamKey(key)) continue;
-      if (_nonDynamicParamKeys.contains(key)) continue;
-      if (headerLabels.contains(key)) continue;
-      if (fotoSet.contains(key)) continue;
-      if (qrSet.contains(key)) continue;
-      attrs.add(MapEntry(key, entry.value));
-    }
-    attrs.sort((a, b) => a.key.compareTo(b.key));
-    return attrs;
-  }
-
-  static List<String> _buildRowFromImportStructure({
-    required Anlage anlage,
-    required List<String> headerRow,
-    required List<AttributeTripletColumn> attributeQuadruplets,
-    List<AttributeColumnPair> attributePairs = const [],
-    required List<String?> fotoLabels,
-    required List<String> fotoNumbers,
-  }) {
-    var rowLength = headerRow.length;
-    for (final q in attributeQuadruplets) {
-      for (final col in q.columnIndices) {
-        if (col >= rowLength) rowLength = col + 1;
-      }
-    }
-    final row = List<String>.filled(rowLength, '', growable: true);
-    final headerSet = headerRow.toSet();
-    final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
-
-    final attributeIndices = <int>{};
-    for (final q in attributeQuadruplets) {
-      attributeIndices.addAll(q.columnIndices);
-    }
-    for (final p in attributePairs) {
-      attributeIndices.add(p.nameColumn);
-      attributeIndices.add(p.valueColumn);
-    }
-
-    for (int i = 0; i < row.length && i < headerRow.length; i++) {
-      if (attributeIndices.contains(i)) continue;
-      final label = headerRow[i];
-      if (useFotoColumns && _isFotoLabel(label, fotoLabels)) {
-        final fotoIdx = _fotoLabelIndex(label, fotoLabels);
-        row[i] = (fotoIdx != null && fotoIdx < fotoNumbers.length) ? fotoNumbers[fotoIdx] : '';
-      } else {
-        final paramKey = _paramKeyForHeaderLabel(label);
-        row[i] = _paramValueToCsvCell(anlage.params[paramKey]);
-      }
-    }
-
-    final dynamicAttrs = _collectDynamicAttributeEntries(anlage, headerSet, fotoLabels);
-    int dynIndex = 0;
-    for (final q in attributeQuadruplets) {
-      if (q.nameColumn < 0 || q.nameColumn >= row.length) continue;
-      if (q.artColumn < 0 || q.artColumn >= row.length) continue;
-      if (dynIndex >= dynamicAttrs.length) break;
-      final entry = dynamicAttrs[dynIndex++];
-      row[q.nameColumn] = entry.key;
-      row[q.artColumn] = _paramValueToCsvCell(entry.value);
-    }
-    for (final pair in attributePairs) {
-      if (pair.nameColumn < 0 || pair.nameColumn >= row.length) continue;
-      if (pair.valueColumn < 0 || pair.valueColumn >= row.length) continue;
-      if (dynIndex >= dynamicAttrs.length) break;
-      final entry = dynamicAttrs[dynIndex++];
-      row[pair.nameColumn] = entry.key;
-      row[pair.valueColumn] = _paramValueToCsvCell(entry.value);
-    }
-
-    return row;
-  }
-
   static String _schemaFieldParamKey(Map<String, dynamic> field) {
     return field['key']?.toString().trim() ?? '';
   }
@@ -307,20 +209,6 @@ class CsvService {
     final label = field['label']?.toString().trim() ?? '';
     final key = _schemaFieldParamKey(field);
     return label.isNotEmpty ? label : key;
-  }
-
-  /// Import-CSV-Struktur nur, wenn Header gespeichert sind und noch importierte Zeilen existieren.
-  /// Bei konfigurierten Attribut-Vierergruppen wird das ATT/TYPE/OPTIONS/ART-Layout genutzt.
-  static bool shouldExportWithAnlagenImportStructure({
-    required CsvSettings csvSettings,
-    required List<Anlage> anlagen,
-  }) {
-    if (csvSettings.attributeTripletColumns.isNotEmpty) return false;
-    if (!csvSettings.hasAnlagenCsvImport) return false;
-    return anlagen.any((a) {
-      final lfd = a.params['lfdNummer']?.toString().trim() ?? '';
-      return lfd.isNotEmpty;
-    });
   }
 
   static Disziplin _disciplineForAnlage(Anlage anlage, List<Disziplin> disciplines) {
@@ -336,12 +224,35 @@ class CsvService {
     return mergeDisciplineForExport(base: building, stored: anlage.discipline);
   }
 
-  static String _exportTypeLabelForField(Map<String, dynamic> field) {
-    final type = field['type']?.toString().trim().toLowerCase() ?? '';
-    if (type == 'dropdown' || type == 'select') return 'dropdown';
-    if (type == 'number' || type == 'int') return 'number';
-    if (type.isEmpty || type == 'text') return 'Freitext';
-    return type;
+  /// Export-Zeile: Spalten strikt nach [CsvSettings.importHeaderRow] aus [Anlage.params].
+  static List<String> _buildImportHeaderExportRow({
+    required Anlage anlage,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplines,
+    List<String?> fotoLabels = const [null, null, null, null],
+    List<String> fotoNumbers = _emptyFotoNumbers,
+  }) {
+    final row = buildAnlageExportRow(
+      anlage: anlage,
+      csvSettings: csvSettings,
+      discipline: _disciplineForAnlage(anlage, disciplines),
+    );
+    final headerRow = csvSettings.importHeaderRow;
+    final aligned = _alignExportRowLength(row, headerRow.length);
+
+    final useFotoInColumns =
+        fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
+    if (!useFotoInColumns) return aligned;
+
+    final withFotos = List<String>.from(aligned);
+    for (var col = 0; col < headerRow.length && col < withFotos.length; col++) {
+      final label = headerRow[col];
+      final fotoIdx = _fotoLabelIndex(label, fotoLabels);
+      if (fotoIdx != null && fotoIdx < fotoNumbers.length) {
+        withFotos[col] = fotoNumbers[fotoIdx];
+      }
+    }
+    return withFotos;
   }
 
   /// Felder für eine Zeile: zuerst manuelle globale Attribute, dann Gewerk/RO-Schema.
@@ -738,8 +649,8 @@ class CsvService {
     return anlagen.where((a) => !_isSyntheticHierarchyNode(a)).toList();
   }
 
-  /// Export-Reihenfolge: bei CSV-Import strikt nach Original-Zeilenindex,
-  /// sonst hierarchisch. Synthetische Hierarchie-Knoten werden ausgeschlossen.
+  /// Export-Reihenfolge: strikt nach Original-Zeilenindex beim Import.
+  /// Synthetische Hierarchie-Knoten werden ausgeschlossen.
   static List<Anlage> _anlagenForCsvExport(
     List<Anlage> anlagen,
     CsvSettings csvSettings,
@@ -747,87 +658,182 @@ class CsvService {
     final leaves = _leafAnlagenForExport(anlagen);
     if (leaves.isEmpty) return leaves;
 
-    if (csvSettings.importHeaderRow.isNotEmpty) {
-      return List<Anlage>.from(leaves)
-        ..sort((a, b) {
-          final rawA = a.params[CsvSettings.csvRowIndexParamKey];
-          final rawB = b.params[CsvSettings.csvRowIndexParamKey];
-          if (rawA == null && rawB == null) return 0;
-          if (rawA == null) return 1;
-          if (rawB == null) return -1;
-          return compareAnlagenCsvRowIndex(a.params, b.params);
-        });
-    }
-    return _orderAnlagenHierarchically(leaves);
+    return List<Anlage>.from(leaves)
+      ..sort((a, b) {
+        final rawA = a.params[CsvSettings.csvRowIndexParamKey];
+        final rawB = b.params[CsvSettings.csvRowIndexParamKey];
+        if (rawA == null && rawB == null) return 0;
+        if (rawA == null) return 1;
+        if (rawB == null) return -1;
+        return compareAnlagenCsvRowIndex(a.params, b.params);
+      });
   }
 
-  /// CSV-Daten im Import-Layout: Reihenfolge/Spalten wie Import, Werte aus aktuellen params.
-  static List<List<String>>? _buildRoundTripCsvData(
-    List<Anlage> orderedAnlagen,
-    CsvSettings csvSettings,
-    List<Disziplin> disciplines,
-  ) {
-    if (!canRoundTripAnlagenCsvExport(csvSettings, orderedAnlagen)) {
-      return null;
-    }
-    final headerRow = List<String>.from(csvSettings.importHeaderRow);
-    final csvData = <List<String>>[headerRow];
-    for (final anlage in orderedAnlagen) {
-      csvData.add(
-        buildAnlageExportRow(
-          anlage: anlage,
-          csvSettings: csvSettings,
-          discipline: _disciplineForAnlage(anlage, disciplines),
-        ),
+  static Future<_AnlagenExportContext> _resolveAnlagenExportContext({
+    required List<Anlage> orderedAnlagen,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplineList,
+    required List<String?> fotoLabels,
+    required bool useFotoColumns,
+    String? projectId,
+  }) async {
+    final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
+    final useQrColumn = csvSettings.hasQrCodeExportColumn;
+    final useExtra = useFotoColumns || useQrColumn;
+
+    // 1:1-Export: gespeicherter Import-Header ist maßgeblich (kein Template-Umbau).
+    if (csvSettings.importHeaderRow.isNotEmpty) {
+      final keys = List<String>.from(csvSettings.importHeaderRow);
+      final qrAppended = useQrColumn && _isQrAppended(keys, qrLabel);
+      final appendedFotoIndices =
+          useFotoColumns ? _appendedFotoIndices(keys, fotoLabels) : <int>[];
+      final headerRow = useExtra
+          ? _buildExportHeader(keys, fotoLabels, qrCodeLabel: qrLabel)
+          : keys;
+      return _AnlagenExportContext(
+        mode: _AnlagenExportRowMode.importHeader,
+        headerRow: headerRow,
+        dataColumnKeys: keys,
+        useExtraExportColumns: useExtra,
+        qrAppended: qrAppended,
+        appendedFotoIndices: appendedFotoIndices,
       );
     }
-    return csvData;
+
+    if (csvSettings.attributeTripletColumns.isNotEmpty) {
+      final layout = await _resolveTemplateStyleExportLayout(
+        anlagen: orderedAnlagen,
+        csvSettings: csvSettings,
+        disciplines: disciplineList,
+        projectId: projectId,
+      );
+      return _AnlagenExportContext(
+        mode: _AnlagenExportRowMode.templateStyle,
+        headerRow: List<String>.from(layout.headers),
+        dataColumnKeys: List<String>.from(layout.headers),
+        templateLayout: layout,
+      );
+    }
+
+    final dataColumnKeys = buildExportHeaderRow(csvSettings);
+    if (dataColumnKeys.isEmpty) {
+      throw Exception(
+        'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
+      );
+    }
+    final keys = dataColumnKeys;
+    final qrAppended = useQrColumn && _isQrAppended(keys, qrLabel);
+    final appendedFotoIndices =
+        useFotoColumns ? _appendedFotoIndices(keys, fotoLabels) : <int>[];
+
+    final headerRow = useExtra
+        ? _buildExportHeader(keys, fotoLabels, qrCodeLabel: qrLabel)
+        : (List<String>.from(keys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
+
+    return _AnlagenExportContext(
+      mode: _AnlagenExportRowMode.columnMapped,
+      headerRow: headerRow,
+      dataColumnKeys: keys,
+      useExtraExportColumns: useExtra,
+      qrAppended: qrAppended,
+      appendedFotoIndices: appendedFotoIndices,
+    );
   }
 
-  static List<Anlage> _orderAnlagenHierarchically(List<Anlage> anlagen) {
-    final parentsInOrder = <String, Anlage>{};
-    final parentOrder = <String>[];
-    final childrenByParent = <String, List<Anlage>>{};
-    final orphans = <Anlage>[];
+  static List<String> _alignExportRowLength(List<String> row, int targetLength) {
+    if (row.length == targetLength) return List<String>.from(row);
+    if (row.length > targetLength) {
+      return List<String>.from(row.sublist(0, targetLength));
+    }
+    return List<String>.from([
+      ...row,
+      ...List.filled(targetLength - row.length, ''),
+    ]);
+  }
 
-    for (final a in anlagen) {
-      final pid = a.parentId;
-      if (pid == null || pid.isEmpty) {
-        if (!parentsInOrder.containsKey(a.id)) {
-          parentsInOrder[a.id] = a;
-          parentOrder.add(a.id);
+  static List<String> _buildAnlageExportDataRow({
+    required Anlage anlage,
+    required _AnlagenExportContext context,
+    required CsvSettings csvSettings,
+    required List<Disziplin> disciplineList,
+    required List<Map<String, dynamic>> globalSchema,
+    List<String?> fotoLabels = const [null, null, null, null],
+    List<String> fotoNumbers = _emptyFotoNumbers,
+  }) {
+    switch (context.mode) {
+      case _AnlagenExportRowMode.importHeader:
+        return _buildImportHeaderExportRow(
+          anlage: anlage,
+          csvSettings: csvSettings,
+          disciplines: disciplineList,
+          fotoLabels: fotoLabels,
+          fotoNumbers: fotoNumbers,
+        );
+
+      case _AnlagenExportRowMode.templateStyle:
+        return _buildTemplateStyleExportRow(
+          anlage: anlage,
+          layout: context.templateLayout!,
+          csvSettings: csvSettings,
+          disciplines: disciplineList,
+          globalSchema: globalSchema,
+        );
+
+      case _AnlagenExportRowMode.columnMapped:
+        return _buildColumnMappedExportRow(
+          anlage: anlage,
+          csvSettings: csvSettings,
+          disciplines: disciplineList,
+          globalSchema: globalSchema,
+          targetLength: context.dataColumnKeys.length,
+        );
+    }
+  }
+
+  static void _appendExtraExportColumns(
+    List<String> dataRow, {
+    required Anlage anlage,
+    required _AnlagenExportContext context,
+    required bool useFotoColumns,
+    List<String> fotoNumbers = _emptyFotoNumbers,
+  }) {
+    if (context.mode == _AnlagenExportRowMode.templateStyle) {
+      return;
+    }
+
+    if (context.mode == _AnlagenExportRowMode.importHeader) {
+      if (!context.useExtraExportColumns) return;
+      if (context.qrAppended) {
+        dataRow.add(
+          anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ??
+              '',
+        );
+      }
+      if (useFotoColumns) {
+        for (final i in context.appendedFotoIndices) {
+          dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
         }
-      } else {
-        (childrenByParent[pid] ??= <Anlage>[]).add(a);
       }
+      return;
     }
 
-    final ordered = <Anlage>[];
-    for (final parentId in parentOrder) {
-      final parent = parentsInOrder[parentId];
-      if (parent == null) continue;
-      ordered.add(parent);
-      final kids = childrenByParent[parent.id];
-      if (kids != null && kids.isNotEmpty) {
-        ordered.addAll(kids);
+    if (context.useExtraExportColumns) {
+      if (context.qrAppended) {
+        dataRow.add(
+          anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ??
+              '',
+        );
       }
-    }
-
-    // Falls Kinder ohne Parent exportiert werden sollen (z.B. gefilterte Liste)
-    // hängen wir sie am Ende an.
-    final exportedIds = ordered.map((e) => e.id).toSet();
-    for (final a in anlagen) {
-      if (!exportedIds.contains(a.id)) {
-        if (a.parentId != null && a.parentId!.isNotEmpty) {
-          orphans.add(a);
-        } else {
-          ordered.add(a);
+      if (useFotoColumns) {
+        for (final i in context.appendedFotoIndices) {
+          dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
         }
       }
+    } else {
+      for (var i = 0; i < 4; i++) {
+        dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
+      }
     }
-    ordered.addAll(orphans);
-
-    return ordered;
   }
 
   // ---- Helfer für strukturellen Import ----
@@ -1568,65 +1574,37 @@ class CsvService {
         globalSchema = await _loadGlobalSchema(projectId);
       }
 
-      final roundTripCsv =
-          _buildRoundTripCsvData(orderedAnlagen, csvSettings, disciplineList);
-      final List<List<String>> csvData;
-      if (roundTripCsv != null) {
-        csvData = roundTripCsv;
-        debugPrint(
-          'CSV Export 1:1 (${orderedAnlagen.length} Zeilen, ${csvSettings.importHeaderRow.length} Spalten)',
+      final exportContext = await _resolveAnlagenExportContext(
+        orderedAnlagen: orderedAnlagen,
+        csvSettings: csvSettings,
+        disciplineList: disciplineList,
+        fotoLabels: fotoLabels,
+        useFotoColumns: useFotoColumns,
+        projectId: projectId,
+      );
+
+      final csvData = <List<String>>[exportContext.headerRow];
+      debugPrint(
+        'CSV Export (${exportContext.mode.name}, ${orderedAnlagen.length} Zeilen, '
+        '${exportContext.headerRow.length} Spalten)',
+      );
+
+      for (final anlage in orderedAnlagen) {
+        final dataRow = _buildAnlageExportDataRow(
+          anlage: anlage,
+          context: exportContext,
+          csvSettings: csvSettings,
+          disciplineList: disciplineList,
+          globalSchema: globalSchema,
+          fotoLabels: fotoLabels,
         );
-      } else {
-        final dataColumnKeys = buildExportHeaderRow(csvSettings);
-        if (dataColumnKeys.isEmpty) {
-          throw Exception(
-            'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
-          );
-        }
-
-        final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
-        final useQrColumn = csvSettings.hasQrCodeExportColumn;
-        final useExtraExportColumns = useFotoColumns || useQrColumn;
-        final qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
-
-        final headerRow = useExtraExportColumns
-            ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
-            : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
-        csvData = <List<String>>[headerRow];
-
-        debugPrint(
-          'CSV Export (${orderedAnlagen.length} Blatt-Datensätze, ${dataColumnKeys.length} Spalten): $headerRow',
+        _appendExtraExportColumns(
+          dataRow,
+          anlage: anlage,
+          context: exportContext,
+          useFotoColumns: useFotoColumns,
         );
-
-        final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
-
-        for (final anlage in orderedAnlagen) {
-          const emptyFotoNumbers = ['', '', '', ''];
-          final dataRow = _buildColumnMappedExportRow(
-            anlage: anlage,
-            csvSettings: csvSettings,
-            disciplines: disciplineList,
-            globalSchema: globalSchema,
-            targetLength: dataColumnKeys.length,
-          );
-
-          if (useExtraExportColumns) {
-            if (qrAppended) {
-              final qrVal =
-                  anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
-              dataRow.add(qrVal);
-            }
-            if (useFotoColumns) {
-              for (final i in appendedIndices) {
-                dataRow.add(emptyFotoNumbers[i]);
-              }
-            }
-          } else {
-            dataRow.addAll(['', '', '', '']);
-          }
-
-          csvData.add(dataRow);
-        }
+        csvData.add(dataRow);
       }
 
       // CSV-String erstellen (UTF-8 mit BOM für Excel-Kompatibilität)
@@ -1753,40 +1731,16 @@ class CsvService {
       globalSchema = await _loadGlobalSchema(projectId);
     }
 
-    final useRoundTrip = canRoundTripAnlagenCsvExport(csvSettings, orderedAnlagen);
+    final exportContext = await _resolveAnlagenExportContext(
+      orderedAnlagen: orderedAnlagen,
+      csvSettings: csvSettings,
+      disciplineList: disciplineList,
+      fotoLabels: fotoLabels,
+      useFotoColumns: useFotoColumns,
+      projectId: projectId,
+    );
 
-    List<String> dataColumnKeys;
-    List<String> headerRow;
-    bool useExtraExportColumns;
-    bool qrAppended;
-    List<int> appendedIndices;
-
-    if (useRoundTrip) {
-      dataColumnKeys = List<String>.from(csvSettings.importHeaderRow);
-      headerRow = List<String>.from(dataColumnKeys);
-      useExtraExportColumns = false;
-      qrAppended = false;
-      appendedIndices = const [];
-    } else {
-      dataColumnKeys = buildExportHeaderRow(csvSettings);
-      if (dataColumnKeys.isEmpty) {
-        throw Exception(
-          'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
-        );
-      }
-
-      final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
-      final useQrColumn = csvSettings.hasQrCodeExportColumn;
-      useExtraExportColumns = useFotoColumns || useQrColumn;
-      qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
-
-      headerRow = useExtraExportColumns
-          ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
-          : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
-      appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
-    }
-
-    final csvData = <List<String>>[headerRow];
+    final csvData = <List<String>>[exportContext.headerRow];
 
     int neueAnlagenZaehler = 1;
 
@@ -1847,47 +1801,22 @@ class CsvService {
         }
       }
 
-      var dataRow = useRoundTrip
-          ? buildAnlageExportRow(
-              anlage: anlage,
-              csvSettings: csvSettings,
-              discipline: _disciplineForAnlage(anlage, disciplineList),
-            )
-          : _buildColumnMappedExportRow(
-              anlage: anlage,
-              csvSettings: csvSettings,
-              disciplines: disciplineList,
-              globalSchema: globalSchema,
-              targetLength: dataColumnKeys.length,
-            );
-      if (useFotoColumns) {
-        for (var col = 0; col < dataColumnKeys.length && col < dataRow.length; col++) {
-          final label = dataColumnKeys[col];
-          final fotoIdx = _fotoLabelIndex(label, fotoLabels);
-          if (fotoIdx != null && fotoIdx < fotoNumbers.length) {
-            dataRow[col] = fotoNumbers[fotoIdx];
-          }
-        }
-      }
-
-      if (!useRoundTrip) {
-        if (useExtraExportColumns) {
-          if (qrAppended) {
-            final qrVal =
-                anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
-            dataRow.add(qrVal);
-          }
-          if (useFotoColumns) {
-            for (final i in appendedIndices) {
-              dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
-            }
-          }
-        } else {
-          for (int i = 0; i < 4; i++) {
-            dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
-          }
-        }
-      }
+      var dataRow = _buildAnlageExportDataRow(
+        anlage: anlage,
+        context: exportContext,
+        csvSettings: csvSettings,
+        disciplineList: disciplineList,
+        globalSchema: globalSchema,
+        fotoLabels: fotoLabels,
+        fotoNumbers: fotoNumbers,
+      );
+      _appendExtraExportColumns(
+        dataRow,
+        anlage: anlage,
+        context: exportContext,
+        useFotoColumns: useFotoColumns,
+        fotoNumbers: fotoNumbers,
+      );
 
       csvData.add(dataRow);
     }

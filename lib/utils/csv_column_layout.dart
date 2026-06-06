@@ -713,11 +713,12 @@ List<String> buildAnlageExportRow({
   Disziplin? discipline,
 }) {
   if (csvSettings.importHeaderRow.isNotEmpty) {
+    // Strikter 1:1-Export: exakt der gespeicherte Import-Header, keine Spalten-Umordnung.
     return buildAnlageExportRowFromImportStructure(
       anlage: anlage,
       csvSettings: csvSettings,
       discipline: discipline,
-      preserveFullImportHeader: hasCsvRowCellsForExport(anlage.params),
+      preserveFullImportHeader: true,
     );
   }
 
