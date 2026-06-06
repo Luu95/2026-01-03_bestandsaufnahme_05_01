@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../../models/anlage.dart';
 import '../../models/marker.dart';
 import '../../models/disziplin_schnittstelle.dart';
+import '../../theme/app_palette.dart';
 import '../../database/database_service.dart';
 import 'photo_manager.dart';
 
@@ -217,12 +218,12 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
+                        color: AppPalette.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
                         Icons.photo_library,
-                        color: Colors.blue[700],
+                        color: AppPalette.primaryDark,
                         size: 20,
                       ),
                     ),
@@ -387,7 +388,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                                   child: Icon(
                                     Icons.close,
                                     size: 16,
-                                    color: Colors.red[600],
+                                    color: AppPalette.error,
                                   ),
                                 ),
                               ),
@@ -543,7 +544,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   'Keine Dropdown-Optionen definiert.',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                  style: TextStyle(fontSize: 12, color: AppPalette.warningText),
                 ),
               ),
           ],
@@ -686,7 +687,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                     final a = filtered[i];
                     return ListTile(
                       enabled: !_isSelectingExisting,
-                      leading: Icon(a.discipline.icon, color: a.discipline.color),
+                      leading: Icon(a.discipline.icon, color: a.discipline.uiColor),
                       title: Text(a.name),
                       subtitle: Text(_existingSubtitle(a)),
                       onTap: _isSelectingExisting
@@ -767,7 +768,7 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                 for (final a in grouped[label]!)
                   ListTile(
                     enabled: !_isSelectingExisting,
-                    leading: Icon(a.discipline.icon, color: a.discipline.color),
+                    leading: Icon(a.discipline.icon, color: a.discipline.uiColor),
                     title: Text(a.name),
                     subtitle: Text(_existingSubtitle(a)),
                     onTap: _isSelectingExisting
@@ -799,8 +800,8 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
     final isExistingTab = showTabs && tabIndex == 0;
 
     final headerAccent = isExistingTab
-        ? Colors.blueGrey
-        : (_isLoadingDisciplines ? Theme.of(context).primaryColor : _discipline.color);
+        ? AppPalette.iconMuted
+        : (_isLoadingDisciplines ? Theme.of(context).primaryColor : _discipline.uiColor);
     final headerIcon = isExistingTab
         ? Icons.playlist_add
         : (_isLoadingDisciplines ? Icons.build : _discipline.icon);
@@ -1168,14 +1169,14 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                               borderRadius: BorderRadius.circular(12),
                             ),
                             side: BorderSide(
-                              color: Colors.red[300]!,
+                              color: AppPalette.errorBorder,
                               width: 1.5,
                             ),
                           ),
                           child: Icon(
                             Icons.delete,
                             size: 24,
-                            color: Colors.red[600],
+                            color: AppPalette.error,
                           ),
                         ),
                       ),
@@ -1197,14 +1198,14 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
                               borderRadius: BorderRadius.circular(12),
                             ),
                             side: BorderSide(
-                              color: Colors.blueGrey.withOpacity(0.35),
+                              color: AppPalette.iconMuted.withOpacity(0.35),
                               width: 1.5,
                             ),
                           ),
                           child: Icon(
                             Icons.remove_circle_outline,
                             size: 24,
-                            color: Colors.blueGrey[700],
+                            color: AppPalette.primaryDark,
                           ),
                         ),
                       ),

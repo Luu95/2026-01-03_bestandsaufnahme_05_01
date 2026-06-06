@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/csv_settings_provider.dart';
+import 'systems_list_tile_styles.dart';
 
 typedef AnlageItemBuilder = Widget Function(
   Anlage anlage,
@@ -33,6 +34,9 @@ class SystemsAnlageList extends StatelessWidget {
   /// Auflösung des Listen-Anzeigenamens (z. B. aus CSV-Einstellungen Ebene 3).
   final String Function(Anlage anlage)? resolveListDisplayName;
 
+  /// Auflösung des Untergruppen-Werts (Revisionsobjekt) – stabil, unabhängig vom Anzeigenamen.
+  final String Function(Anlage anlage)? resolveSubGroupValue;
+
   final Set<String> expandedGroups;
   final Set<String> expandedAnlagenIds;
 
@@ -62,6 +66,7 @@ class SystemsAnlageList extends StatelessWidget {
     this.subGroupingKey,
     this.displayNameParamKey,
     this.resolveListDisplayName,
+    this.resolveSubGroupValue,
     required this.expandedGroups,
     required this.expandedAnlagenIds,
     required this.onGroupExpansionChanged,
@@ -79,10 +84,10 @@ class SystemsAnlageList extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(
+              const CircularProgressIndicator(
                 strokeWidth: 3,
                 valueColor: AlwaysStoppedAnimation<Color>(
-                  Theme.of(context).primaryColor,
+                  SystemsOverviewPalette.primary,
                 ),
               ),
               const SizedBox(height: 16),
@@ -110,21 +115,21 @@ class SystemsAnlageList extends StatelessWidget {
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                decoration: const BoxDecoration(
+                  color: SystemsOverviewPalette.surface,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   disc.icon,
                   size: 48,
-                  color: Colors.grey[400],
+                  color: SystemsOverviewPalette.iconMuted,
                 ),
               ),
               const SizedBox(height: 16),
               Text(
                 'Keine ${disc.label} Anlagen vorhanden',
-                style: TextStyle(
-                  color: Colors.grey[700],
+                style: const TextStyle(
+                  color: SystemsOverviewPalette.textPrimary,
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
                 ),
@@ -133,8 +138,8 @@ class SystemsAnlageList extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'Tippen Sie oben auf das + Symbol, um eine neue Anlage hinzuzufügen',
-                style: TextStyle(
-                  color: Colors.grey[500],
+                style: const TextStyle(
+                  color: SystemsOverviewPalette.textSecondary,
                   fontSize: 13,
                 ),
                 textAlign: TextAlign.center,
@@ -217,7 +222,6 @@ class SystemsAnlageList extends StatelessWidget {
     for (final a in items) {
       if (getChildren(a).isNotEmpty) continue;
       if (_resolveSubGroupValue(a).isNotEmpty) return true;
-      if (a.name.trim().isNotEmpty) return true;
     }
     return false;
   }
@@ -304,7 +308,7 @@ class SystemsAnlageList extends StatelessWidget {
         if (hasChildren && isExpanded)
           for (final child in children)
             Padding(
-              padding: const EdgeInsets.only(left: 32),
+              padding: const EdgeInsets.only(left: 20),
               child: itemBuilder(
                 _withDisplayName(child, _listDisplayName(child)),
                 disc,
@@ -318,10 +322,22 @@ class SystemsAnlageList extends StatelessWidget {
   }
 
   String _resolveSubGroupValue(Anlage anlage) {
+    final resolver = resolveSubGroupValue;
+    if (resolver != null) return resolver(anlage).trim();
+
     final key = subGroupingKey;
     if (key == null || key.isEmpty) return '';
     final fromParams = anlage.params[key]?.toString().trim() ?? '';
     if (fromParams.isNotEmpty) return fromParams;
+    for (final entry in anlage.params.entries) {
+      if (!CsvSettings.paramKeysMatch(entry.key.toString(), key)) continue;
+      final value = entry.value?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    for (final legacy in CsvSettings.legacySchemaItemParamKeys) {
+      final value = anlage.params[legacy]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
     return '';
   }
 
@@ -370,8 +386,7 @@ class SystemsAnlageList extends StatelessWidget {
     }
 
     final hasSubValues = groupAnlagen.any((a) {
-      final v = _resolveSubGroupValue(a);
-      return v.isNotEmpty || (a.name.trim().isNotEmpty && getChildren(a).isEmpty);
+      return _resolveSubGroupValue(a).isNotEmpty;
     });
     if (!hasSubValues) {
       return groupAnlagen.map((a) => _buildParentWithChildren(a)).toList();
@@ -385,8 +400,7 @@ class SystemsAnlageList extends StatelessWidget {
         withChildren.add(anlage);
         continue;
       }
-      var subValue = _resolveSubGroupValue(anlage);
-      if (subValue.isEmpty) subValue = anlage.name.trim();
+      final subValue = _resolveSubGroupValue(anlage);
       subGroups.putIfAbsent(subValue, () => []).add(anlage);
     }
 
@@ -450,69 +464,54 @@ class SystemsAnlageList extends StatelessWidget {
             }
           : null,
       child: Container(
-      margin: const EdgeInsets.only(bottom: 4, left: 4, right: 4),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isSubExpanded
-              ? disc.color.withOpacity(0.2)
-              : Colors.grey.withOpacity(0.12),
-        ),
+      margin: const EdgeInsets.only(bottom: 4),
+      decoration: SystemsListTileStyles.groupContainer(
+        isExpanded: isSubExpanded,
+        level: SystemsOverviewLevel.subGroup,
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: ValueKey('subgroup_$compositeKey'),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-          childrenPadding: EdgeInsets.zero,
-          leading: Icon(Icons.subdirectory_arrow_right, color: disc.color.withOpacity(0.7), size: 18),
-          title: Row(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+          leading: const Icon(
+            Icons.subdirectory_arrow_right,
+            color: SystemsOverviewPalette.iconMuted,
+            size: 20,
+          ),
+          title: Text(
+            subGroupKey,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Text(
-                  subGroupKey,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[800],
-                  ),
-                ),
+              SystemsListTileStyles.countBadge(
+                subGroupAnlagen.length,
+                SystemsOverviewLevel.subGroup,
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: disc.color.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  '${subGroupAnlagen.length}',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: disc.color),
-                ),
+              const SizedBox(width: 4),
+              SystemsListTileStyles.expandIcon(
+                isExpanded: isSubExpanded,
+                level: SystemsOverviewLevel.subGroup,
               ),
             ],
-          ),
-          trailing: Icon(
-            isSubExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-            color: Colors.grey[600],
-            size: 20,
           ),
           initiallyExpanded: isSubExpanded,
           onExpansionChanged: (expanded) =>
               onGroupExpansionChanged(compositeKey, expanded),
           children: [
-            Padding(
-              padding: const EdgeInsets.only(left: 8, right: 4, bottom: 6),
-              child: Column(
-                children: [
-                  for (final anlage in subGroupAnlagen)
-                    _buildParentWithChildren(
-                      anlage,
-                      displayNameOverride: _listDisplayName(anlage),
-                    ),
-                ],
+            for (final anlage in subGroupAnlagen)
+              _buildParentWithChildren(
+                anlage,
+                displayNameOverride: _listDisplayName(anlage),
               ),
-            ),
           ],
         ),
       ),
@@ -542,139 +541,56 @@ class SystemsAnlageList extends StatelessWidget {
           : null,
       child: Container(
         margin: const EdgeInsets.only(bottom: 6),
-        decoration: BoxDecoration(
-          color: Color.lerp(
-            Colors.white,
-            Color.lerp(disc.color, Colors.purple.shade50, 0.25) ?? Colors.white,
-            0.12,
-          ),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isGroupExpanded
-                ? disc.color.withOpacity(0.3)
-                : Colors.grey.withOpacity(0.15),
-            width: isGroupExpanded ? 1.5 : 1,
-          ),
-          boxShadow: isGroupExpanded
-              ? [
-                  BoxShadow(
-                    color: disc.color.withOpacity(0.1),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                    spreadRadius: 0,
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 3,
-                    offset: const Offset(0, 1),
-                    spreadRadius: 0,
-                  ),
-                ],
+        decoration: SystemsListTileStyles.groupContainer(
+          isExpanded: isGroupExpanded,
+          level: SystemsOverviewLevel.group,
         ),
         child: Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
             key: ValueKey('group_$groupKey'),
-            tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            childrenPadding: EdgeInsets.zero,
-            leading: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isGroupExpanded
-                      ? [
-                          disc.color.withOpacity(0.2),
-                          disc.color.withOpacity(0.1),
-                        ]
-                      : [
-                          disc.color.withOpacity(0.15),
-                          disc.color.withOpacity(0.08),
-                        ],
-                ),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.folder, color: disc.color, size: 20),
+            tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            leading: const Icon(
+              Icons.folder_outlined,
+              color: SystemsOverviewPalette.icon,
+              size: 22,
             ),
-            title: Row(
+            title: Text(
+              groupDisplayName,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: isGroupExpanded
+                    ? SystemsOverviewPalette.primaryDark
+                    : SystemsOverviewPalette.textPrimary,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: Text(
-                    groupDisplayName,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: isGroupExpanded ? disc.color : Colors.grey[900],
-                      letterSpacing: -0.2,
-                    ),
-                  ),
+                SystemsListTileStyles.countBadge(
+                  groupAnlagen.length,
+                  SystemsOverviewLevel.group,
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: disc.color.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${groupAnlagen.length}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: disc.color,
-                    ),
-                  ),
+                const SizedBox(width: 4),
+                SystemsListTileStyles.expandIcon(
+                  isExpanded: isGroupExpanded,
+                  level: SystemsOverviewLevel.group,
                 ),
               ],
-            ),
-            trailing: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: isGroupExpanded
-                    ? disc.color.withOpacity(0.1)
-                    : Colors.grey.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                isGroupExpanded
-                    ? Icons.keyboard_arrow_down
-                    : Icons.keyboard_arrow_right,
-                color: isGroupExpanded ? disc.color : Colors.grey[600],
-                size: 22,
-              ),
             ),
             initiallyExpanded: isGroupExpanded,
             onExpansionChanged: (expanded) =>
                 onGroupExpansionChanged(groupKey, expanded),
-            children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: Color.lerp(
-                    Colors.grey[50]!,
-                    Color.lerp(disc.color, Colors.green.shade50, 0.2) ??
-                        Colors.grey[50]!,
-                    0.08,
-                  ),
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(14),
-                    bottomRight: Radius.circular(14),
-                  ),
-                ),
-                padding:
-                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                child: Column(
-                  children: _buildGroupChildren(
-                    context,
-                    groupKey,
-                    groupAnlagen,
-                    parentGroupingKey: effectiveGroupingKey,
-                  ),
-                ),
-              ),
-            ],
+            children: _buildGroupChildren(
+              context,
+              groupKey,
+              groupAnlagen,
+              parentGroupingKey: effectiveGroupingKey,
+            ),
           ),
         ),
       ),

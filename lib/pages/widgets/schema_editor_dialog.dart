@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../theme/app_palette.dart';
+
 BoxDecoration _schemaFieldCardDecoration(BuildContext context) {
   final theme = Theme.of(context);
   final colorScheme = theme.colorScheme;
@@ -123,13 +125,13 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                         Container(
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: Colors.blue.withOpacity(0.1),
+                            color: AppPalette.primary.withOpacity(0.1),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
                             Icons.schema_outlined,
                             size: 64,
-                            color: Colors.blue[400],
+                            color: AppPalette.primaryLight,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -239,22 +241,10 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                 vertical: 4,
                                               ),
                                               decoration: BoxDecoration(
-                                                color: (type == 'int' || type == 'number')
-                                                    ? Colors.orange.withOpacity(0.15)
-                                                    : type == 'date'
-                                                        ? Colors.purple.withOpacity(0.15)
-                                                        : type == 'dropdown'
-                                                            ? Colors.teal.withOpacity(0.15)
-                                                            : Colors.green.withOpacity(0.15),
+                                                color: AppPalette.fieldTypeBackground(type),
                                                 borderRadius: BorderRadius.circular(8),
                                                 border: Border.all(
-                                                  color: (type == 'int' || type == 'number')
-                                                      ? Colors.orange.withOpacity(0.3)
-                                                      : type == 'date'
-                                                          ? Colors.purple.withOpacity(0.3)
-                                                          : type == 'dropdown'
-                                                              ? Colors.teal.withOpacity(0.3)
-                                                              : Colors.green.withOpacity(0.3),
+                                                  color: AppPalette.fieldTypeBorder(type),
                                                 ),
                                               ),
                                               child: Text(
@@ -267,13 +257,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                             : 'String',
                                                 style: TextStyle(
                                                   fontSize: 10,
-                                                  color: (type == 'int' || type == 'number')
-                                                      ? Colors.orange[800]
-                                                      : type == 'date'
-                                                          ? Colors.purple[800]
-                                                          : type == 'dropdown'
-                                                              ? Colors.teal[800]
-                                                              : Colors.green[800],
+                                                  color: AppPalette.fieldTypeText(type),
                                                   fontWeight: FontWeight.w600,
                                                 ),
                                               ),
@@ -286,12 +270,12 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                               ),
                                               decoration: BoxDecoration(
                                                 color: (field['editable'] ?? true)
-                                                    ? Colors.blue.withOpacity(0.15)
+                                                    ? AppPalette.primary.withOpacity(0.15)
                                                     : Colors.grey.withOpacity(0.15),
                                                 borderRadius: BorderRadius.circular(8),
                                                 border: Border.all(
                                                   color: (field['editable'] ?? true)
-                                                      ? Colors.blue.withOpacity(0.3)
+                                                      ? AppPalette.primary.withOpacity(0.3)
                                                       : Colors.grey.withOpacity(0.3),
                                                 ),
                                               ),
@@ -300,7 +284,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                 style: TextStyle(
                                                   fontSize: 10,
                                                   color: (field['editable'] ?? true)
-                                                      ? Colors.blue[800]
+                                                      ? AppPalette.primaryDark
                                                       : Colors.grey[800],
                                                   fontWeight: FontWeight.w600,
                                                 ),
@@ -334,7 +318,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                                 ),
                                                 TextButton(
                                                   onPressed: () => Navigator.of(ctx).pop(true),
-                                                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                  style: TextButton.styleFrom(foregroundColor: AppPalette.error),
                                                   child: const Text('Löschen'),
                                                 ),
                                               ],
@@ -366,9 +350,9 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                                              Icon(Icons.delete_outline, size: 20, color: AppPalette.error),
                                               const SizedBox(width: 12),
-                                              Text('Löschen', style: TextStyle(color: Colors.red)),
+                                              Text('Löschen', style: TextStyle(color: AppPalette.error)),
                                             ],
                                           ),
                                         ),
@@ -408,7 +392,7 @@ class _SchemaEditorWidgetState extends State<SchemaEditorWidget> {
               ),
               onPressed: _onAddField,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[600],
+                backgroundColor: AppPalette.primary,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -489,8 +473,8 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Colors.blue.withOpacity(0.12),
-                      Colors.blue.withOpacity(0.06),
+                      AppPalette.primary.withOpacity(0.12),
+                      AppPalette.primary.withOpacity(0.06),
                     ],
                   ),
                   border: Border(
@@ -508,14 +492,14 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            Colors.blue[400]!,
-                            Colors.blue[600]!,
+                            AppPalette.primaryLight!,
+                            AppPalette.primary!,
                           ],
                         ),
                         borderRadius: BorderRadius.circular(14),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.blue.withOpacity(0.3),
+                            color: AppPalette.primary.withOpacity(0.3),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),
@@ -560,7 +544,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.1),
+                                    color: AppPalette.primary.withOpacity(0.1),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
@@ -569,14 +553,14 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                       Icon(
                                         Icons.drag_handle,
                                         size: 12,
-                                        color: Colors.blue[700],
+                                        color: AppPalette.primaryDark,
                                       ),
                                       const SizedBox(width: 3),
                                       Text(
                                         'Verschieben',
                                         style: TextStyle(
                                           fontSize: 10,
-                                          color: Colors.blue[700],
+                                          color: AppPalette.primaryDark,
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
@@ -603,13 +587,13 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                               Container(
                                 padding: const EdgeInsets.all(20),
                                 decoration: BoxDecoration(
-                                  color: Colors.blue.withOpacity(0.1),
+                                  color: AppPalette.primary.withOpacity(0.1),
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(
                                   Icons.schema_outlined,
                                   size: 64,
-                                  color: Colors.blue[400],
+                                  color: AppPalette.primaryLight,
                                 ),
                               ),
                               const SizedBox(height: 24),
@@ -704,22 +688,10 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                       vertical: 4,
                                                     ),
                                                     decoration: BoxDecoration(
-                                                      color: type == 'int'
-                                                          ? Colors.orange.withOpacity(0.15)
-                                                          : type == 'date'
-                                                              ? Colors.purple.withOpacity(0.15)
-                                                              : type == 'dropdown'
-                                                                  ? Colors.teal.withOpacity(0.15)
-                                                                  : Colors.green.withOpacity(0.15),
+                                                      color: AppPalette.fieldTypeBackground(type),
                                                       borderRadius: BorderRadius.circular(8),
                                                       border: Border.all(
-                                                        color: type == 'int'
-                                                            ? Colors.orange.withOpacity(0.3)
-                                                            : type == 'date'
-                                                                ? Colors.purple.withOpacity(0.3)
-                                                                : type == 'dropdown'
-                                                                    ? Colors.teal.withOpacity(0.3)
-                                                                    : Colors.green.withOpacity(0.3),
+                                                        color: AppPalette.fieldTypeBorder(type),
                                                       ),
                                                     ),
                                                     child: Text(
@@ -732,13 +704,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                                   : 'String',
                                                       style: TextStyle(
                                                         fontSize: 10,
-                                                        color: type == 'int'
-                                                            ? Colors.orange[800]
-                                                            : type == 'date'
-                                                                ? Colors.purple[800]
-                                                                : type == 'dropdown'
-                                                                    ? Colors.teal[800]
-                                                                    : Colors.green[800],
+                                                        color: AppPalette.fieldTypeText(type),
                                                         fontWeight: FontWeight.w600,
                                                       ),
                                                     ),
@@ -751,12 +717,12 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                     ),
                                                     decoration: BoxDecoration(
                                                       color: (field['editable'] ?? true)
-                                                          ? Colors.blue.withOpacity(0.15)
+                                                          ? AppPalette.primary.withOpacity(0.15)
                                                           : Colors.grey.withOpacity(0.15),
                                                       borderRadius: BorderRadius.circular(8),
                                                       border: Border.all(
                                                         color: (field['editable'] ?? true)
-                                                            ? Colors.blue.withOpacity(0.3)
+                                                            ? AppPalette.primary.withOpacity(0.3)
                                                             : Colors.grey.withOpacity(0.3),
                                                       ),
                                                     ),
@@ -765,7 +731,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                       style: TextStyle(
                                                         fontSize: 10,
                                                         color: (field['editable'] ?? true)
-                                                            ? Colors.blue[800]
+                                                            ? AppPalette.primaryDark
                                                             : Colors.grey[800],
                                                         fontWeight: FontWeight.w600,
                                                       ),
@@ -798,7 +764,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                                     ),
                                                     TextButton(
                                                       onPressed: () => Navigator.of(ctx).pop(true),
-                                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                      style: TextButton.styleFrom(foregroundColor: AppPalette.error),
                                                       child: const Text('Löschen'),
                                                     ),
                                                   ],
@@ -827,9 +793,9 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                                               child: Row(
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                                                  Icon(Icons.delete_outline, size: 20, color: AppPalette.error),
                                                   const SizedBox(width: 12),
-                                                  Text('Löschen', style: TextStyle(color: Colors.red)),
+                                                  Text('Löschen', style: TextStyle(color: AppPalette.error)),
                                                 ],
                                               ),
                                             ),
@@ -872,7 +838,7 @@ class _SchemaEditorDialogState extends State<SchemaEditorDialog> {
                         ),
                         onPressed: _onAddField,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[600],
+                          backgroundColor: AppPalette.primary,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1011,8 +977,8 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Colors.blue.withOpacity(0.12),
-                      Colors.blue.withOpacity(0.06),
+                      AppPalette.primary.withOpacity(0.12),
+                      AppPalette.primary.withOpacity(0.06),
                     ],
                   ),
                   border: Border(
@@ -1030,14 +996,14 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            Colors.blue[400]!,
-                            Colors.blue[600]!,
+                            AppPalette.primaryLight!,
+                            AppPalette.primary!,
                           ],
                         ),
                         borderRadius: BorderRadius.circular(14),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.blue.withOpacity(0.3),
+                            color: AppPalette.primary.withOpacity(0.3),
                             blurRadius: 8,
                             offset: const Offset(0, 2),
                           ),
@@ -1163,7 +1129,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                             Switch(
                               value: isEditable,
                               onChanged: (v) => setState(() => isEditable = v),
-                              activeColor: Colors.blue[600],
+                              activeColor: AppPalette.primary,
                             ),
                           ],
                         ),
@@ -1227,7 +1193,7 @@ class _AddSchemaFieldDialogState extends State<AddSchemaFieldDialog> {
                           Navigator.of(context).pop({...result});
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[600],
+                          backgroundColor: AppPalette.primary,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),

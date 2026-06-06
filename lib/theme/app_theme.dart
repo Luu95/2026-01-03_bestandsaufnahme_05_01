@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'app_palette.dart';
+
 class AppTheme {
   static const lightScaffoldColor = Color(0xFFEEEEEE);
   static const darkScaffoldColor = Color(0xFF121212);
@@ -8,9 +10,10 @@ class AppTheme {
 
   static ThemeData get light {
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: Colors.lightBlue,
+      seedColor: AppPalette.primary,
       brightness: Brightness.light,
       surface: Colors.white,
+      primary: AppPalette.primary,
     );
 
     return ThemeData(
@@ -47,9 +50,10 @@ class AppTheme {
 
   static ThemeData get dark {
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: Colors.lightBlue,
+      seedColor: AppPalette.primary,
       brightness: Brightness.dark,
       surface: darkSurfaceColor,
+      primary: AppPalette.primaryLight,
     );
 
     return ThemeData(

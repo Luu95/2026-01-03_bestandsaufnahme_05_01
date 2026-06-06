@@ -10,26 +10,32 @@ import '../models/csv_hierarchy_level.dart';
 class AttributeColumnPair {
   final int nameColumn;
   final int valueColumn;
+  /// Feste ATT-Nummer (1 = ATT1, 2 = ATT2, …), aus CSV-Header erkannt.
+  final int? attNumber;
 
   const AttributeColumnPair({
     required this.nameColumn,
     required this.valueColumn,
+    this.attNumber,
   });
 
   Map<String, dynamic> toJson() => {
         'nameColumn': nameColumn,
         'valueColumn': valueColumn,
+        if (attNumber != null) 'attNumber': attNumber,
       };
 
   factory AttributeColumnPair.fromJson(Map<String, dynamic> json) {
     return AttributeColumnPair(
       nameColumn: json['nameColumn'] as int? ?? 0,
       valueColumn: json['valueColumn'] as int? ?? 0,
+      attNumber: json['attNumber'] as int?,
     );
   }
 }
 
-/// Vierergruppe pro Attribut: Name, Typ, Optionen, Art (z. B. ATT1 … ATT1_ART).
+/// Dreiergruppe pro Attribut: Name, Typ (Freitext/number/Opt1|Opt2), Wert/Art.
+/// [optionsColumn] nur für Legacy-Vierer-CSV (separate OPTIONS-Spalte), sonst -1.
 class AttributeTripletColumn {
   final int nameColumn;
   final int typeColumn;
@@ -39,22 +45,23 @@ class AttributeTripletColumn {
   const AttributeTripletColumn({
     required this.nameColumn,
     required this.typeColumn,
-    required this.optionsColumn,
+    this.optionsColumn = -1,
     required this.artColumn,
   });
 
   Map<String, dynamic> toJson() => {
         'nameColumn': nameColumn,
         'typeColumn': typeColumn,
-        'optionsColumn': optionsColumn,
+        if (optionsColumn >= 0) 'optionsColumn': optionsColumn,
         'artColumn': artColumn,
       };
 
   factory AttributeTripletColumn.fromJson(Map<String, dynamic> json) {
     final name = json['nameColumn'] as int? ?? 0;
     final type = json['typeColumn'] as int? ?? 0;
-    final options = json['optionsColumn'] as int? ?? 0;
-    final art = json['artColumn'] as int? ?? (options + 1);
+    final options = json['optionsColumn'] as int? ?? -1;
+    final art = json['artColumn'] as int? ??
+        (options >= 0 ? options + 1 : type + 1);
     return AttributeTripletColumn(
       nameColumn: name,
       typeColumn: type,
@@ -63,8 +70,18 @@ class AttributeTripletColumn {
     );
   }
 
-  /// Alle vier Spaltenindizes dieser Gruppe.
-  List<int> get columnIndices => [nameColumn, typeColumn, optionsColumn, artColumn];
+  /// Spaltenindizes dieser Gruppe (ohne ungenutzte Legacy-Spalten).
+  List<int> get columnIndices {
+    final cols = <int>[nameColumn, typeColumn];
+    if (optionsColumn >= 0 && optionsColumn != typeColumn) {
+      cols.add(optionsColumn);
+    }
+    if (artColumn >= 0) cols.add(artColumn);
+    return cols;
+  }
+
+  /// Wert-Spalte für Anlagen-Export (Art/WERT).
+  int get valueColumn => artColumn;
 }
 
 /// Ergebnis der Header-Analyse: Zweier- oder Vierer-Mapping für einen Import.
@@ -79,6 +96,9 @@ class ImportAttributeMapping {
 }
 
 class CsvSettings {
+  /// Interner Param-Key für die QR-Code-Nummer in Anlagen-Params.
+  static const qrCodeNummerParamKey = 'qrCodeNummer';
+
   final HierarchyLevelConfig level1;
   final HierarchyLevelConfig level2;
   final HierarchyLevelConfig level3;
@@ -92,12 +112,14 @@ class CsvSettings {
   final String labelAnlage;
   final String labelBauteil;
   final List<AttributeColumnPair> attributeColumnPairs;
-  /// Attribut-Vierergruppen: Name, Typ, Optionen, Art (wird aus Header erkannt, falls leer).
+  /// Attribut-Dreiergruppen: Name, Typ, Wert/Art (wird aus Header erkannt, falls leer).
   final List<AttributeTripletColumn> attributeTripletColumns;
   final String? foto1SpalteLabel;
   final String? foto2SpalteLabel;
   final String? foto3SpalteLabel;
   final String? foto4SpalteLabel;
+  /// Spalten-Label für QR-Code-Nummer beim CSV-Export. Leer = Spalte nicht verwenden.
+  final String? qrCodeNummerSpalteLabel;
   final List<String> importHeaderRow;
   final String exportDelimiter;
   final String groupingGewerkParamKey;
@@ -125,6 +147,7 @@ class CsvSettings {
     this.foto2SpalteLabel,
     this.foto3SpalteLabel,
     this.foto4SpalteLabel,
+    this.qrCodeNummerSpalteLabel,
     this.importHeaderRow = const [],
     this.exportDelimiter = ';',
     this.groupingGewerkParamKey = '',
@@ -270,6 +293,10 @@ class CsvSettings {
   /// Alle Param-Keys einer Hierarchie-Ebene (konfigurierte Labels + Legacy).
   List<String> allParamKeysForHierarchyLevel(int level) {
     final keys = <String>{...configuredHierarchyParamKeys(level)};
+    final headerLabel = hierarchyLevelHeaderLabel(level);
+    if (headerLabel.isNotEmpty) {
+      _addDistinctParamKey(keys, headerLabel);
+    }
     if (level == 1 && !level1IsDiscipline) {
       final listKey = resolveListGroupingParamKeyForLevel(1);
       if (listKey != null && listKey.isNotEmpty) keys.add(listKey);
@@ -278,12 +305,56 @@ class CsvSettings {
     return keys.toList();
   }
 
+  /// Ob [key] ein Hierarchie- oder Schema-Ebenen-Key ist (niemals Anzeigename überschreiben).
+  bool mustNotReceiveDisplayName(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return false;
+    if (isUpperHierarchyParamKey(k)) return true;
+    final schemaLevel = schemaItemLevelNumber;
+    if (schemaLevel != null) {
+      for (final hk in allParamKeysForHierarchyLevel(schemaLevel)) {
+        if (paramKeysMatch(k, hk)) return true;
+      }
+    }
+    final schemaKey = resolveSchemaItemParamKey()?.trim();
+    if (schemaKey != null &&
+        schemaKey.isNotEmpty &&
+        paramKeysMatch(k, schemaKey)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Reservierter Param-Key für den Dialog (case-insensitive + Prefix-Aliase).
+  bool matchesReservedDialogParamKey(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return true;
+    for (final reserved in reservedParamKeysForDialog()) {
+      if (paramKeysMatch(k, reserved)) return true;
+    }
+    return false;
+  }
+
+  /// Spaltenindex für [label] in [headers] (exakter Header-Abgleich), sonst -1.
+  int columnIndexForLabel(List<String> headers, String? label) {
+    final t = label?.trim() ?? '';
+    if (t.isEmpty) return -1;
+    for (var i = 0; i < headers.length; i++) {
+      if (paramKeysMatch(headers[i], t)) return i;
+    }
+    return -1;
+  }
+
+  bool get hasQrCodeExportColumn =>
+      (qrCodeNummerSpalteLabel?.trim().isNotEmpty ?? false);
+
   /// Param-Keys, die nicht als Attribut-Spalten exportiert werden.
   Set<String> reservedParamKeysForExport() {
     return {
       ...reservedParamKeysForDialog(),
       'lfdNummer',
       'photoPaths',
+      qrCodeNummerParamKey,
       '__parentLfdNummer',
       '__syntheticParent',
       '__etageName',
@@ -464,6 +535,15 @@ class CsvSettings {
     return header.trim().replaceAll(RegExp(r'\s+'), '_').toUpperCase();
   }
 
+  /// Entfernt Zeilenumbrüche aus Feldbezeichnungen (CSV → Dialog-Anzeige).
+  static String normalizeFieldLabelForDisplay(String? raw) {
+    if (raw == null) return '';
+    return raw
+        .replaceAll(RegExp(r'[\r\n\u2028\u2029]+'), ' ')
+        .replaceAll(RegExp(r'[ \t]+'), ' ')
+        .trim();
+  }
+
   /// Anlagen-Import: Header mit ATTn + ATTn_wert (Zweier-Format).
   static bool headerLooksLikeAnlagenWertFormat(List<String> headers) {
     for (final h in headers) {
@@ -474,18 +554,94 @@ class CsvSettings {
     return false;
   }
 
-  /// Gewerkevorlagen: Header mit TYPE/OPTIONS/ART je Attribut.
+  /// Gewerkevorlagen: Header mit TYPE je Attribut (Dreier- oder Legacy-Vierer-Format).
   static bool headerLooksLikeGewerkeQuadrupletFormat(List<String> headers) {
     for (final h in headers) {
       final u = normalizeAttHeaderToken(h);
-      if (u.contains('_TYPE') || u.contains('_OPTIONS') || u.endsWith('_ART')) {
+      if (u.contains('_TYPE') ||
+          u.contains('_OPTIONS') ||
+          u.endsWith('_ART') ||
+          u.endsWith('_WERT')) {
         return true;
       }
     }
     return false;
   }
 
-  /// Vierergruppen aus Gewerke-Header (ATTn, ATTn_TYPE, ATTn_OPTIONS, ATTn_ART).
+  /// True, wenn der Header eine reine Typ-Definitions-Spalte ist (nicht exportieren).
+  static bool isGewerkeTypeDefinitionHeader(String header) {
+    final u = normalizeAttHeaderToken(header);
+    return u.contains('_TYPE') || u.contains('_OPTIONS');
+  }
+
+  /// Header für Anlagen-Export: ohne TYPE/OPTIONS-Spalten, ART → WERT.
+  static List<String> headersForAnlagenExport(List<String> importHeaders) {
+    final result = <String>[];
+    for (final raw in importHeaders) {
+      if (isGewerkeTypeDefinitionHeader(raw)) continue;
+      var h = raw.trim();
+      final u = normalizeAttHeaderToken(h);
+      if (u.endsWith('_ART')) {
+        h = '${h.substring(0, h.length - 4)}_WERT';
+      }
+      result.add(h);
+    }
+    return result;
+  }
+
+  /// Parst TYPE-Zelle aus Gewerkevorlagen: Freitext, number oder Opt1|Opt2 → dropdown.
+  static Map<String, dynamic> schemaFieldFromGewerkeTypeCell(
+    String name,
+    String typeStr, {
+    String? legacyOptionsStr,
+    String? artStr,
+  }) {
+    final entry = <String, dynamic>{
+      'key': name,
+      'label': normalizeFieldLabelForDisplay(name),
+    };
+
+    final trimmedType = typeStr.trim();
+    final lowerType = trimmedType.toLowerCase();
+
+    if (trimmedType.contains('|')) {
+      entry['type'] = 'dropdown';
+      entry['options'] = trimmedType
+          .split('|')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+    } else if (lowerType == 'freitext' || lowerType == 'text') {
+      entry['type'] = 'text';
+    } else if (lowerType == 'number' || lowerType == 'int') {
+      entry['type'] = 'number';
+    } else if (lowerType == 'dropdown' ||
+        lowerType == 'select' ||
+        lowerType == 'option') {
+      entry['type'] = 'dropdown';
+      final legacy = parseGewerkeOptionsList(legacyOptionsStr);
+      if (legacy.isNotEmpty) entry['options'] = legacy;
+    } else if (trimmedType.isNotEmpty) {
+      entry['type'] = lowerType;
+    } else {
+      entry['type'] = 'text';
+    }
+
+    final art = normalizeFieldLabelForDisplay(artStr ?? '');
+    if (art.isNotEmpty) entry['art'] = art;
+    return entry;
+  }
+
+  static List<String> parseGewerkeOptionsList(String? optionsStr) {
+    if (optionsStr == null || optionsStr.trim().isEmpty) return [];
+    final s = optionsStr.trim();
+    final split = s.contains('|')
+        ? s.split('|')
+        : (s.contains(';') ? s.split(';') : s.split(','));
+    return split.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
+
+  /// Dreiergruppen aus Gewerke-Header (ATTn, ATTn_TYPE, ATTn_WERT/ART).
   static List<AttributeTripletColumn> detectQuadrupletsFromHeader(
     List<String> headers,
   ) {
@@ -502,26 +658,23 @@ class CsvSettings {
       }
 
       final typeIdx = indexWhere('_TYPE');
+      if (typeIdx < 0) continue;
+
       final optIdx = indexWhere('_OPTIONS');
-      var artIdx = indexWhere('_ART');
-      if (artIdx < 0) {
-        artIdx = headers.indexWhere(
-          (x) => normalizeAttHeaderToken(x) == 'ATT${n}_WERT',
-        );
-      }
-      if (typeIdx >= 0 && artIdx >= 0) {
-        groups.add(AttributeTripletColumn(
-          nameColumn: i,
-          typeColumn: typeIdx,
-          optionsColumn: optIdx >= 0 ? optIdx : typeIdx + 1,
-          artColumn: artIdx,
-        ));
-      }
+      var valueIdx = indexWhere('_WERT');
+      if (valueIdx < 0) valueIdx = indexWhere('_ART');
+
+      groups.add(AttributeTripletColumn(
+        nameColumn: i,
+        typeColumn: typeIdx,
+        optionsColumn: optIdx >= 0 ? optIdx : -1,
+        artColumn: valueIdx >= 0 ? valueIdx : -1,
+      ));
     }
     return groups;
   }
 
-  /// Gespeicherte Vierergruppen passen zum Header (kein ATT/ATT_wert-Zweier-Mix).
+  /// Gespeicherte Dreiergruppen passen zum Header (kein ATT/ATT_wert-Zweier-Mix).
   static bool quadrupletsMatchHeader(
     List<AttributeTripletColumn> quadruplets,
     List<String> headers,
@@ -616,10 +769,46 @@ class CsvSettings {
       final valueCol = valueColByN[n];
       if (valueCol == null) continue;
       final nameCol = nameColByN[n] ?? valueCol;
-      pairs.add(AttributeColumnPair(nameColumn: nameCol, valueColumn: valueCol));
+      pairs.add(AttributeColumnPair(
+        nameColumn: nameCol,
+        valueColumn: valueCol,
+        attNumber: n,
+      ));
     }
     return pairs;
   }
+
+  /// ATT-Nummer aus Schema-Feld (1 = ATT1). Null bei Legacy-Daten ohne Slot.
+  static int? attSlotFromSchemaField(Map<String, dynamic> field) {
+    final raw = field['attSlot'] ?? field['attNumber'];
+    if (raw is int && raw > 0) return raw;
+    if (raw is String) {
+      final parsed = int.tryParse(raw.trim());
+      if (parsed != null && parsed > 0) return parsed;
+    }
+    return null;
+  }
+
+  /// Schema-Feld für festen ATT-Slot; Legacy-Fallback über Listenindex.
+  static Map<String, dynamic>? schemaFieldAtAttSlot(
+    int attSlot,
+    List<Map<String, dynamic>> fields,
+  ) {
+    if (attSlot <= 0) return null;
+    for (final f in fields) {
+      if (attSlotFromSchemaField(f) == attSlot) return f;
+    }
+    final idx = attSlot - 1;
+    if (idx >= 0 && idx < fields.length) {
+      final legacy = fields[idx];
+      if (attSlotFromSchemaField(legacy) == null) return legacy;
+    }
+    return null;
+  }
+
+  /// ATT-Nummer für Spaltenpaar (Header-Nummer oder Listenposition).
+  static int attSlotForPair(AttributeColumnPair pair, int pairIndex) =>
+      pair.attNumber ?? (pairIndex + 1);
 
   /// Param-Keys, die nicht als Dialog-Felder angezeigt werden sollen.
   static bool isReservedDialogParamKey(String key, CsvSettings? settings) {
@@ -633,11 +822,7 @@ class CsvSettings {
     }
     if (isAnlagenCsvColumnParamKey(k)) return true;
     if (settings != null) {
-      if (settings.isLeafNameParamKey(k)) return true;
-      for (var level = 1; level <= 3; level++) {
-        final levelKey = settings.resolveHierarchyLevelParamKey(level);
-        if (levelKey != null && levelKey == k) return true;
-      }
+      if (settings.matchesReservedDialogParamKey(k)) return true;
     }
     return false;
   }
@@ -655,7 +840,7 @@ class CsvSettings {
       if (value == null || value.toString().trim().isEmpty) continue;
       fields.add({
         'key': key,
-        'label': key,
+        'label': normalizeFieldLabelForDisplay(key),
         'type': 'text',
       });
     }
@@ -840,12 +1025,14 @@ class CsvSettings {
 
     final key = resolveDisplayNameParamKey()?.trim();
     if (key == null || key.isEmpty) return;
+    if (mustNotReceiveDisplayName(key)) return;
 
     params[key] = v;
     for (final entry in params.entries.toList()) {
-      if (paramKeysMatch(entry.key.toString(), key)) {
-        params[entry.key] = v;
-      }
+      final paramKey = entry.key.toString();
+      if (!paramKeysMatch(paramKey, key)) continue;
+      if (mustNotReceiveDisplayName(paramKey)) continue;
+      params[paramKey] = v;
     }
   }
 
@@ -1116,6 +1303,7 @@ class CsvSettings {
     final keys = <String>{
       'lfdNummer',
       'photoPaths',
+      qrCodeNummerParamKey,
       '__etageName',
     };
     for (final h in importHeaderRow) {
@@ -1181,6 +1369,7 @@ class CsvSettings {
     String? foto2SpalteLabel,
     String? foto3SpalteLabel,
     String? foto4SpalteLabel,
+    String? qrCodeNummerSpalteLabel,
     List<String>? importHeaderRow,
     String? exportDelimiter,
     String? groupingGewerkParamKey,
@@ -1211,6 +1400,8 @@ class CsvSettings {
       foto2SpalteLabel: foto2SpalteLabel ?? this.foto2SpalteLabel,
       foto3SpalteLabel: foto3SpalteLabel ?? this.foto3SpalteLabel,
       foto4SpalteLabel: foto4SpalteLabel ?? this.foto4SpalteLabel,
+      qrCodeNummerSpalteLabel:
+          qrCodeNummerSpalteLabel ?? this.qrCodeNummerSpalteLabel,
       importHeaderRow: importHeaderRow ?? this.importHeaderRow,
       exportDelimiter: exportDelimiter ?? this.exportDelimiter,
       groupingGewerkParamKey: groupingGewerkParamKey ?? this.groupingGewerkParamKey,
@@ -1242,6 +1433,7 @@ class CsvSettings {
       'foto2SpalteLabel': foto2SpalteLabel,
       'foto3SpalteLabel': foto3SpalteLabel,
       'foto4SpalteLabel': foto4SpalteLabel,
+      'qrCodeNummerSpalteLabel': qrCodeNummerSpalteLabel,
       'importHeaderRow': importHeaderRow,
       'exportDelimiter': exportDelimiter,
       'groupingGewerkParamKey': groupingGewerkParamKey,
@@ -1305,6 +1497,7 @@ class CsvSettings {
       foto2SpalteLabel: json['foto2SpalteLabel'] as String?,
       foto3SpalteLabel: json['foto3SpalteLabel'] as String?,
       foto4SpalteLabel: json['foto4SpalteLabel'] as String?,
+      qrCodeNummerSpalteLabel: json['qrCodeNummerSpalteLabel'] as String?,
       importHeaderRow: _parseStringList(json['importHeaderRow']),
       exportDelimiter: json['exportDelimiter'] as String? ?? ';',
       groupingGewerkParamKey: json['groupingGewerkParamKey'] as String? ?? '',

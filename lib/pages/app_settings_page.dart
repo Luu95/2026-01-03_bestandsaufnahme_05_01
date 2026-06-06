@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/settings_provider.dart';
+import '../theme/app_palette.dart';
 import 'widgets/settings_card.dart';
 
 class AppSettingsPage extends ConsumerWidget {
@@ -47,10 +48,10 @@ class AppSettingsPage extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
             SettingsCard(
-              color: Colors.indigo,
-              borderColor: Colors.indigo.withOpacity(0.25),
+              color: AppPalette.primary,
+              borderColor: AppPalette.primary.withOpacity(0.25),
               icon: Icons.dark_mode_outlined,
-              iconColor: Colors.indigo[700]!,
+              iconColor: AppPalette.primaryDark,
               title: 'Erscheinungsbild',
               description: 'Helles, dunkles Design oder automatisch nach Systemeinstellung.',
               child: SegmentedButton<ThemeMode>(
@@ -74,6 +75,33 @@ class AppSettingsPage extends ConsumerWidget {
                 selected: {settings.themeMode},
                 onSelectionChanged: (selection) {
                   ref.read(settingsProvider.notifier).setThemeMode(selection.first);
+                },
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Beta-Funktionen',
+              style: TextStyle(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 16),
+            SettingsCard(
+              color: AppPalette.warning,
+              borderColor: AppPalette.warningBorder,
+              icon: Icons.document_scanner_outlined,
+              iconColor: AppPalette.warningText,
+              title: 'Typenschild-OCR',
+              description:
+                  'Scannt Typenschilder per Kamera und übernimmt erkannte Daten in die Anlagefelder.',
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Typenschild-OCR aktivieren'),
+                subtitle: const Text('Experimentelle Funktion – noch nicht freigegeben'),
+                value: settings.typenschildOcrEnabled,
+                onChanged: (value) {
+                  ref.read(settingsProvider.notifier).setTypenschildOcrEnabled(value);
                 },
               ),
             ),

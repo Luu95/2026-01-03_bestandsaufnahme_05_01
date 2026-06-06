@@ -913,7 +913,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       return list;
     }
     return Padding(
-      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 16, top: 12),
+      padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8, top: 4),
       child: list,
     );
   }

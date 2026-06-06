@@ -8,6 +8,7 @@ import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/csv_settings_provider.dart';
 import '../../database/database_service.dart';
 import '../../providers/database_provider.dart';
+import '../../theme/app_palette.dart';
 import '../../services/template_service.dart';
 
 /// Ergebnis der Verortungs-Auswahl beim Anlegen einer neuen Anlage.
@@ -557,14 +558,14 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
+                  color: AppPalette.primary.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   widget.placementMode
                       ? Icons.add_location_alt
                       : Icons.drive_file_move,
-                  color: Colors.blue[700],
+                  color: AppPalette.primaryDark,
                   size: 24,
                 ),
               ),
@@ -753,21 +754,21 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.orange[50],
+                  color: AppPalette.warningSurface,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange[200]!),
+                  border: Border.all(color: AppPalette.warningBorder),
                 ),
                 child: Row(
                   children: [
                     Icon(Icons.warning_amber_rounded,
-                        color: Colors.orange[700], size: 20),
+                        color: AppPalette.warning, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Gemischte Auswahl: Es kann nur das Gewerk geändert werden. Die Hierarchie bleibt unverändert.',
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.orange[900],
+                          color: AppPalette.warningText,
                         ),
                       ),
                     ),
@@ -778,21 +779,21 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.blue[50],
+                  color: AppPalette.successSurface,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue[200]!),
+                  border: Border.all(color: AppPalette.border),
                 ),
                 child: Row(
                   children: [
                     Icon(Icons.info_outline,
-                        color: Colors.blue[700], size: 20),
+                        color: AppPalette.primaryDark, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Anlagen bleiben auf der Hauptebene und können nicht unter andere Anlagen verschoben werden.',
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.blue[900],
+                          color: AppPalette.primaryDark,
                         ),
                       ),
                     ),
@@ -825,7 +826,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                         : _executeMove,
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      backgroundColor: Colors.blue[600],
+                      backgroundColor: AppPalette.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),

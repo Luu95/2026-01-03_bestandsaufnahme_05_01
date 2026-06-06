@@ -12,6 +12,7 @@ import '../providers/csv_settings_provider.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_column_layout.dart';
 import '../utils/csv_utils.dart';
+import '../theme/app_palette.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
 void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
@@ -136,73 +137,57 @@ class TemplateService {
     return row[idx].toString().trim();
   }
 
-  /// Parst Optionen-String (Semikolon- oder Komma-getrennt) in eine Liste.
-  static List<String> _parseOptions(String? optionsStr) {
-    if (optionsStr == null || optionsStr.trim().isEmpty) return [];
-    final s = optionsStr.trim();
-    final split = s.contains(';') ? s.split(';') : s.split(',');
-    return split.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-  }
 
-  /// Baut aus einer CSV-Zeile die Attribut-Definitionen (Vierergruppen) ab [startColumn].
+  /// Baut aus einer CSV-Zeile Attribut-Definitionen (Dreiergruppen) ab [startColumn].
   static String _buildParameterJsonFromAttributeQuadruplets(List<dynamic> row, int startColumn) {
     final schema = <Map<String, dynamic>>[];
-    for (var i = startColumn; i + 3 < row.length; i += 4) {
+    for (var i = startColumn; i + 2 < row.length; i += 3) {
       final name = _safeCell(row, i);
       if (name.isEmpty) continue;
-      schema.add(_schemaEntryFromQuadrupletCells(
+      schema.add(_schemaEntryFromTripletCells(
         name,
         _safeCell(row, i + 1),
         _safeCell(row, i + 2),
-        _safeCell(row, i + 3),
       ));
     }
     if (schema.isEmpty) return '';
     return json.encode({'_schema': schema});
   }
 
-  static Map<String, dynamic> _schemaEntryFromQuadrupletCells(
+  static Map<String, dynamic> _schemaEntryFromTripletCells(
     String name,
     String typeStr,
-    String optionsStr,
-    String artStr,
-  ) {
-    final normalizedType = typeStr.toLowerCase();
-    String type = 'text';
-    if (normalizedType == 'select' || normalizedType == 'dropdown') {
-      type = 'dropdown';
-    } else if (normalizedType == 'int' || normalizedType == 'number') {
-      type = 'number';
-    } else if (normalizedType.isNotEmpty) {
-      type = normalizedType;
-    }
-    final entry = <String, dynamic>{
-      'key': name,
-      'label': name,
-      'type': type,
-    };
-    final options = _parseOptions(optionsStr);
-    if (options.isNotEmpty) entry['options'] = options;
-    final art = artStr.trim();
-    if (art.isNotEmpty) entry['art'] = art;
-    return entry;
+    String artStr, {
+    String? legacyOptionsStr,
+  }) {
+    return CsvSettings.schemaFieldFromGewerkeTypeCell(
+      name,
+      typeStr,
+      legacyOptionsStr: legacyOptionsStr,
+      artStr: artStr,
+    );
   }
 
-  /// Baut Attribut-Schema aus konfigurierten Spalten-Vierergruppen.
+  /// Baut Attribut-Schema aus konfigurierten Spalten-Dreiergruppen (Header-Mapping).
   static String _buildParameterJsonFromConfiguredQuadruplets(
     List<dynamic> row,
     List<AttributeTripletColumn> quadruplets,
   ) {
     final schema = <Map<String, dynamic>>[];
-    for (final group in quadruplets) {
+    for (var i = 0; i < quadruplets.length; i++) {
+      final group = quadruplets[i];
       final name = _safeCell(row, group.nameColumn);
       if (name.isEmpty) continue;
-      schema.add(_schemaEntryFromQuadrupletCells(
+      final entry = _schemaEntryFromTripletCells(
         name,
         _safeCell(row, group.typeColumn),
-        _safeCell(row, group.optionsColumn),
         _safeCell(row, group.artColumn),
-      ));
+        legacyOptionsStr: group.optionsColumn >= 0
+            ? _safeCell(row, group.optionsColumn)
+            : null,
+      );
+      entry['attSlot'] = i + 1;
+      schema.add(entry);
     }
     if (schema.isEmpty) return '';
     return json.encode({'_schema': schema});
@@ -225,7 +210,9 @@ class TemplateService {
   ) {
     final schema = <Map<String, dynamic>>[];
     final seen = <String>{};
-    for (final pair in pairs) {
+    for (var i = 0; i < pairs.length; i++) {
+      final pair = pairs[i];
+      final attSlot = CsvSettings.attSlotForPair(pair, i);
       final label = _safeCell(row, pair.nameColumn);
       if (label.isEmpty || CsvSettings.isAnlagenCsvColumnParamKey(label)) {
         continue;
@@ -237,6 +224,7 @@ class TemplateService {
         'key': key,
         'label': label,
         'type': 'text',
+        'attSlot': attSlot,
       });
     }
     if (schema.isEmpty) return '';
@@ -350,8 +338,8 @@ class TemplateService {
       }
     }
     final scanStart = _firstAttributeScanColumn(csvSettings);
-    if (requiredMaxIndex < scanStart + 3) {
-      requiredMaxIndex = scanStart + 3;
+    if (requiredMaxIndex < scanStart + 2) {
+      requiredMaxIndex = scanStart + 2;
     }
 
     // Delimiter-Sniffing anhand der konfigurierten Hierarchie-Spalten
@@ -469,19 +457,10 @@ class TemplateService {
   }
 
   static Disziplin _defaultDisciplineForGewerk(String gewerk) {
-    const palette = [
-      Color(0xFF5C6BC0),
-      Color(0xFF43A047),
-      Color(0xFFFB8C00),
-      Color(0xFF8E24AA),
-      Color(0xFF00ACC1),
-      Color(0xFFE53935),
-    ];
-    final color = palette[gewerk.hashCode.abs() % palette.length];
     return Disziplin(
       label: gewerk,
       icon: Icons.folder_open,
-      color: color,
+      color: AppPalette.primary,
       schema: const [],
       revisionsobjektSchemas: const {},
     );
@@ -784,6 +763,42 @@ class TemplateService {
     return byKey.values.toList();
   }
 
+  /// Ergänzt Felder (z. B. aus Import-Params) mit Metadaten aus der Gewerkevorlage (art, type, …).
+  static List<Map<String, dynamic>> enrichSchemaFieldsFromMaster(
+    List<Map<String, dynamic>> fields,
+    List<Map<String, dynamic>> master,
+  ) {
+    if (master.isEmpty || fields.isEmpty) return fields;
+
+    final byKey = <String, Map<String, dynamic>>{};
+    final byLabel = <String, Map<String, dynamic>>{};
+    for (final m in master) {
+      final key = (m['key'] ?? '').toString();
+      final label = (m['label'] ?? '').toString().trim().toLowerCase();
+      if (key.isNotEmpty) byKey[key] = m;
+      if (label.isNotEmpty) byLabel[label] = m;
+    }
+
+    return fields.map((field) {
+      final copy = Map<String, dynamic>.from(field);
+      final key = (field['key'] ?? '').toString();
+      final label = (field['label'] ?? '').toString().trim().toLowerCase();
+      final src = byKey[key] ??
+          (label.isNotEmpty ? byLabel[label] : null);
+      if (src == null) return copy;
+      for (final meta in ['art', 'type', 'options', 'editable', 'label']) {
+        final existing = copy[meta];
+        final fromMaster = src[meta];
+        if ((existing == null ||
+                (existing is String && existing.toString().trim().isEmpty)) &&
+            fromMaster != null) {
+          copy[meta] = fromMaster;
+        }
+      }
+      return copy;
+    }).toList();
+  }
+
   /// Findet den gespeicherten Revisionsobjekt-Key zu einem Anzeige-/Gruppenwert.
   static String? resolveRevisionsobjektKeyForValue(
     Disziplin discipline,
@@ -897,7 +912,7 @@ class TemplateService {
     return Disziplin(
       label: discipline.label,
       icon: discipline.icon,
-      color: discipline.color,
+      color: AppPalette.primary,
       schema: CsvSettings.filterSchemaFieldsForDialog(flatSchema),
       groupingKey: discipline.groupingKey,
       revisionsobjektSchemas: mergedRoSchemas.map(

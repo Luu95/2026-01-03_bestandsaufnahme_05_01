@@ -12,6 +12,7 @@ import '../../models/floor_plan.dart';
 import '../floor_plan_page.dart';
 import '../../providers/projects_provider.dart';
 import '../../providers/database_provider.dart';
+import '../../theme/app_palette.dart';
 
 class FloorPlansTab extends ConsumerStatefulWidget {
   final Building building;
@@ -155,12 +156,12 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Color.lerp(Colors.white, Colors.indigo.shade50, 0.18),
+        color: Color.lerp(Colors.white, AppPalette.surface, 0.18),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: widget.isSelectionMode && isSelected
               ? Theme.of(context).primaryColor.withOpacity(0.35)
-              : (isExpanded ? Colors.indigo.withOpacity(0.28) : Colors.grey.withOpacity(0.15)),
+              : (isExpanded ? AppPalette.primary.withOpacity(0.28) : Colors.grey.withOpacity(0.15)),
           width: isExpanded ? 1.5 : 1,
         ),
         boxShadow: [
@@ -210,8 +211,8 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
                                     Theme.of(context).primaryColor.withOpacity(0.10),
                                   ]
                                 : [
-                                    Colors.indigo.withOpacity(0.18),
-                                    Colors.indigo.withOpacity(0.08),
+                                    AppPalette.primary.withOpacity(0.18),
+                                    AppPalette.primary.withOpacity(0.08),
                                   ],
                           ),
                           borderRadius: BorderRadius.circular(10),
@@ -220,7 +221,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
                           Icons.layers,
                           color: widget.isSelectionMode && isSelected
                               ? Theme.of(context).primaryColor
-                              : Colors.indigo,
+                              : AppPalette.primary,
                           size: 20,
                         ),
                       ),
@@ -241,7 +242,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: (hasPdf ? Colors.redAccent : Colors.grey).withOpacity(0.10),
+                          color: (hasPdf ? AppPalette.primary : Colors.grey).withOpacity(0.10),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
@@ -249,27 +250,27 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: hasPdf ? Colors.redAccent : Colors.grey[700],
+                            color: hasPdf ? AppPalette.primary : Colors.grey[700],
                           ),
                         ),
                       ),
                       const SizedBox(width: 10),
                       if (widget.isSelectionMode)
                         (isSelected
-                            ? const Icon(Icons.check_circle, color: Colors.blueAccent)
+                            ? Icon(Icons.check_circle, color: AppPalette.primary)
                             : const Icon(Icons.radio_button_unchecked, color: Colors.grey))
                       else
                         Container(
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
                             color: isExpanded
-                                ? Colors.indigo.withOpacity(0.10)
+                                ? AppPalette.primary.withOpacity(0.10)
                                 : Colors.grey.withOpacity(0.10),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Icon(
                             isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                            color: isExpanded ? Colors.indigo : Colors.grey[600],
+                            color: isExpanded ? AppPalette.primary : Colors.grey[600],
                             size: 22,
                           ),
                         ),
@@ -291,7 +292,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
                             contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                             leading: Icon(
                               hasPdf ? Icons.picture_as_pdf : Icons.upload_file,
-                              color: hasPdf ? Colors.redAccent : Colors.indigo,
+                              color: hasPdf ? AppPalette.primary : AppPalette.iconMuted,
                             ),
                             title: Text(
                               hasPdf

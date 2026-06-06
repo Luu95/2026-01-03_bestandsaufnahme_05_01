@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/disziplin_manager.dart';
+import '../theme/app_palette.dart';
 import '../models/project.dart';
 import '../models/building.dart';
 import '../models/floor_plan.dart';
@@ -46,6 +47,7 @@ import 'app_settings_page.dart';
 import 'csv_settings_page.dart';
 import 'recycle_bin_page.dart';
 import 'widgets/confirm_delete_dialog.dart';
+import 'widgets/systems_list_tile_styles.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
 void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
@@ -395,13 +397,13 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.share, color: Colors.blue),
+              leading: const Icon(Icons.share, color: AppPalette.primary),
               title: const Text('Teilen'),
               subtitle: const Text('Per E-Mail, Messenger etc. versenden'),
               onTap: () => Navigator.of(context).pop(ExportDestination.share),
             ),
             ListTile(
-              leading: const Icon(Icons.save_alt, color: Colors.green),
+              leading: const Icon(Icons.save_alt, color: AppPalette.primary),
               title: const Text('Auf Gerät speichern'),
               subtitle: const Text('In Dateien oder Downloads ablegen'),
               onTap: () => Navigator.of(context).pop(ExportDestination.saveToDevice),
@@ -463,13 +465,13 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.table_chart, color: Colors.blue),
+                leading: const Icon(Icons.table_chart, color: AppPalette.primary),
                 title: const Text('Nur CSV exportieren'),
                 subtitle: const Text('Exportiert nur die CSV-Datei ohne Fotos'),
                 onTap: () => Navigator.of(context).pop('csv'),
               ),
               ListTile(
-                leading: const Icon(Icons.archive, color: Colors.green),
+                leading: const Icon(Icons.archive, color: AppPalette.primary),
                 title: const Text('ZIP mit Fotos exportieren'),
                 subtitle: const Text('Exportiert CSV + Fotos in ZIP-Archiv'),
                 onTap: () => Navigator.of(context).pop('zip'),
@@ -557,19 +559,19 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.folder, color: Colors.blue),
+                  leading: const Icon(Icons.folder, color: AppPalette.primary),
                   title: const Text('Nach Anlagen'),
                   subtitle: const Text('Jede Anlage hat einen eigenen Ordner'),
                   onTap: () => Navigator.of(context).pop(PhotoExportStructure.byAnlage),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.category, color: Colors.green),
+                  leading: const Icon(Icons.category, color: AppPalette.primary),
                   title: const Text('Nach Gewerken'),
                   subtitle: const Text('Fotos nach Gewerken gruppiert'),
                   onTap: () => Navigator.of(context).pop(PhotoExportStructure.byGewerk),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.folder_open, color: Colors.orange),
+                  leading: const Icon(Icons.folder_open, color: AppPalette.primaryLight),
                   title: const Text('Alle in einem Ordner'),
                   subtitle: const Text('Alle Fotos in einem Ordner'),
                   onTap: () => Navigator.of(context).pop(PhotoExportStructure.allInOne),
@@ -2100,7 +2102,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           await _openAddAnlageWithPlacement(discipline);
         },
         tooltip: '$leafLabel hinzufügen',
-        backgroundColor: Colors.green,
+        backgroundColor: SystemsOverviewPalette.primary,
         child: const Icon(Icons.add, color: Colors.white),
       );
     }
@@ -2122,7 +2124,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               icon: Icons.add,
               tooltip: '$leafLabel hinzufügen',
               onPressed: _openAddAnlageForGroupContext,
-              backgroundColor: Colors.green,
+              backgroundColor: SystemsOverviewPalette.primary,
             ),
           );
         }
@@ -2133,7 +2135,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               icon: Icons.edit,
               tooltip: 'Gewerk bearbeiten',
               onPressed: _editSelectedDiscipline,
-              backgroundColor: Colors.blue,
+              backgroundColor: SystemsOverviewPalette.primaryLight,
             ),
           );
           final leafLabel = _currentProject.id.isNotEmpty
@@ -2149,7 +2151,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   await _openAddAnlageWithPlacement(d);
                 }
               },
-              backgroundColor: Colors.green,
+              backgroundColor: SystemsOverviewPalette.primary,
             ),
           );
         }
@@ -2158,7 +2160,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             icon: Icons.delete_outline,
             tooltip: 'Gewerk löschen',
             onPressed: _deleteSelectedDiscipline,
-            backgroundColor: Colors.red,
+            backgroundColor: SystemsOverviewPalette.primaryDark,
           ),
         );
       } else if (inSystemsSelection) {
@@ -2189,7 +2191,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                 icon: Icons.add,
                 tooltip: '$childLabel hinzufügen',
                 onPressed: _openBulkAddBauteilForSystemsSelection,
-                backgroundColor: Colors.green,
+                backgroundColor: SystemsOverviewPalette.primary,
               ),
             );
           }
@@ -2198,7 +2200,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               icon: Icons.drive_file_move,
               tooltip: 'Verschieben',
               onPressed: _openMoveDialogForSystemsSelection,
-              backgroundColor: Colors.orange,
+              backgroundColor: SystemsOverviewPalette.primaryMuted,
             ),
           );
         }
@@ -2215,7 +2217,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               return 'Ausgewählte $label löschen';
             }(),
             onPressed: _handleDeleteSelectedAnlagen,
-            backgroundColor: Colors.red,
+            backgroundColor: SystemsOverviewPalette.primaryDark,
           ),
         );
       } else if (inFloorplansSelection) {
@@ -2225,7 +2227,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             icon: Icons.delete_outline,
             tooltip: 'Ausgewählte Grundrisse löschen',
             onPressed: _handleDeleteSelectedFloors,
-            backgroundColor: Colors.red,
+            backgroundColor: SystemsOverviewPalette.primaryDark,
           ),
         );
       }
@@ -2628,12 +2630,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
+                        color: AppPalette.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
                         Icons.folder,
-                        color: Colors.blue[700],
+                        color: AppPalette.primaryDark,
                         size: 20,
                       ),
                     ),
@@ -2674,7 +2676,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           child: Icon(
                             Icons.add_circle_outline,
                             size: 22,
-                            color: Colors.blue[600],
+                            color: AppPalette.primary,
                           ),
                         ),
                       ),
@@ -2765,14 +2767,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                       decoration: BoxDecoration(
                                         color: isSelected
                                             ? Theme.of(context).primaryColor.withOpacity(0.15)
-                                            : Colors.blue.withOpacity(0.1),
+                                            : AppPalette.primary.withOpacity(0.1),
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Icon(
                                         Icons.folder,
                                         color: isSelected
                                             ? Theme.of(context).primaryColor
-                                            : Colors.blue[700],
+                                            : AppPalette.primaryDark,
                                         size: 20,
                                       ),
                                     ),
@@ -2909,12 +2911,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.1),
+                        color: AppPalette.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
                         Icons.location_city,
-                        color: Colors.orange[700],
+                        color: AppPalette.primary,
                         size: 20,
                       ),
                     ),
@@ -2945,7 +2947,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                             child: Icon(
                               Icons.add_circle_outline,
                               size: 22,
-                              color: Colors.orange[600],
+                              color: AppPalette.primaryLight,
                             ),
                           ),
                         ),
@@ -2993,12 +2995,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           margin: const EdgeInsets.only(bottom: 6),
                           decoration: BoxDecoration(
                             color: isBldgSelected
-                                ? Colors.orange.withOpacity(0.1)
+                                ? AppPalette.primary.withOpacity(0.1)
                                 : Theme.of(context).colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: isBldgSelected
-                                  ? Colors.orange.withOpacity(0.3)
+                                  ? AppPalette.primary.withOpacity(0.3)
                                   : Colors.transparent,
                               width: 1,
                             ),
@@ -3032,15 +3034,15 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                       padding: const EdgeInsets.all(8),
                                       decoration: BoxDecoration(
                                         color: isBldgSelected
-                                            ? Colors.orange.withOpacity(0.15)
-                                            : Colors.orange.withOpacity(0.1),
+                                            ? AppPalette.primary.withOpacity(0.15)
+                                            : AppPalette.primary.withOpacity(0.1),
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Icon(
                                         Icons.location_city,
                                         color: isBldgSelected
-                                            ? Colors.orange[700]
-                                            : Colors.orange[600],
+                                            ? AppPalette.primaryDark
+                                            : AppPalette.primary,
                                         size: 20,
                                       ),
                                     ),
@@ -3054,7 +3056,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                               ? FontWeight.w600
                                               : FontWeight.w500,
                                           color: isBldgSelected
-                                              ? Colors.orange[700]
+                                              ? AppPalette.primaryDark
                                               : Colors.grey[900],
                                         ),
                                       ),
@@ -3067,12 +3069,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                           shape: BoxShape.circle,
                                           border: Border.all(
                                             color: isChecked
-                                                ? Colors.orange[600]!
+                                                ? AppPalette.primaryLight
                                                 : Colors.grey[400]!,
                                             width: 2,
                                           ),
                                           color: isChecked
-                                              ? Colors.orange[600]
+                                              ? AppPalette.primaryLight
                                               : Colors.transparent,
                                         ),
                                         child: isChecked
@@ -3086,7 +3088,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                                     else if (isBldgSelected)
                                       Icon(
                                         Icons.check_circle,
-                                        color: Colors.orange[700],
+                                        color: AppPalette.primaryDark,
                                         size: 22,
                                       ),
                                   ],
@@ -3115,21 +3117,21 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   _buildActionButton(
                     icon: Icons.download_rounded,
                     label: 'CSV importieren',
-                    color: Colors.green,
+                    color: AppPalette.success,
                     onTap: () => _importCsv(),
                   ),
                   const SizedBox(height: 8),
                   _buildActionButton(
                     icon: Icons.upload_rounded,
                     label: 'CSV exportieren',
-                    color: Colors.blue,
+                    color: AppPalette.primary,
                     onTap: () => _exportCsv(),
                   ),
                   const SizedBox(height: 8),
                   _buildActionButton(
                     icon: Icons.tune_rounded,
                     label: 'Allgemeine Einstellungen',
-                    color: Colors.indigo,
+                    color: AppPalette.primary,
                     onTap: () {
                       final projects = ref.read(projectsProvider).projects;
                       Navigator.of(context).push(
@@ -3149,7 +3151,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   _buildActionButton(
                     icon: Icons.settings_rounded,
                     label: 'CSV-Einstellungen',
-                    color: Colors.purple,
+                    color: AppPalette.primaryLight,
                     onTap: () async {
                       await Navigator.of(context).push(
                         MaterialPageRoute(

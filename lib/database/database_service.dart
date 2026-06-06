@@ -12,6 +12,7 @@ import '../models/floor_plan.dart' as models;
 import '../models/anlage.dart' as models;
 import '../models/attachments.dart' as models;
 import '../models/disziplin_schnittstelle.dart';
+import '../theme/app_palette.dart';
 
 //
 
@@ -433,15 +434,26 @@ class DatabaseService {
     );
   }
 
-  /// Listen/Übersicht: Gebäude-Disziplin + Params, ohne Schema-Merge pro Zeile.
+  /// Listen/Übersicht: Gebäude-Disziplin + gespeichertes Anlagen-Schema (für Export/Dialog).
   models.Anlage _anlageRowToModelLight(AnlageDb row, Disziplin? currentDiscipline) {
-    final discipline = currentDiscipline ??
-        Disziplin(
-          label: row.markerType,
-          icon: Icons.build,
-          color: Colors.blueGrey,
-          schema: const <Map<String, dynamic>>[],
-        );
+    Disziplin discipline;
+    try {
+      final storedDiscipline = Disziplin.fromJson(
+        json.decode(row.discipline) as Map<String, dynamic>,
+      );
+      discipline = _mergeDisciplineSchema(
+        base: currentDiscipline ?? storedDiscipline,
+        fromAnlage: storedDiscipline,
+      );
+    } catch (_) {
+      discipline = currentDiscipline ??
+          Disziplin(
+            label: row.markerType,
+            icon: Icons.build,
+            color: AppPalette.primary,
+            schema: const <Map<String, dynamic>>[],
+          );
+    }
 
     final rawParams = json.decode(row.params);
     final baseParams = rawParams is Map

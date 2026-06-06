@@ -7,6 +7,7 @@ import '../models/project.dart';
 import '../providers/database_provider.dart';
 import '../providers/projects_provider.dart';
 import 'widgets/confirm_delete_dialog.dart';
+import '../theme/app_palette.dart';
 
 class RecycleBinPage extends ConsumerStatefulWidget {
   const RecycleBinPage({super.key});
@@ -164,12 +165,12 @@ class _RecycleBinPageState extends ConsumerState<RecycleBinPage> {
           children: [
             IconButton(
               tooltip: 'Wiederherstellen',
-              icon: Icon(Icons.restore, color: Colors.green[700]),
+              icon: Icon(Icons.restore, color: AppPalette.success),
               onPressed: onRestore,
             ),
             IconButton(
               tooltip: 'Endgültig löschen',
-              icon: Icon(Icons.delete_forever, color: Colors.red[700]),
+              icon: Icon(Icons.delete_forever, color: AppPalette.error),
               onPressed: onPermanentDelete,
             ),
           ],

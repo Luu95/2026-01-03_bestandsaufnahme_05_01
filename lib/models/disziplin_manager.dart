@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 import 'disziplin_schnittstelle.dart'; // Nutzung des zentralen Disziplin-Modells
+import '../theme/app_palette.dart';
 import '../utils/delete_utils.dart'; // Für Bestätigungsdialog
 import '../providers/database_provider.dart';
 import '../providers/projects_provider.dart';
@@ -87,7 +88,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
                   itemBuilder: (ctx, idx) {
                     final d = disziplinen[idx];
                     return ListTile(
-                      leading: Icon(d.icon, color: d.color),
+                      leading: Icon(d.icon, color: d.uiColor),
                       title: Text(d.label),
                       onTap: () => Navigator.of(ctx).pop(idx),
                     );
@@ -123,7 +124,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
         disziplinen[index] = Disziplin(
           label: d.label,
           icon: d.icon,
-          color: d.color,
+          color: AppPalette.primary,
           schema: newSchema,
           groupingKey: d.groupingKey,
         );
@@ -289,14 +290,14 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
             background: Container(
               alignment: Alignment.centerRight,
               padding: const EdgeInsets.only(right: 20),
-              color: Colors.red,
+              color: AppPalette.destructive,
               child: const Icon(Icons.delete, color: Colors.white),
             ),
             onDismissed: (_) => _deleteDisziplin(i),
             child: ListTile(
               leading: CircleAvatar(
-                backgroundColor: d.color.withOpacity(0.2),
-                child: Icon(d.icon, color: d.color),
+                backgroundColor: d.uiBackground,
+                child: Icon(d.icon, color: d.uiColor),
               ),
               title: Text(d.label),
               selected: isSelected,
@@ -336,7 +337,7 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
     super.initState();
     nameCtrl = TextEditingController(text: widget.disziplin?.label ?? '');
     selectedIcon = widget.disziplin?.icon ?? Icons.build;
-    selectedColor = widget.disziplin?.color ?? Colors.blue;
+    selectedColor = AppPalette.primary;
     _loadGlobalSchema();
   }
 
@@ -442,7 +443,7 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
                     Navigator.pop(context, Disziplin(
                       label: nameCtrl.text.trim(),
                       icon: selectedIcon,
-                      color: selectedColor,
+                      color: AppPalette.primary,
                       schema: widget.disziplin?.schema ?? _globalSchema ?? [],
                     ));
                   },

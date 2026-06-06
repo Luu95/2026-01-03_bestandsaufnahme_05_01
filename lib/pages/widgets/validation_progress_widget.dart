@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../../services/anlage_validation_service.dart';
+import '../../theme/app_palette.dart';
 
 /// Motivierendes Widget zur Anzeige des Validierungsfortschritts
 class ValidationProgressWidget extends StatelessWidget {
@@ -40,38 +41,28 @@ class ValidationProgressWidget extends StatelessWidget {
       );
     }
 
-    final isComplete = progress.percentage >= 100;
-    final isAlmostComplete = progress.percentage >= 80;
-    final percentageColor = isComplete
-        ? Colors.green
-        : isAlmostComplete
-            ? Colors.orange
-            : Colors.blue;
+    final percentageColor = AppPalette.progressColor(progress.percentage);
 
     // Motivierende Nachricht basierend auf Fortschritt
     String motivationText;
     IconData motivationIcon;
-    Color motivationColor;
+    final motivationColor = AppPalette.progressMotivationColor(progress.percentage);
 
-    if (isComplete) {
+    if (progress.percentage >= 100) {
       motivationText = '🎉 Alle $leafLevelLabelPlural validiert! Perfekt!';
       motivationIcon = Icons.celebration;
-      motivationColor = Colors.green;
-    } else if (isAlmostComplete) {
+    } else if (progress.percentage >= 80) {
       motivationText =
           '💪 Fast geschafft! Noch ${progress.remaining} offen';
       motivationIcon = Icons.trending_up;
-      motivationColor = Colors.orange;
     } else if (progress.percentage >= 50) {
       motivationText =
           '🔥 Gute Arbeit! Noch ${progress.remaining} zu bearbeiten';
       motivationIcon = Icons.local_fire_department;
-      motivationColor = Colors.deepOrange;
     } else {
       motivationText =
           '📋 Los geht\'s! ${progress.remaining} warten auf Validierung';
       motivationIcon = Icons.assignment;
-      motivationColor = Colors.blue;
     }
 
     return Card(
@@ -194,21 +185,21 @@ class ValidationProgressWidget extends StatelessWidget {
                     Icons.check_circle,
                     '${progress.validated}',
                     'Validiert',
-                    Colors.green,
+                    AppPalette.success,
                   ),
                   _buildStatItem(
                     context,
                     Icons.pending,
                     '${progress.remaining}',
                     'Offen',
-                    Colors.orange,
+                    AppPalette.warning,
                   ),
                   _buildStatItem(
                     context,
                     Icons.list,
                     '${progress.total}',
                     'Gesamt',
-                    Colors.blue,
+                    AppPalette.primary,
                   ),
                 ],
               ),
@@ -256,4 +247,3 @@ class ValidationProgressWidget extends StatelessWidget {
     );
   }
 }
-

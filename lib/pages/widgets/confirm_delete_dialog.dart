@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../theme/app_palette.dart';
 
 /// Bestätigungsdialog: Löschen erst nach exakter Eingabe des Elementnamens.
 Future<bool> showConfirmDeleteDialog(
@@ -62,13 +63,13 @@ class _ConfirmDeleteDialogState extends State<_ConfirmDeleteDialog> {
               child: Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
+                  color: AppPalette.errorSurface,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   widget.isPermanent ? Icons.delete_forever : Icons.delete_outline,
                   size: 32,
-                  color: Colors.red[700],
+                  color: AppPalette.error,
                 ),
               ),
             ),
@@ -126,7 +127,7 @@ class _ConfirmDeleteDialogState extends State<_ConfirmDeleteDialog> {
                   child: ElevatedButton(
                     onPressed: _canDelete ? () => Navigator.of(context).pop(true) : null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red[700],
+                      backgroundColor: AppPalette.destructive,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: Colors.grey[300],
                       padding: const EdgeInsets.symmetric(vertical: 14),

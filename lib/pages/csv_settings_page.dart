@@ -13,6 +13,7 @@ import '../services/anlagen_csv_import_service.dart';
 import '../services/template_service.dart';
 import '../providers/projects_provider.dart';
 import 'widgets/schema_editor_dialog.dart';
+import '../theme/app_palette.dart';
 import 'widgets/settings_card.dart';
 import '../utils/app_log.dart';
 
@@ -53,7 +54,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _displayNameParamKey = 'Name';
   int? _displayNameSpalte;
 
-  /// Attribut-Vierergruppen: Name, Typ, Optionen, Art (z. B. ATT1 … ATT1_ART).
+  /// Attribut-Dreiergruppen: Name, Typ, Wert/Art (z. B. ATT1 … ATT1_WERT).
   List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
   /// Attribut-Zweierpaare: ATTn + ATTn_wert (Anlagen-CSV).
   List<AttributeColumnPair> _attributeColumnPairs = [];
@@ -63,6 +64,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String? _foto2SpalteLabel;
   String? _foto3SpalteLabel;
   String? _foto4SpalteLabel;
+  String? _qrCodeNummerSpalteLabel;
 
   // TextEditingController müssen über Rebuilds stabil bleiben,
   // sonst springen Cursor/Selection/Fokus beim Tippen zurück.
@@ -78,6 +80,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _foto2SpalteLabelCtrl;
   late final TextEditingController _foto3SpalteLabelCtrl;
   late final TextEditingController _foto4SpalteLabelCtrl;
+  late final TextEditingController _qrCodeNummerSpalteLabelCtrl;
   late final TextEditingController _attrPairGenStartCtrl;
   late final TextEditingController _attrPairGenEndCtrl;
   late final TextEditingController _attrQuadGenStartCtrl;
@@ -121,6 +124,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
     _foto4SpalteLabelCtrl = TextEditingController(text: _foto4SpalteLabel ?? '');
+    _qrCodeNummerSpalteLabelCtrl = TextEditingController(text: _qrCodeNummerSpalteLabel ?? '');
     _attrPairGenStartCtrl = TextEditingController(text: '4');
     _attrPairGenEndCtrl = TextEditingController(text: '17');
     _attrQuadGenStartCtrl = TextEditingController(text: '4');
@@ -143,6 +147,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto2SpalteLabelCtrl.dispose();
     _foto3SpalteLabelCtrl.dispose();
     _foto4SpalteLabelCtrl.dispose();
+    _qrCodeNummerSpalteLabelCtrl.dispose();
     _attrPairGenStartCtrl.dispose();
     _attrPairGenEndCtrl.dispose();
     _attrQuadGenStartCtrl.dispose();
@@ -226,6 +231,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     if (_foto4SpalteLabelCtrl.text != f4) {
       _foto4SpalteLabelCtrl.value = TextEditingValue(text: f4, selection: TextSelection.collapsed(offset: f4.length));
     }
+    final qr = _qrCodeNummerSpalteLabel ?? '';
+    if (_qrCodeNummerSpalteLabelCtrl.text != qr) {
+      _qrCodeNummerSpalteLabelCtrl.value = TextEditingValue(text: qr, selection: TextSelection.collapsed(offset: qr.length));
+    }
   }
 
   Future<void> _loadAllData() async {
@@ -283,6 +292,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _foto2SpalteLabel = settings.foto2SpalteLabel;
         _foto3SpalteLabel = settings.foto3SpalteLabel;
         _foto4SpalteLabel = settings.foto4SpalteLabel;
+        _qrCodeNummerSpalteLabel = settings.qrCodeNummerSpalteLabel;
         _groupingGewerkParamKey = settings.groupingGewerkParamKey;
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
         _displayNameParamKey = settings.displayNameParamKey;
@@ -412,6 +422,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         foto2SpalteLabel: _foto2SpalteLabel,
         foto3SpalteLabel: _foto3SpalteLabel,
         foto4SpalteLabel: _foto4SpalteLabel,
+        qrCodeNummerSpalteLabel: _qrCodeNummerSpalteLabel,
         importHeaderRow: current.importHeaderRow,
         exportDelimiter: current.exportDelimiter,
         groupingGewerkParamKey: _groupingGewerkParamKey,
@@ -549,14 +560,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               _buildHeaderAction(
                 icon: Icons.upload_file,
                 label: 'Gewerkevorlagen',
-                color: Colors.orange,
+                color: AppPalette.warning,
                 imported: _projectTemplates.isNotEmpty,
                 onPressed: _importTemplates,
               ),
               _buildHeaderAction(
                 icon: Icons.download,
                 label: 'Anlagen-CSV',
-                color: Colors.green,
+                color: AppPalette.success,
                 imported: _hasAnlagenCsvImported,
                 onPressed: _importAnlagenCsv,
               ),
@@ -571,7 +582,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _buildHierarchyLevelCard(
             levelNum: 1,
             label: _labelGewerk,
-            color: Colors.blueGrey,
+            color: AppPalette.primaryDark,
             config: _level1,
             onChanged: (c) {
               setState(() {
@@ -585,7 +596,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _buildHierarchyLevelCard(
             levelNum: 2,
             label: _labelAnlage,
-            color: Colors.green,
+            color: AppPalette.primary,
             config: _level2,
             onChanged: (c) {
               setState(() {
@@ -599,7 +610,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           _buildHierarchyLevelCard(
             levelNum: 3,
             label: _labelBauteil,
-            color: Colors.orange,
+            color: AppPalette.primaryLight,
             config: _level3,
             isLeafLevel: true,
             onChanged: (c) {
@@ -613,6 +624,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           const SizedBox(height: 16),
           _buildCollapsibleAttributeQuadrupletsSection(),
           const SizedBox(height: 16),
+          _buildCollapsibleQrCodeSpalteSection(),
+          const SizedBox(height: 12),
           _buildCollapsibleFotoSpaltenSection(),
           const SizedBox(height: 16),
           ExpansionTile(
@@ -739,7 +752,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   _disciplines[_editingDisciplineIndex!] = Disziplin(
                     label: d.label,
                     icon: d.icon,
-                    color: d.color,
+                    color: AppPalette.primary,
                     schema: globalOnly,
                     groupingKey: d.groupingKey,
                     revisionsobjektSchemas: updatedRoSchemas,
@@ -848,10 +861,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       leading: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: d.color.withOpacity(0.1),
+                          color: d.uiBackground,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Icon(d.icon, color: d.color, size: 22),
+                        child: Icon(d.icon, color: d.uiColor, size: 22),
                       ),
                       title: Text(
                         d.label,
@@ -885,7 +898,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                               ),
                               leading: Icon(
                                 Icons.account_tree_outlined,
-                                color: d.color.withOpacity(0.8),
+                                color: d.uiColor.withOpacity(0.8),
                                 size: 20,
                               ),
                               title: Text(ro),
@@ -924,7 +937,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         ),
         title: const Row(
           children: [
-            Icon(Icons.upload_file, color: Colors.orange),
+            Icon(Icons.upload_file, color: AppPalette.warning),
             SizedBox(width: 8),
             Text('Vorlagen importieren'),
           ],
@@ -941,7 +954,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
+              backgroundColor: AppPalette.warning,
               foregroundColor: Colors.white,
             ),
             child: const Text('Importieren'),
@@ -1044,7 +1057,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         ),
         title: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+            Icon(Icons.warning_amber_rounded, color: AppPalette.error),
             const SizedBox(width: 8),
             const Text('Alle Vorlagen löschen?'),
           ],
@@ -1062,7 +1075,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: AppPalette.destructive,
               foregroundColor: Colors.white,
             ),
             child: const Text('Löschen'),
@@ -1171,20 +1184,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  Widget _buildCollapsibleFotoSpaltenSection() {
-    const color = Colors.teal;
-    final configuredCount = [
-      _foto1SpalteLabel,
-      _foto2SpalteLabel,
-      _foto3SpalteLabel,
-      _foto4SpalteLabel,
-    ].where((label) => (label?.trim().isNotEmpty ?? false)).length;
-    final subtitle = configuredCount == 0
-        ? 'Keine Spalten – zum Konfigurieren aufklappen'
-        : '$configuredCount Spalte${configuredCount == 1 ? '' : 'n'} konfiguriert';
+  Widget _buildCollapsibleQrCodeSpalteSection() {
+    const color = AppPalette.primary;
+    final subtitle = (_qrCodeNummerSpalteLabel?.trim().isNotEmpty ?? false)
+        ? 'Spalte „${_qrCodeNummerSpalteLabel!.trim()}“ konfiguriert'
+        : 'Keine Spalte – zum Konfigurieren aufklappen';
 
     return Container(
-      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
+      decoration: _themedSurfaceCardDecoration(context, borderColor: AppPalette.borderMuted),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -1197,7 +1204,61 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               color: color.withOpacity(0.12),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.photo_library, color: color, size: 24),
+            child: Icon(Icons.qr_code_2, color: color, size: 24),
+          ),
+          title: const Text(
+            'QR-Code-Nummer (Export)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
+          children: [
+            Text(
+              'Spalten-Label Ihrer CSV, in das beim Export die QR-Code-Nummer geschrieben wird. '
+              'Leer lassen = Spalte nicht verwenden.',
+              style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
+            ),
+            const SizedBox(height: 16),
+            _buildFotoSpalteField(
+              'QR-Code-Nummer Spalte',
+              _qrCodeNummerSpalteLabelCtrl,
+              (v) => setState(() {
+                _qrCodeNummerSpalteLabel = v.isEmpty ? null : v;
+                _scheduleAutoSave();
+              }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCollapsibleFotoSpaltenSection() {
+    const color = AppPalette.primary;
+    final configuredCount = [
+      _foto1SpalteLabel,
+      _foto2SpalteLabel,
+      _foto3SpalteLabel,
+      _foto4SpalteLabel,
+    ].where((label) => (label?.trim().isNotEmpty ?? false)).length;
+    final subtitle = configuredCount == 0
+        ? 'Keine Spalten – zum Konfigurieren aufklappen'
+        : '$configuredCount Spalte${configuredCount == 1 ? '' : 'n'} konfiguriert';
+
+    return Container(
+      decoration: _themedSurfaceCardDecoration(context, borderColor: AppPalette.borderMuted),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          leading: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.photo_library, color: color, size: 24),
           ),
           title: const Text(
             'Fotonummern-Spalten (Export)',
@@ -1342,17 +1403,17 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   }
 
   Widget _buildCollapsibleAttributeQuadrupletsSection() {
-    const color = Colors.deepPurple;
+    const color = AppPalette.primary;
     final groupCount = _attributeQuadrupletColumns.length;
     final pairCount = _attributeColumnPairs.length;
     final subtitle = pairCount > 0
         ? '$pairCount Zweierpaar${pairCount == 1 ? '' : 'e'} (Anlagen-CSV)'
         : groupCount == 0
-            ? 'Keine Vierergruppen – zum Konfigurieren aufklappen'
-            : '$groupCount Vierergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
+            ? 'Keine Dreiergruppen – zum Konfigurieren aufklappen'
+            : '$groupCount Dreiergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
 
     return Container(
-      decoration: _themedSurfaceCardDecoration(context, borderColor: color.shade200),
+      decoration: _themedSurfaceCardDecoration(context, borderColor: AppPalette.borderMuted),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -1365,26 +1426,28 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               color: color.withOpacity(0.12),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.view_column, color: color, size: 24),
+            child: Icon(Icons.view_column, color: color, size: 24),
           ),
           title: const Text(
-            'Attribut-Spalten (4er-Gruppen)',
+            'Attribut-Spalten (3er-Gruppen)',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
-              'Gewerkevorlagen: vier Spalten pro Attribut (ATT1, ATT1_TYPE, ATT1_OPTIONS, ATT1_ART) – unten als Vierergruppen eintragen. '
-              'Anlagen-Import: Zweier-Format (ATT1 + ATT1_wert) wird aus der Import-CSV automatisch erkannt; Werte werden den Feldern aus den Gewerkevorlagen zugeordnet.',
+              'Gewerkevorlagen: drei Spalten pro Attribut (ATT1, ATT1_TYPE, ATT1_WERT). '
+              'TYPE: Freitext, number oder Möglichkeit1|Möglichkeit2 (Dropdown). '
+              'Anlagen-Export: nur Bezeichnung + Wert-Spalten (ohne TYPE). '
+              'Anlagen-Import: Zweier-Format (ATT1 + ATT1_wert) wird automatisch erkannt.',
               style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
               decoration: BoxDecoration(
-                color: Colors.teal.withValues(alpha: 0.08),
+                color: AppPalette.surface,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.teal.withValues(alpha: 0.2)),
+                border: Border.all(color: AppPalette.borderMuted),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1392,7 +1455,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   Text(
                     'Zweierpaare aus Spaltenbereich erzeugen (Anlagen-CSV)',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: Colors.teal.shade700,
+                          color: AppPalette.primaryDark,
                           fontWeight: FontWeight.w600,
                         ),
                   ),
@@ -1491,16 +1554,16 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Vierergruppen aus Spaltenbereich erzeugen',
+                    'Dreiergruppen aus Spaltenbereich erzeugen',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: color.shade700,
+                          color: AppPalette.primaryDark,
                           fontWeight: FontWeight.w600,
                         ),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Reihenfolge: Name, Typ, Optionen, Art (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_OPTIONS/ATT1_ART, …). '
-                    'Die Spaltenanzahl im Bereich muss durch 4 teilbar sein.',
+                    'Reihenfolge: Name, Typ, Wert/Art (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_WERT, …). '
+                    'Die Spaltenanzahl im Bereich muss durch 3 teilbar sein.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurface,
                         ),
@@ -1538,7 +1601,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                       ),
                       FilledButton.icon(
                         icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Vierergruppen generieren'),
+                        label: const Text('Dreiergruppen generieren'),
                         onPressed: () {
                           final start = int.tryParse(_attrQuadGenStartCtrl.text.trim());
                           final end = int.tryParse(_attrQuadGenEndCtrl.text.trim());
@@ -1549,21 +1612,20 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                             return;
                           }
                           final count = end - start + 1;
-                          if (count % 4 != 0) {
+                          if (count % 3 != 0) {
                             _showAttrGenError(
-                              'Anzahl Spalten ($count) muss durch 4 teilbar sein.',
+                              'Anzahl Spalten ($count) muss durch 3 teilbar sein.',
                             );
                             return;
                           }
                           final startIndex = start - 1;
                           final endIndex = end - 1;
                           final groups = <AttributeTripletColumn>[];
-                          for (var i = startIndex; i <= endIndex; i += 4) {
+                          for (var i = startIndex; i <= endIndex; i += 3) {
                             groups.add(AttributeTripletColumn(
                               nameColumn: i,
                               typeColumn: i + 1,
-                              optionsColumn: i + 2,
-                              artColumn: i + 3,
+                              artColumn: i + 2,
                             ));
                           }
                           setState(() => _attributeQuadrupletColumns = groups);
@@ -1572,7 +1634,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
-                                '${groups.length} Vierergruppe${groups.length == 1 ? '' : 'n'} erzeugt',
+                                '${groups.length} Dreiergruppe${groups.length == 1 ? '' : 'n'} erzeugt',
                               ),
                               duration: const Duration(seconds: 2),
                             ),
@@ -1636,31 +1698,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                             csvHeaders: _mappingCsvHeaders,
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildColumnSelector(
-                            label: 'Optionen',
-                            value: group.optionsColumn,
-                            onChanged: (v) => _updateQuadrupletColumn(
-                              idx,
-                              AttributeTripletColumn(
-                                nameColumn: group.nameColumn,
-                                typeColumn: group.typeColumn,
-                                optionsColumn: v,
-                                artColumn: group.artColumn,
-                              ),
-                            ),
-                            csvHeaders: _mappingCsvHeaders,
-                          ),
-                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: _buildColumnSelector(
-                            label: 'Art',
+                            label: 'Wert/Art',
                             value: group.artColumn,
                             onChanged: (v) => _updateQuadrupletColumn(
                               idx,
@@ -1675,7 +1716,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                          icon: const Icon(Icons.remove_circle_outline, color: AppPalette.error),
                           onPressed: () {
                             setState(() {
                               _attributeQuadrupletColumns =
@@ -1694,7 +1735,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.add),
-              label: const Text('Vierergruppe hinzufügen'),
+              label: const Text('Dreiergruppe hinzufügen'),
               onPressed: () {
                 final maxCol = (_mappingCsvHeaders?.length ?? 20) - 1;
                 final used = _allReservedColumnIndices().toSet();
@@ -1705,18 +1746,15 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 while (used.contains(n) && n <= maxCol) n++;
                 var t = n + 1;
                 while (used.contains(t) && t <= maxCol) t++;
-                var o = t + 1;
-                while (used.contains(o) && o <= maxCol) o++;
-                var a = o + 1;
-                while (used.contains(a) && a <= maxCol) a++;
+                var v = t + 1;
+                while (used.contains(v) && v <= maxCol) v++;
                 setState(() {
                   _attributeQuadrupletColumns =
                       List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)
                         ..add(AttributeTripletColumn(
                           nameColumn: n,
                           typeColumn: t,
-                          optionsColumn: o,
-                          artColumn: a,
+                          artColumn: v,
                         ));
                 });
                 _scheduleAutoSave();
@@ -1959,14 +1997,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.red.shade50,
+        color: AppPalette.errorSurface,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red.shade200),
+        border: Border.all(color: AppPalette.errorBorder),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.red),
+          const Icon(Icons.warning_amber_rounded, color: AppPalette.error),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -1974,11 +2012,11 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               children: [
                 const Text(
                   'Spalten-Konflikt:',
-                  style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  style: TextStyle(color: AppPalette.error, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 ...conflicts.map(
-                  (m) => Text(m, style: TextStyle(color: Colors.red.shade800, fontSize: 13)),
+                  (m) => Text(m, style: TextStyle(color: AppPalette.primaryDark, fontSize: 13)),
                 ),
               ],
             ),
@@ -1988,7 +2026,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  Widget _buildInfoCard(String text, {Color color = Colors.blue}) {
+  Widget _buildInfoCard(String text, {Color color = AppPalette.primary}) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2052,7 +2090,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       style: OutlinedButton.styleFrom(
         foregroundColor: color,
         side: BorderSide(
-          color: imported ? Colors.green.shade400 : color.withValues(alpha: 0.5),
+          color: imported ? AppPalette.successBorder : color.withValues(alpha: 0.5),
           width: imported ? 1.5 : 1,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2065,7 +2103,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           Text(label),
           if (imported) ...[
             const SizedBox(width: 6),
-            Icon(Icons.check_circle, size: 16, color: Colors.green.shade600),
+            Icon(Icons.check_circle, size: 16, color: AppPalette.success),
           ],
         ],
       ),
@@ -2158,23 +2196,23 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.red.shade50,
+        color: AppPalette.errorSurface,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red.shade200),
+        border: Border.all(color: AppPalette.errorBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.warning_amber_rounded, size: 16, color: Colors.red.shade700),
+              Icon(Icons.warning_amber_rounded, size: 16, color: AppPalette.error),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   title,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.red.shade800,
+                    color: AppPalette.primaryDark,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -2186,7 +2224,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             description,
             style: TextStyle(
               fontSize: 11,
-              color: Colors.red.shade700,
+              color: AppPalette.error,
             ),
           ),
           const SizedBox(height: 12),
@@ -2197,9 +2235,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               icon: const Icon(Icons.delete_outline, size: 16),
               label: Text(buttonText, style: const TextStyle(fontSize: 12)),
               style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red.shade700,
+                foregroundColor: AppPalette.error,
                 padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                side: BorderSide(color: Colors.red.shade400),
+                side: const BorderSide(color: AppPalette.errorBorder),
               ),
             ),
           ),
@@ -2219,7 +2257,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         ),
         title: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.red.shade700),
+            Icon(Icons.warning_amber_rounded, color: AppPalette.error),
             const SizedBox(width: 8),
             const Text('Alle Daten löschen?'),
           ],
@@ -2240,7 +2278,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: AppPalette.destructive,
               foregroundColor: Colors.white,
             ),
             child: const Text('Löschen'),
@@ -2365,7 +2403,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 '${remainingDisciplines.length} Gewerke, '
                 '$remainingTemplates Vorlagen in der DB.',
               ),
-              backgroundColor: Colors.orange,
+              backgroundColor: AppPalette.warning,
             ),
           );
         } else {

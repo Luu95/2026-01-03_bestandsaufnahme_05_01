@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
 import '../../utils/app_log.dart';
+import '../../theme/app_palette.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
 void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
@@ -122,7 +123,7 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.error_outline, color: Colors.red, size: 64),
+              const Icon(Icons.error_outline, color: AppPalette.error, size: 64),
               const SizedBox(height: 20),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),

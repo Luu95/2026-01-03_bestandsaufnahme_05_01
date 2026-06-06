@@ -23,6 +23,7 @@ import '../models/floor_plan.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../pages/widgets/marker_form_dialog.dart';
 import '../providers/csv_settings_provider.dart';
+import '../theme/app_palette.dart';
 
 class FloorPlanFullScreen extends StatefulWidget {
   final Building building;
@@ -95,6 +96,12 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     setState(() {
       _disziplinen = list;
     });
+  }
+
+  Color _markerColorFor(Disziplin disziplin) {
+    final idx = _disziplinen.indexWhere((d) => d.label == disziplin.label);
+    if (idx >= 0) return AppPalette.shadeForIndex(idx);
+    return disziplin.uiColor;
   }
 
   @override
@@ -530,13 +537,13 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.share, color: Colors.blue),
+              leading: const Icon(Icons.share, color: AppPalette.primary),
               title: const Text('Teilen'),
               subtitle: const Text('Per E-Mail, Messenger etc. versenden'),
               onTap: () => Navigator.of(context).pop(ExportDestination.share),
             ),
             ListTile(
-              leading: const Icon(Icons.save_alt, color: Colors.green),
+              leading: const Icon(Icons.save_alt, color: AppPalette.primary),
               title: const Text('Auf Gerät speichern'),
               subtitle: const Text('In Dateien oder Downloads ablegen'),
               onTap: () => Navigator.of(context).pop(ExportDestination.saveToDevice),
@@ -578,7 +585,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             anchor: anchor,
             calloutTopLeft: calloutTopLeft,
             tailOnLeft: tailOnLeft,
-            accent: a.discipline.color,
+            accent: _markerColorFor(a.discipline),
             text: text,
           );
         }).toList();
@@ -991,6 +998,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                                         markerAnlagen: _markerAnlagen,
                                         getLabelOffset: _getLabelOffset,
                                         getLabelText: _markerLabel,
+                                        getMarkerColor: _markerColorFor,
                                         scale: scale,
                                       ),
                                     ),
@@ -999,7 +1007,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                                     for (final a in _markerAnlagen)
                                       Builder(builder: (_) {
                                         final disziplin = a.discipline;
-                                        final color = disziplin.color.withOpacity(0.85);
+                                        final color = _markerColorFor(disziplin).withOpacity(0.85);
 
                                         final mx = (a.markerInfo!['x'] as num).toDouble();
                                         final my = (a.markerInfo!['y'] as num).toDouble();
@@ -1100,7 +1108,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
                                                   },
                                                   child: _MarkerCalloutBubble(
                                                     text: _markerLabel(a),
-                                                    accent: disziplin.color,
+                                                    accent: _markerColorFor(disziplin),
                                                     tailOnLeft: tailOnLeft,
                                                   ),
                                                 ),
@@ -1169,12 +1177,14 @@ class _MarkerLeaderLinesPainter extends CustomPainter {
   final List<Anlage> markerAnlagen;
   final Offset Function(Anlage) getLabelOffset;
   final String Function(Anlage) getLabelText;
+  final Color Function(Disziplin) getMarkerColor;
   final double scale;
 
   _MarkerLeaderLinesPainter({
     required this.markerAnlagen,
     required this.getLabelOffset,
     required this.getLabelText,
+    required this.getMarkerColor,
     required this.scale,
   });
 
@@ -1236,14 +1246,16 @@ class _MarkerLeaderLinesPainter extends CustomPainter {
       );
       final target = calloutTopLeft + (localTargetPx / scale);
 
+      final markerColor = getMarkerColor(a.discipline);
+
       final paint = Paint()
-        ..color = a.discipline.color.withOpacity(0.75)
+        ..color = markerColor.withOpacity(0.75)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0 / scale
         ..strokeCap = StrokeCap.round;
 
       final dotPaint = Paint()
-        ..color = a.discipline.color.withOpacity(0.85)
+        ..color = markerColor.withOpacity(0.85)
         ..style = PaintingStyle.fill;
       canvas.drawCircle(anchor, 2.2 / scale, dotPaint);
 

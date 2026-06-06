@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/building.dart';
 import '../../models/floor_plan.dart';
 import '../systems_page.dart';
+import '../widgets/systems_list_tile_styles.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../models/disziplin_manager.dart';
 import '../../database/database_service.dart';
@@ -177,7 +178,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
                   icon: const Icon(Icons.add),
                   label: Text('${widget.labelLeafLevel} hinzufügen'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
+                    backgroundColor: SystemsOverviewPalette.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   ),
@@ -198,8 +199,8 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
                 icon: Icon(Icons.download),
                 label: Text('CSV importieren'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade50,
-                  foregroundColor: Colors.green.shade700,
+                  backgroundColor: SystemsOverviewPalette.surface,
+                  foregroundColor: SystemsOverviewPalette.primaryDark,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
                 onPressed: widget.onImportCsv,
@@ -214,7 +215,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
     if (disziplinen.length == 1) {
       final discipline = disziplinen.first;
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 88),
         child: SystemsPage(
           key: widget.systemsPageKeys[discipline],
           building: widget.building,
@@ -238,6 +239,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
     }
 
     return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 88, top: 4),
       itemCount: disziplinen.length,
       itemBuilder: (context, index) {
         final discipline = disziplinen[index];
@@ -245,199 +247,102 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
 
         final isSelected = widget.selectedDisciplineLabels.contains(discipline.label);
 
-        return InkWell(
-          borderRadius: BorderRadius.circular(16),
+        final headerDecoration = SystemsListTileStyles.groupContainer(
+          isExpanded: isExpanded || isSelected,
+          level: SystemsOverviewLevel.discipline,
+        );
+
+        return GestureDetector(
+          behavior: widget.disciplineSelectionMode
+              ? HitTestBehavior.opaque
+              : HitTestBehavior.deferToChild,
           onTap: widget.disciplineSelectionMode
               ? () => widget.onDisciplineSelectionToggle?.call(discipline)
               : null,
-          onLongPress: () {
-            // Long-Press soll den AppBar-Aktionsmodus öffnen (Edit/Add/Delete)
-            if (widget.onDisciplineLongPress != null) {
-              widget.onDisciplineLongPress!(discipline);
-            }
-          },
+          onLongPress: widget.disciplineSelectionMode
+              ? null
+              : () => widget.onDisciplineLongPress?.call(discipline),
           child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            // Feine Nuance für Gewerk: sehr subtiler bläulicher Ton
-            color: Color.lerp(
-              Colors.white,
-              Color.lerp(discipline.color, Colors.blue.shade50, 0.3) ?? Colors.white,
-              0.15,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: widget.disciplineSelectionMode
-                  ? (isSelected
-                      ? discipline.color.withOpacity(0.6)
-                      : Colors.grey.withOpacity(0.25))
-                  : (isExpanded
-                      ? discipline.color.withOpacity(0.3)
-                      : Colors.grey.withOpacity(0.15)),
-              width: isExpanded ? 1.5 : 1,
-            ),
-            boxShadow: isExpanded
-                ? [
-                    BoxShadow(
-                      color: discipline.color.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                      spreadRadius: 0,
-                    ),
-                  ]
-                : [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                      spreadRadius: 0,
-                    ),
-                  ],
-          ),
+          decoration: widget.disciplineSelectionMode && isSelected
+              ? headerDecoration.copyWith(
+                  border: Border.all(
+                    color: SystemsOverviewPalette.borderExpanded,
+                    width: 1.5,
+                  ),
+                )
+              : headerDecoration,
           child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: ValueKey('discipline_${discipline.label}'),
+              enabled: !widget.disciplineSelectionMode,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+              childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              leading: SystemsListTileStyles.disciplineLeading(
+                discipline,
+                expanded: isExpanded,
               ),
-              child: ExpansionTile(
-                key: ValueKey('${discipline.label}_$isExpanded'),
-                enabled: !widget.disciplineSelectionMode,
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                childrenPadding: EdgeInsets.zero,
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: isExpanded
-                          ? [
-                              discipline.color.withOpacity(0.2),
-                              discipline.color.withOpacity(0.1),
-                            ]
-                          : [
-                              discipline.color.withOpacity(0.15),
-                              discipline.color.withOpacity(0.08),
-                            ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: discipline.color.withOpacity(0.2),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    discipline.icon,
-                    color: discipline.color,
-                    size: 20,
-                  ),
+              title: Text(
+                _capitalize(discipline.label),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: isExpanded
+                      ? SystemsOverviewPalette.primaryDark
+                      : SystemsOverviewPalette.textPrimary,
                 ),
-                title: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _capitalize(discipline.label),
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: isExpanded ? discipline.color : Colors.grey[900],
-                          letterSpacing: -0.3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                trailing: widget.disciplineSelectionMode
-                    ? Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? discipline.color.withOpacity(0.12)
-                              : Colors.grey.withOpacity(0.08),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                          color: isSelected ? discipline.color : Colors.grey[500],
-                          size: 22,
-                        ),
-                      )
-                    : Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: isExpanded
-                              ? discipline.color.withOpacity(0.1)
-                              : Colors.grey.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                          color: isExpanded ? discipline.color : Colors.grey[600],
-                          size: 24,
-                        ),
-                      ),
-                initiallyExpanded: isExpanded,
-                onExpansionChanged: (expanded) {
-                  setState(() {
-                    if (expanded) {
-                      // Füge die Disziplin hinzu, ohne andere zu schließen
-                      _expandedDisciplines.add(discipline.label);
-                      // Für FloatingActionButton: melde die zuletzt geöffnete Disziplin
-                      widget.onDisciplineExpanded?.call(discipline);
-                    } else {
-                      _expandedDisciplines.remove(discipline.label);
-                      // Wenn die Disziplin geschlossen wurde, null melden
-                      widget.onDisciplineExpanded?.call(null);
-                    }
-                  });
-                  _saveExpandedState();
-                },
-                children: [
-                  if (isExpanded)
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Color.lerp(
-                          Colors.grey[50]!,
-                          Color.lerp(discipline.color, Colors.grey.shade100, 0.2) ??
-                              Colors.grey[50]!,
-                          0.1,
-                        ),
-                        borderRadius: const BorderRadius.only(
-                          bottomLeft: Radius.circular(16),
-                          bottomRight: Radius.circular(16),
-                        ),
-                      ),
-                      // Begrenzte Höhe + eigener Scroll: kein shrinkWrap über alle Anlagen
-                      child: SizedBox(
-                        height: MediaQuery.sizeOf(context).height * 0.55,
-                        child: SystemsPage(
-                          key: widget.systemsPageKeys[discipline],
-                          building: widget.building,
-                          floor: FloorPlan(id: 'global', name: 'Global'),
-                          discipline: discipline,
-                          groupingKey: widget.systemsGroupingKey,
-                          subGroupingKey: widget.systemsSubGroupingKey,
-                          displayNameParamKey: widget.systemsDisplayNameParamKey,
-                          usePrimaryScroll: true,
-                          onSelectionChanged: (isActive, count) {
-                            widget.onSelectionChanged?.call(isActive, count, discipline);
-                          },
-                          isAnySelectionActive: widget.isAnySelectionActive,
-                          onExitDisciplineSelectionMode:
-                              widget.onExitDisciplineSelectionMode,
-                          onAnlageCreated: widget.onAnlageCreated,
-                          onBauteilCreated: widget.onBauteilCreated,
-                          onAnlagenMoved: widget.onAnlagenMoved,
-                          onGroupLongPress: widget.onGroupLongPress,
-                        ),
-                      ),
-                    ),
-                ],
               ),
+              trailing: widget.disciplineSelectionMode
+                  ? Icon(
+                      isSelected ? Icons.check_circle : Icons.circle_outlined,
+                      color: isSelected
+                          ? SystemsOverviewPalette.primary
+                          : SystemsOverviewPalette.iconMuted,
+                      size: 24,
+                    )
+                  : SystemsListTileStyles.expandIcon(
+                      isExpanded: isExpanded,
+                      level: SystemsOverviewLevel.discipline,
+                    ),
+              onExpansionChanged: widget.disciplineSelectionMode
+                  ? null
+                  : (expanded) {
+                      setState(() {
+                        if (expanded) {
+                          _expandedDisciplines.add(discipline.label);
+                          widget.onDisciplineExpanded?.call(discipline);
+                        } else {
+                          _expandedDisciplines.remove(discipline.label);
+                          widget.onDisciplineExpanded?.call(null);
+                        }
+                      });
+                      _saveExpandedState();
+                    },
+              initiallyExpanded: isExpanded,
+              children: [
+                SystemsPage(
+                  key: widget.systemsPageKeys[discipline],
+                  building: widget.building,
+                  floor: FloorPlan(id: 'global', name: 'Global'),
+                  discipline: discipline,
+                  groupingKey: widget.systemsGroupingKey,
+                  subGroupingKey: widget.systemsSubGroupingKey,
+                  displayNameParamKey: widget.systemsDisplayNameParamKey,
+                  onSelectionChanged: (isActive, count) {
+                    widget.onSelectionChanged?.call(isActive, count, discipline);
+                  },
+                  isAnySelectionActive: widget.isAnySelectionActive,
+                  onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
+                  onAnlageCreated: widget.onAnlageCreated,
+                  onBauteilCreated: widget.onBauteilCreated,
+                  onAnlagenMoved: widget.onAnlagenMoved,
+                  onGroupLongPress: widget.onGroupLongPress,
+                ),
+              ],
             ),
           ),
+        ),
         );
       },
     );

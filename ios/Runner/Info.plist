@@ -49,5 +49,9 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mikrofonzugriff für die Offline-Spracheingabe von Anlagendaten.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Spracherkennung für die Offline-Diktierung von Anlagendaten.</string>
 </dict>
 </plist>

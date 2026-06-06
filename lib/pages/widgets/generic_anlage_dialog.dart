@@ -9,12 +9,18 @@ import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/csv_settings_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/anlage_validation_service.dart';
 import '../../services/ocr_service.dart';
+import '../../services/qr_scan_service.dart';
+import '../../theme/app_palette.dart';
 import '../../services/template_service.dart';
 import '../../utils/app_log.dart';
 import 'photo_manager.dart';
 import 'ocr_camera_page.dart';
+import 'qr_camera_page.dart';
+import 'speech_field_button.dart';
+import '../../services/speech_service.dart';
 
 // Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
 void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
@@ -123,6 +129,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   final Map<String, dynamic> _params = {};
   final Map<String, TextEditingController> _controllers = {};
   late PhotoManager _photoManager;
+  late final TextEditingController _qrCodeController;
   // Trackt Felder, die beim Initialisieren bereits befüllt waren (aus CSV)
   final Set<String> _prefilledFields = {};
   bool _isDataReady = false;
@@ -133,19 +140,112 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   String _childLevelLabel = '';
   String? _dialogSubtitle;
   String? _dialogContextLine;
+  List<Template> _gewerkTemplates = [];
   /// Gesperrte Verortung: Hierarchie-Ebenen (Level-Nummer → Param-Key).
   final Map<int, String> _lockedHierarchyParamKeys = {};
   final Map<String, String> _lockedLocationParams = {};
+  /// Feld mit Fokus – zeigt rechts den Mikrofon-Button.
+  String? _speechActiveFieldKey;
+  bool _speechListening = false;
+  final Map<String, FocusNode> _fieldFocusNodes = {};
 
   // Listener für Validierungs-Updates
   void _updateValidationStatus() {
     setState(() {});
   }
 
+  AnlageFormTheme get _ft => AnlageFormTheme.of(context);
+
+  String _displayFieldLabel(String? raw, {String fallback = ''}) {
+    final normalized = CsvSettings.normalizeFieldLabelForDisplay(raw);
+    if (normalized.isNotEmpty) return normalized;
+    return CsvSettings.normalizeFieldLabelForDisplay(fallback);
+  }
+
+  InputDecoration _schemaFieldDecoration({
+    required String label,
+    required AnlageFormTheme ft,
+    Widget? suffixIcon,
+  }) {
+    final displayLabel = _displayFieldLabel(label);
+    return InputDecoration(
+      label: displayLabel.isEmpty
+          ? null
+          : Text(
+              displayLabel,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: ft.textSecondary,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+      floatingLabelBehavior: FloatingLabelBehavior.auto,
+      border: InputBorder.none,
+      suffixIcon: suffixIcon,
+    );
+  }
+
+  Widget _buildFieldActionButton({
+    required bool isEmpty,
+    required bool isValidated,
+    required bool isMissing,
+    required VoidCallback? onTap,
+  }) {
+    final ft = _ft;
+    final Color bg;
+    final Color borderColor;
+    final Color iconColor;
+    final IconData icon;
+
+    if (isEmpty) {
+      icon = Icons.close;
+      if (isMissing) {
+        bg = ft.fieldBgMissing;
+        borderColor = ft.checkNeutralBorder;
+        iconColor = ft.missingNeutralIcon;
+      } else {
+        bg = ft.errorSurface;
+        borderColor = ft.errorBorder;
+        iconColor = ft.errorIcon;
+      }
+    } else {
+      icon = Icons.check_circle;
+      if (isValidated) {
+        bg = ft.validationSurface;
+        borderColor = ft.validationBorder;
+        iconColor = ft.validationIcon;
+      } else {
+        bg = ft.checkNeutralBg;
+        borderColor = ft.checkNeutralBorder;
+        iconColor = ft.iconMuted;
+      }
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor, width: 1.5),
+          ),
+          child: Icon(icon, color: iconColor, size: 20),
+        ),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _photoManager = PhotoManager();
+    _qrCodeController = TextEditingController();
     // Initialisiere mit übergebener Disziplin, wird dann in _initData aktualisiert
     _currentDiscipline = widget.discipline;
     _initData();
@@ -205,7 +305,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           var baseForRo = Disziplin(
             label: widget.discipline.label,
             icon: widget.discipline.icon,
-            color: widget.discipline.color,
+            color: AppPalette.primary,
             schema: callerSchema.isNotEmpty ? callerSchema : updatedDiscipline.schema,
             groupingKey: widget.discipline.groupingKey,
             revisionsobjektSchemas: mergedRoSchemas,
@@ -218,7 +318,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           effectiveDiscipline = Disziplin(
             label: updatedDiscipline.label,
             icon: updatedDiscipline.icon,
-            color: updatedDiscipline.color,
+            color: AppPalette.primary,
             schema: mergedSchema,
             groupingKey: updatedDiscipline.groupingKey,
             revisionsobjektSchemas: mergedRoSchemas,
@@ -254,6 +354,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             .toList();
         _photoManager.updateImageFiles(files);
       }
+      final existingQr =
+          widget.existingAnlage!.params[CsvSettings.qrCodeNummerParamKey]?.toString() ?? '';
+      _qrCodeController.text = existingQr;
     } else if (widget.initialParams != null && widget.initialParams!.isNotEmpty) {
       _params.addAll(widget.initialParams!);
       for (var entry in widget.initialParams!.entries) {
@@ -263,6 +366,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           _prefilledFields.add(key);
         }
       }
+      final initialQr =
+          widget.initialParams![CsvSettings.qrCodeNummerParamKey]?.toString() ?? '';
+      _qrCodeController.text = initialQr;
     }
 
     await _loadSettingsAndPrefill();
@@ -270,7 +376,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         widget.initialRevisionsobjekt?.trim().isNotEmpty == true;
     _establishLocationLocks();
     if (!isNewFromRevisionsobjekt) {
-      _applyEffectiveSchemaFromParams();
+      _refreshDisciplineSchemaFromTemplates();
       if (widget.existingAnlage != null) {
         _establishLocationLocks();
       }
@@ -278,6 +384,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     _applyRevisionsobjektPrefill();
     if (widget.existingAnlage == null) {
       _finalizeSchemaForRevisionsobjekt();
+    } else {
+      _refreshDisciplineSchemaFromTemplates();
     }
     _sanitizeAnlagenImportParamsAndSchema();
     } finally {
@@ -319,6 +427,21 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     final sourceParams = widget.existingAnlage?.params ?? widget.initialParams ?? _params;
 
+    for (var level = 1; level <= 3; level++) {
+      if (level == 1 && csv.level1IsDiscipline) {
+        final level1Value = _currentDiscipline.label;
+        for (final key in csv.allParamKeysForHierarchyLevel(1)) {
+          _lockedLocationParams[key] = level1Value;
+        }
+        continue;
+      }
+      final levelValue = csv.hierarchyLevelValueFromParams(sourceParams, level);
+      if (levelValue == null || levelValue.isEmpty) continue;
+      for (final key in csv.allParamKeysForHierarchyLevel(level)) {
+        _lockedLocationParams[key] = levelValue;
+      }
+    }
+
     final schemaLevel = csv.schemaItemLevelNumber ?? 2;
     String? schemaValue = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
         ? widget.initialRevisionsobjekt!.trim()
@@ -353,18 +476,86 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
     }
 
-    for (final field in _currentDiscipline.schema) {
-      final key = (field['key'] ?? '').toString();
-      final label = (field['label'] ?? '').toString();
-      if (key.isEmpty) continue;
-      if (_isSchemaItemField(key, label)) {
-        _lockedLocationParams[key] = schemaValue;
-        _setParamAndController(key, schemaValue);
+    final schemaItemKey = csv.resolveSchemaItemParamKey()?.trim();
+    if (schemaItemKey != null && schemaItemKey.isNotEmpty) {
+      for (final field in _currentDiscipline.schema) {
+        final key = (field['key'] ?? '').toString();
+        if (key.isEmpty) continue;
+        if (CsvSettings.paramKeysMatch(key, schemaItemKey)) {
+          _lockedLocationParams[key] = schemaValue;
+          _setParamAndController(key, schemaValue);
+        }
       }
     }
   }
 
-  bool _isLocationLocked(String key) => _lockedLocationParams.containsKey(key);
+  bool _isHierarchyParamKey(String key) {
+    final csv = _csvSettings;
+    if (csv == null) return false;
+    final k = key.trim();
+    if (k.isEmpty) return false;
+    if (csv.isLeafNameParamKey(k)) return false;
+
+    final displayKey = csv.resolveDisplayNameParamKey()?.trim() ?? '';
+    if (displayKey.isNotEmpty && CsvSettings.paramKeysMatch(k, displayKey)) {
+      return false;
+    }
+
+    for (var level = 1; level <= 3; level++) {
+      for (final hk in csv.allParamKeysForHierarchyLevel(level)) {
+        if (CsvSettings.paramKeysMatch(k, hk)) return true;
+      }
+    }
+    final schemaKey = csv.resolveSchemaItemParamKey()?.trim();
+    if (schemaKey != null &&
+        schemaKey.isNotEmpty &&
+        CsvSettings.paramKeysMatch(k, schemaKey)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Anzeigename-Feld, das fälschlich mit Schema-Ebenen-Label (z. B. Revisionsobjekt) beschriftet ist.
+  bool _isMislabeledDisplayNameField(String key, String label) {
+    final csv = _csvSettings;
+    if (csv == null) return false;
+    final normalizedLabel = CsvSettings.normalizeFieldLabelForDisplay(label);
+    if (normalizedLabel.isEmpty) return false;
+
+    final schemaItemLabel = csv.resolveSchemaItemLevelLabel();
+    if (schemaItemLabel.isEmpty ||
+        !CsvSettings.paramKeysMatch(normalizedLabel, schemaItemLabel)) {
+      return false;
+    }
+    if (_isHierarchyParamKey(key)) return false;
+
+    final displayKey = csv.resolveDisplayNameParamKey()?.trim() ?? '';
+    return csv.isLeafNameParamKey(key) ||
+        (displayKey.isNotEmpty && CsvSettings.paramKeysMatch(key, displayKey));
+  }
+
+  String _resolveSchemaFieldLabel(String key, Map<String, dynamic> fieldDef) {
+    var label = _displayFieldLabel(
+      fieldDef['label']?.toString(),
+      fallback: key,
+    );
+    if (_isMislabeledDisplayNameField(key, label)) {
+      final leafLabel = _csvSettings?.resolveLeafLevelLabel().trim() ?? '';
+      if (leafLabel.isNotEmpty) label = leafLabel;
+    }
+    return label;
+  }
+
+  bool _isLocationLocked(String key) {
+    if (_lockedLocationParams.containsKey(key)) return true;
+    for (final lockedKey in _lockedLocationParams.keys) {
+      if (CsvSettings.paramKeysMatch(key, lockedKey)) return true;
+    }
+    if (widget.existingAnlage != null && _isHierarchyParamKey(key)) {
+      return true;
+    }
+    return false;
+  }
 
   /// Nur importierte Blatt-Name-Spalte schreibgeschützt – Anzeige-Param aus Gewerkevorlage bleibt editierbar.
   bool _isLeafNameField(String key) {
@@ -441,12 +632,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final widgets = <Widget>[];
 
     Widget buildReadonlyField(String label, String value) {
+      final ft = _ft;
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.grey[100],
+          color: ft.fieldBgLocked,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.withOpacity(0.25)),
+          border: Border.all(color: ft.border),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 12),
@@ -454,10 +646,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             initialValue: value,
             readOnly: true,
             enableInteractiveSelection: false,
+            style: TextStyle(color: ft.textPrimary),
             decoration: InputDecoration(
-              labelText: label,
+              labelText: _displayFieldLabel(label),
+              labelStyle: TextStyle(color: ft.textSecondary),
               border: InputBorder.none,
-              suffixIcon: Icon(Icons.lock_outline, size: 16, color: Colors.grey[500]),
+              suffixIcon: Icon(Icons.lock_outline, size: 16, color: ft.iconMuted),
             ),
           ),
         ),
@@ -498,9 +692,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     for (final field in _currentDiscipline.schema) {
       final key = (field['key'] ?? '').toString();
-      final label = (field['label'] ?? '').toString();
       if (key.isEmpty) continue;
-      if (_isSchemaItemField(key, label)) {
+      if (_isSchemaItemField(key)) {
         keys.add(key);
       }
     }
@@ -514,59 +707,79 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   }
 
   String? _resolveRevisionsobjektFromParams() {
+    final initial = widget.initialRevisionsobjekt?.trim();
+    if (initial != null && initial.isNotEmpty) return initial;
+
+    final csv = _csvSettings;
+    if (csv != null) {
+      final schemaLevel = csv.schemaItemLevelNumber;
+      if (schemaLevel != null) {
+        final fromLocked =
+            csv.hierarchyLevelValueFromParams(_lockedLocationParams, schemaLevel);
+        if (fromLocked != null && fromLocked.isNotEmpty) return fromLocked;
+        final fromParams = csv.hierarchyLevelValueFromParams(_params, schemaLevel);
+        if (fromParams != null && fromParams.isNotEmpty) return fromParams;
+      }
+    }
+
     if (_schemaItemParamKey != null && _schemaItemParamKey!.trim().isNotEmpty) {
-      final v = _params[_schemaItemParamKey]?.toString().trim();
-      if (v != null && v.isNotEmpty) return v;
+      for (final entry in _params.entries) {
+        if (!CsvSettings.paramKeysMatch(
+          entry.key.toString(),
+          _schemaItemParamKey!.trim(),
+        )) {
+          continue;
+        }
+        final v = entry.value?.toString().trim();
+        if (v != null && v.isNotEmpty) return v;
+      }
     }
     if (_csvSettings != null) {
       final fromSettings = _csvSettings!.schemaItemValueFromParams(_params);
       if (fromSettings != null && fromSettings.isNotEmpty) return fromSettings;
     }
-    for (final ro in _currentDiscipline.revisionsobjektNames) {
-      for (final entry in _params.entries) {
-        if (entry.value?.toString().trim() == ro) return ro;
-      }
-    }
     return null;
   }
 
-  bool _isSchemaItemField(String key, String label) {
+  bool _isSchemaItemField(String key) {
     if (_isLeafNameField(key)) return false;
+    if (_isHierarchyParamKey(key)) return false;
     final schemaLevel = _csvSettings?.schemaItemLevelNumber;
     if (schemaLevel != null) {
       final levelKey = _csvSettings!.resolveHierarchyLevelParamKey(schemaLevel);
-      if (levelKey != null && key == levelKey) return false;
+      if (levelKey != null && CsvSettings.paramKeysMatch(key, levelKey)) {
+        return false;
+      }
     }
     final paramKey = _schemaItemParamKey?.trim();
     if (paramKey == null || paramKey.isEmpty) return false;
-    if (key == paramKey) return true;
-    return label.trim().toLowerCase() == paramKey.toLowerCase();
+    return CsvSettings.paramKeysMatch(key, paramKey);
   }
 
-  void _onSchemaDrivingParamChanged(String key, String label, String value) {
-    if (!_isSchemaItemField(key, label)) return;
+  void _onSchemaDrivingParamChanged(String key, String value) {
+    if (!_isSchemaItemField(key)) return;
     if (value.trim().isEmpty) return;
-    _applyEffectiveSchemaFromParams();
+    if (widget.existingAnlage != null) return;
+    _refreshDisciplineSchemaFromTemplates();
   }
 
-  void _finalizeSchemaForRevisionsobjekt() {
-    if (!mounted) return;
-    final ro = widget.initialRevisionsobjekt?.trim().isNotEmpty == true
-        ? widget.initialRevisionsobjekt!.trim()
-        : _resolveRevisionsobjektFromParams();
-    if (ro == null || ro.isEmpty) return;
+  Disziplin _disciplineWithSchemaForRevisionsobjekt(String revisionsobjekt) {
+    final ro = revisionsobjekt.trim();
+    if (ro.isEmpty) return _currentDiscipline;
 
-    final nextDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+    final matched = _gewerkTemplates.isNotEmpty
+        ? TemplateService.findTemplateForRevisionsobjekt(_gewerkTemplates, ro)
+        : null;
+
+    return TemplateService.disciplineWithSchemaForRevisionsobjekt(
       discipline: _currentDiscipline,
       revisionsobjekt: ro,
+      template: matched,
+      templatesForLookup: _gewerkTemplates.isNotEmpty ? _gewerkTemplates : null,
     );
-    if (nextDiscipline.schema.length <= _currentDiscipline.globalSchemaFields.length) {
-      return;
-    }
-    _currentDiscipline = nextDiscipline;
   }
 
-  void _applyEffectiveSchemaFromParams() {
+  void _refreshDisciplineSchemaFromTemplates({String? revisionsobjekt}) {
     if (!mounted) return;
     if (widget.existingAnlage == null &&
         widget.initialRevisionsobjekt?.trim().isNotEmpty == true &&
@@ -574,28 +787,38 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             _currentDiscipline.globalSchemaFields.length) {
       return;
     }
-    final ro =
-        widget.initialRevisionsobjekt?.trim().isNotEmpty == true
+
+    final ro = revisionsobjekt?.trim().isNotEmpty == true
+        ? revisionsobjekt!.trim()
+        : widget.initialRevisionsobjekt?.trim().isNotEmpty == true
             ? widget.initialRevisionsobjekt!.trim()
-            : _resolveRevisionsobjektFromParams();
-    if (ro == null || ro.trim().isEmpty) return;
+            : _resolveRevisionsobjektFromParams()?.trim() ?? '';
+    if (ro.isEmpty) return;
 
-    final nextDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-      discipline: _currentDiscipline,
-      revisionsobjekt: ro,
-    );
+    final nextDiscipline = _disciplineWithSchemaForRevisionsobjekt(ro);
+    final hasTemplateSchema = _gewerkTemplates.isNotEmpty &&
+        nextDiscipline.schema.length > nextDiscipline.globalSchemaFields.length;
 
-    // Vererbtes/übergebenes Schema nicht durch leeres DB-RO-Schema ersetzen.
-    if (nextDiscipline.schema.length <= nextDiscipline.globalSchemaFields.length &&
+    if (!hasTemplateSchema &&
+        nextDiscipline.schema.length <= nextDiscipline.globalSchemaFields.length &&
         (_currentDiscipline.legacyIndividualSchemaFields.isNotEmpty ||
             _currentDiscipline.schema.length >
                 _currentDiscipline.globalSchemaFields.length)) {
       return;
     }
 
+    if (!hasTemplateSchema &&
+        nextDiscipline.schema.length <= nextDiscipline.globalSchemaFields.length) {
+      return;
+    }
+
     setState(() {
       _currentDiscipline = nextDiscipline;
     });
+  }
+
+  void _finalizeSchemaForRevisionsobjekt() {
+    _refreshDisciplineSchemaFromTemplates();
   }
 
   Future<void> _loadSettingsAndPrefill() async {
@@ -622,6 +845,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           ? (csvSettings.resolveRevisionsobjektGroupingParamKey() ??
               csvSettings.resolveSchemaItemParamKey())
           : csvSettings.resolveSchemaItemParamKey();
+
+      _gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+        dbService,
+        projectId,
+        gewerk: _currentDiscipline.label,
+      );
+
       if (mounted) setState(() {});
 
       // Vorbefüllung nur bei Neuanlage ohne festes Revisionsobjekt
@@ -648,10 +878,111 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   @override
   void dispose() {
+    SpeechService.instance.cancel();
+    _qrCodeController.dispose();
+    for (final node in _fieldFocusNodes.values) {
+      node.dispose();
+    }
+    _fieldFocusNodes.clear();
     for (var c in _controllers.values) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  bool _isSpeechEligibleType(String type) {
+    final t = type.toLowerCase();
+    return t != 'date' && t != 'dropdown' && t != 'select';
+  }
+
+  FocusNode _focusNodeFor(String key) {
+    return _fieldFocusNodes.putIfAbsent(key, () {
+      final node = FocusNode();
+      node.addListener(() => _onFieldFocusChanged(key, node.hasFocus));
+      return node;
+    });
+  }
+
+  void _onFieldFocusChanged(String key, bool hasFocus) {
+    if (!mounted) return;
+    setState(() {
+      if (hasFocus) {
+        _speechActiveFieldKey = key;
+      } else if (_speechActiveFieldKey == key) {
+        _speechActiveFieldKey = null;
+      }
+    });
+  }
+
+  Future<void> _toggleDictation({
+    required String fieldLabel,
+    required void Function(String text) onRecognized,
+  }) async {
+    if (_speechListening) {
+      await SpeechService.instance.cancel();
+      if (mounted) setState(() => _speechListening = false);
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final label = fieldLabel.trim();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          label.isNotEmpty
+              ? 'Jetzt sprechen: $label (offline)'
+              : 'Jetzt sprechen (offline)',
+        ),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    final available = await SpeechService.instance.ensureInitialized();
+    if (!available) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Spracherkennung nicht verfügbar. '
+            'Mikrofon erlauben und ggf. deutsches Offline-Sprachpaket installieren.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() => _speechListening = true);
+
+    final result = await SpeechService.instance.dictate(
+      onPartial: (partial) {
+        if (partial.trim().isNotEmpty) onRecognized(partial);
+      },
+    );
+
+    if (!mounted) return;
+    setState(() => _speechListening = false);
+
+    if (result != null && result.trim().isNotEmpty) {
+      onRecognized(result.trim());
+    }
+  }
+
+  Widget? _speechMicForField({
+    required String key,
+    required bool show,
+    required String fieldLabel,
+    required void Function(String text) onRecognized,
+  }) {
+    if (!show || _speechActiveFieldKey != key) return null;
+    return SpeechMicFab(
+      listening: _speechListening,
+      onPressed: () => _toggleDictation(
+        fieldLabel: fieldLabel,
+        onRecognized: onRecognized,
+      ),
+    );
   }
 
   Future<void> _takePhoto() async {
@@ -666,6 +997,47 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   void _removeImage(int idx) {
     _photoManager.removeImage(idx);
     setState(() {});
+  }
+
+  Future<void> _scanQrCode() async {
+    try {
+      final image = await Navigator.of(context).push<File>(
+        MaterialPageRoute(
+          builder: (context) => const QrCameraPage(),
+          fullscreenDialog: true,
+        ),
+      );
+
+      if (image == null || !mounted) return;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(child: CircularProgressIndicator()),
+      );
+
+      try {
+        final qrValue = await QrScanService.scanQrCodeFromImage(image);
+        if (!mounted) return;
+        Navigator.of(context).pop();
+
+        if (qrValue == null || qrValue.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Kein QR-Code erkannt')),
+          );
+          return;
+        }
+
+        setState(() {
+          _qrCodeController.text = qrValue;
+          _params[CsvSettings.qrCodeNummerParamKey] = qrValue;
+        });
+      } catch (_) {
+        if (mounted) Navigator.of(context).pop();
+      }
+    } catch (_) {
+      // Kamera abgebrochen oder nicht verfügbar
+    }
   }
 
   Future<void> _takePhotoForOcr() async {
@@ -723,10 +1095,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   Future<void> _showOcrResultDialog(Map<String, String> results) async {
     return showDialog(
       context: context,
-      builder: (context) => Dialog(
+      builder: (dialogContext) {
+        final ft = AnlageFormTheme.of(dialogContext);
+        return Dialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
         ),
+        backgroundColor: ft.scaffold,
         child: Container(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -738,12 +1113,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.1),
+                      color: ft.validationSurface,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
                       Icons.document_scanner,
-                      color: Colors.green[700],
+                      color: ft.validationIcon,
                       size: 24,
                     ),
                   ),
@@ -754,7 +1129,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w600,
-                        color: Colors.grey[900],
+                        color: ft.textPrimary,
                       ),
                     ),
                   ),
@@ -765,7 +1140,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 'Folgende Daten wurden erkannt:',
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey[700],
+                  color: ft.textSecondary,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -784,10 +1159,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         margin: const EdgeInsets.only(bottom: 10),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.grey[50],
+                          color: ft.sectionBg,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                            color: Colors.grey.withOpacity(0.2),
+                            color: ft.borderSubtle,
                           ),
                         ),
                         child: Row(
@@ -802,7 +1177,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
-                                      color: Colors.grey[600],
+                                      color: ft.textSecondary,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
@@ -811,7 +1186,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                     style: TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.grey[900],
+                                      color: ft.textPrimary,
                                     ),
                                   ),
                                 ],
@@ -829,7 +1204,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 'Sollen diese Daten in die entsprechenden Felder übertragen werden?',
                 style: TextStyle(
                   fontSize: 14,
-                  color: Colors.grey[700],
+                  color: ft.textSecondary,
                 ),
               ),
               const SizedBox(height: 24),
@@ -837,7 +1212,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () => Navigator.of(dialogContext).pop(),
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 20,
@@ -847,7 +1222,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     child: Text(
                       'Abbrechen',
                       style: TextStyle(
-                        color: Colors.grey[700],
+                        color: ft.cancelButtonText,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -988,10 +1363,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 // Validierungsstatus aktualisieren
                 _updateValidationStatus();
               });
-              Navigator.of(context).pop();
+              Navigator.of(dialogContext).pop();
             },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[600],
+                      backgroundColor: ft.validationIcon,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 20,
@@ -1020,7 +1395,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             ],
           ),
         ),
-      ),
+      );
+      },
     );
   }
 
@@ -1053,19 +1429,125 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     );
   }
 
-  Widget _buildPhotoSection() {
+  Widget _buildQrCodeSection() {
+    final ft = _ft;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: ft.sectionBg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Colors.grey.withOpacity(0.2),
+          color: ft.border,
           width: 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: ft.shadow,
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppPalette.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.qr_code_2,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'QR-Code Nummer',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: ft.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(
+                color: ft.innerFieldBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: ft.borderSubtle),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _qrCodeController,
+                        keyboardType: TextInputType.text,
+                        style: TextStyle(fontSize: 15, color: ft.textPrimary),
+                        decoration: InputDecoration(
+                          hintText: 'Nummer manuell eingeben oder scannen',
+                          hintStyle: TextStyle(color: ft.textHint, fontSize: 14),
+                          border: InputBorder.none,
+                        ),
+                        onChanged: (val) {
+                          _params[CsvSettings.qrCodeNummerParamKey] = val.trim();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: _scanQrCode,
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.qr_code_scanner,
+                            color: Theme.of(context).primaryColor,
+                            size: 24,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoSection() {
+    final ft = _ft;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: ft.sectionBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: ft.border,
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: ft.shadow,
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -1084,12 +1566,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
+                        color: AppPalette.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
                         Icons.photo_library,
-                        color: Colors.blue[700],
+                        color: AppPalette.primaryDark,
                         size: 20,
                       ),
                     ),
@@ -1103,7 +1585,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Colors.grey[900],
+                            color: ft.textPrimary,
                           ),
                         ),
                         Text(
@@ -1111,7 +1593,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
-                            color: Colors.grey[600],
+                            color: ft.textSecondary,
                           ),
                         ),
                       ],
@@ -1121,8 +1603,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 Container(
                   decoration: BoxDecoration(
                     color: _photoManager.canAddPhoto
-                        ? Theme.of(context).primaryColor.withOpacity(0.1)
-                        : Colors.grey[200],
+                        ? Theme.of(context).primaryColor.withValues(alpha: 0.12)
+                        : ft.chipDisabledBg,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Material(
@@ -1139,7 +1621,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                               Icons.add_a_photo,
                               color: _photoManager.canAddPhoto
                                   ? Theme.of(context).primaryColor
-                                  : Colors.grey[400],
+                                  : ft.iconMuted,
                               size: 20,
                             ),
                             const SizedBox(width: 6),
@@ -1148,7 +1630,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                               style: TextStyle(
                                 color: _photoManager.canAddPhoto
                                     ? Theme.of(context).primaryColor
-                                    : Colors.grey[400],
+                                    : ft.iconMuted,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),
@@ -1166,10 +1648,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: ft.photoEmptyBg,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: ft.borderSubtle,
                     style: BorderStyle.solid,
                     width: 1,
                   ),
@@ -1181,13 +1663,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       Icon(
                         Icons.photo_outlined,
                         size: 48,
-                        color: Colors.grey[400],
+                        color: ft.iconMuted,
                       ),
                       const SizedBox(height: 8),
                       Text(
                         'Noch keine Fotos',
                         style: TextStyle(
-                          color: Colors.grey[600],
+                          color: ft.textSecondary,
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1241,11 +1723,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                 child: Container(
                                   padding: const EdgeInsets.all(4),
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
+                                    color: ft.scaffold,
                                     shape: BoxShape.circle,
                                     boxShadow: [
                                       BoxShadow(
-                                        color: Colors.black.withOpacity(0.2),
+                                        color: ft.shadow,
                                         blurRadius: 4,
                                         offset: const Offset(0, 2),
                                       ),
@@ -1254,7 +1736,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                   child: Icon(
                                     Icons.close,
                                     size: 16,
-                                    color: Colors.red[600],
+                                    color: AppPalette.error,
                                   ),
                                 ),
                               ),
@@ -1303,6 +1785,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     }
     for (final entry in _controllers.entries) {
       final key = entry.key;
+      if (_isLocationLocked(key)) continue;
       final controller = entry.value;
       final text = controller.text.trim();
       final fieldDef = schemaByKey[key];
@@ -1313,6 +1796,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         _params[key] = text;
       }
     }
+    _params[CsvSettings.qrCodeNummerParamKey] = _qrCodeController.text.trim();
   }
 
   void _toggleFieldMissing(String key) {
@@ -1337,6 +1821,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   void _sanitizeAnlagenImportParamsAndSchema() {
     final ro = _resolveRevisionsobjektFromParams();
+    if (ro != null && ro.trim().isNotEmpty) {
+      _currentDiscipline = _disciplineWithSchemaForRevisionsobjekt(ro.trim());
+    }
+
     final schemaFields = ro != null && ro.trim().isNotEmpty
         ? _currentDiscipline.effectiveSchemaFor(revisionsobjekt: ro.trim())
         : _currentDiscipline.schema;
@@ -1373,10 +1861,22 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   /// Nur Felder für das aktuelle Revisionsobjekt (nicht alle RO-Schemata aus der DB).
   List<Map<String, dynamic>> _dialogSchemaFields() {
     final ro = _resolveRevisionsobjektFromParams();
-    var fields = ro != null && ro.trim().isNotEmpty
-        ? _currentDiscipline.effectiveSchemaFor(revisionsobjekt: ro.trim())
-        : List<Map<String, dynamic>>.from(_currentDiscipline.schema);
+    final roTrimmed = ro?.trim() ?? '';
+
+    var discipline = _currentDiscipline;
+    if (roTrimmed.isNotEmpty) {
+      discipline = _disciplineWithSchemaForRevisionsobjekt(roTrimmed);
+    }
+
+    var fields = roTrimmed.isNotEmpty
+        ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
+        : List<Map<String, dynamic>>.from(discipline.schema);
     fields = CsvSettings.filterSchemaFieldsForDialog(fields);
+    fields = fields.where((f) {
+      final key = (f['key'] ?? '').toString();
+      if (key.isEmpty) return true;
+      return !_isHierarchyParamKey(key);
+    }).toList();
 
     final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
     if (nonGlobal.isEmpty) {
@@ -1384,7 +1884,28 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         _params,
         settings: _csvSettings,
       );
-      if (fromParams.isNotEmpty) return fromParams;
+      if (fromParams.isNotEmpty) {
+        final masterSchema = roTrimmed.isNotEmpty
+            ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
+            : discipline.schema;
+        final templateMaster = roTrimmed.isNotEmpty
+            ? TemplateService.getSchemaFromTemplateParameter(
+                TemplateService.findTemplateForRevisionsobjekt(
+                      _gewerkTemplates,
+                      roTrimmed,
+                    )
+                    ?.parameter,
+              )
+            : const <Map<String, dynamic>>[];
+        final mergedMaster = TemplateService.mergeSchemaFieldLists(
+          masterSchema,
+          templateMaster,
+        );
+        return TemplateService.enrichSchemaFieldsFromMaster(
+          fromParams,
+          mergedMaster,
+        );
+      }
     }
     return fields;
   }
@@ -1414,10 +1935,60 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     return false;
   }
 
+  String? _schemaFieldArtGroup(Map<String, dynamic> fieldDef) {
+    final art = CsvSettings.normalizeFieldLabelForDisplay(
+      (fieldDef['art'] ?? '').toString(),
+    );
+    return art.isEmpty ? null : art;
+  }
+
+  Widget _buildArtGroupFrame(String groupTitle, List<Widget> children) {
+    final ft = _ft;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: ft.groupFrameBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ft.border, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Text(
+              groupTitle,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: ft.textPrimary,
+              ),
+            ),
+          ),
+          ...children,
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _buildSchemaFields() {
     final schema = _dialogSchemaFields();
     
     final fields = <Widget>[];
+    String? currentArtGroup;
+    final currentArtGroupFields = <Widget>[];
+
+    void flushArtGroup() {
+      if (currentArtGroupFields.isEmpty) return;
+      if (currentArtGroup != null) {
+        fields.add(_buildArtGroupFrame(currentArtGroup, currentArtGroupFields));
+      } else {
+        fields.addAll(currentArtGroupFields);
+      }
+      currentArtGroupFields.clear();
+    }
+
     final tempAnlage = Anlage(
       id: widget.existingAnlage?.id ?? '',
       parentId: widget.parentId ?? widget.existingAnlage?.parentId,
@@ -1432,9 +2003,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     );
     
     for (var fieldDef in schema) {
+      final artGroup = _schemaFieldArtGroup(fieldDef);
+      if (artGroup != currentArtGroup) {
+        flushArtGroup();
+        currentArtGroup = artGroup;
+      }
+      final nestedInArtGroup = currentArtGroup != null;
+
       final key = fieldDef['key'] as String;
 
-      final label = fieldDef['label'] as String;
+      final label = _resolveSchemaFieldLabel(key, fieldDef);
       final type = (fieldDef['type'] ?? 'string').toString();
       final isEditable = _isLocationLocked(key) || _isLeafNameField(key)
           ? false
@@ -1455,43 +2033,21 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final isEmpty = controller.text.trim().isEmpty;
       final isFieldValidated = AnlageValidationService.isFieldValidated(tempAnlage, key);
       final isFieldMissing = AnlageValidationService.isFieldMarkedAsMissing(tempAnlage, key);
+      final ft = _ft;
 
-      Widget actionButton;
-      if (isEmpty) {
-        actionButton = Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: isEditable ? () => _toggleFieldMissing(key) : null,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isFieldMissing ? Colors.grey[200] : Colors.red[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: isFieldMissing ? Colors.grey[400]! : Colors.red[300]!, width: 1.5),
-              ),
-              child: Icon(Icons.close, color: isFieldMissing ? Colors.grey[700] : Colors.red[600], size: 20),
-            ),
-          ),
-        );
-      } else {
-        actionButton = Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: isEditable ? () => _toggleFieldValidation(key) : null,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isFieldValidated ? Colors.green[50] : Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: isFieldValidated ? Colors.green[400]! : Colors.grey[400]!, width: 1.5),
-              ),
-              child: Icon(Icons.check_circle, color: isFieldValidated ? Colors.green[600] : Colors.grey[500], size: 20),
-            ),
-          ),
-        );
-      }
+      final actionButton = isEmpty
+          ? _buildFieldActionButton(
+              isEmpty: true,
+              isValidated: false,
+              isMissing: isFieldMissing,
+              onTap: isEditable ? () => _toggleFieldMissing(key) : null,
+            )
+          : _buildFieldActionButton(
+              isEmpty: false,
+              isValidated: isFieldValidated,
+              isMissing: false,
+              onTap: isEditable ? () => _toggleFieldValidation(key) : null,
+            );
 
       Future<void> pickDate() async {
         if (isEditable != true) return;
@@ -1522,16 +2078,18 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
 
       void applyTextValue(String val) {
+        if (_isLocationLocked(key)) return;
         final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
         _params[key] = val;
         if (wasEmpty && val.trim().isNotEmpty) {
           _params.addAll(AnlageValidationService.setFieldValidated(tempAnlage, key, true).params);
         }
-        _onSchemaDrivingParamChanged(key, label, val);
+        _onSchemaDrivingParamChanged(key, val);
         _updateValidationStatus();
       }
 
       void applyNumericValue(String val) {
+        if (_isLocationLocked(key)) return;
         final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
         _params[key] = (num.tryParse(val) ?? val);
         if (wasEmpty && val.trim().isNotEmpty) {
@@ -1540,6 +2098,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         _updateValidationStatus();
       }
 
+      final speechEligible =
+          isEditable == true && _isSpeechEligibleType(type);
+
       Widget inputWidget;
       if (type == 'dropdown' || type == 'select') {
         final inlineOptions = fieldDef['options'];
@@ -1547,7 +2108,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         if (inlineOptions is List && inlineOptions.isNotEmpty) {
           options = inlineOptions.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
         }
-        if (options.isEmpty && _isSchemaItemField(key, label)) {
+        if (options.isEmpty && _isSchemaItemField(key)) {
           options = _currentDiscipline.revisionsobjektNames;
         }
 
@@ -1571,17 +2132,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       applyTextValue(v ?? '');
                     }
                   : null,
-              decoration: InputDecoration(
-                labelText: label,
-                labelStyle: TextStyle(
-                  color: Colors.grey[600],
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                border: InputBorder.none,
+              decoration: _schemaFieldDecoration(
+                label: label,
+                ft: ft,
                 suffixIcon: isEditable == true
                     ? null
-                    : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
+                    : Icon(Icons.lock_outline, size: 16, color: ft.iconMuted),
               ),
             ),
             if (options.isEmpty)
@@ -1589,7 +2145,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   'Keine Dropdown-Optionen definiert.',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                  style: TextStyle(fontSize: 12, color: AppPalette.warningText),
                 ),
               ),
           ],
@@ -1600,6 +2156,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
         inputWidget = TextField(
           controller: controller,
+          focusNode: speechEligible ? _focusNodeFor(key) : null,
           readOnly: isEditable != true || type == 'date',
           onTap: (isEditable == true && type == 'date') ? pickDate : null,
           keyboardType: (type == 'number' || type == 'int')
@@ -1610,18 +2167,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           textInputAction: isMultilineTextField ? TextInputAction.newline : TextInputAction.next,
           style: TextStyle(
             fontSize: 15,
-            color: isEditable == true ? Colors.grey[900] : Colors.grey[600],
+            color: isEditable == true ? ft.textPrimary : ft.textDisabled,
           ),
-          decoration: InputDecoration(
-            labelText: label,
-            labelStyle:
-                TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
-            border: InputBorder.none,
-            suffixIcon: isEditable == true
-                ? (type == 'date'
-                    ? const Icon(Icons.calendar_today, size: 16)
-                    : null)
-                : Icon(Icons.lock_outline, size: 16, color: Colors.grey[400]),
+          decoration: _schemaFieldDecoration(
+            label: label,
+            ft: ft,
+            suffixIcon: isEditable != true
+                ? Icon(Icons.lock_outline, size: 16, color: ft.iconMuted)
+                : (type == 'date'
+                    ? Icon(Icons.calendar_today, size: 16, color: ft.iconMuted)
+                    : null),
           ),
           onChanged: (val) {
             if (isEditable != true) return;
@@ -1634,14 +2189,18 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         );
       }
 
-      fields.add(
+      currentArtGroupFields.add(
         Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          margin: nestedInArtGroup
+              ? const EdgeInsets.symmetric(horizontal: 10, vertical: 4)
+              : const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: !isEditable ? Colors.grey[100] : (isFieldMissing ? Colors.grey[200] : Colors.grey[50]),
+            color: !isEditable
+                ? ft.fieldBgLocked
+                : (isFieldMissing ? ft.fieldBgMissing : ft.fieldBg),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isFieldValidated ? Colors.green.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
+              color: isFieldValidated ? ft.validationFieldBorder : ft.borderSubtle,
               width: isFieldValidated ? 1.5 : 1,
             ),
           ),
@@ -1652,6 +2211,20 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 Expanded(
                   child: inputWidget,
                 ),
+                _speechMicForField(
+                      key: key,
+                      show: speechEligible,
+                      fieldLabel: label,
+                      onRecognized: (text) {
+                        controller.text = text;
+                        if (type == 'number' || type == 'int') {
+                          applyNumericValue(text);
+                        } else {
+                          applyTextValue(text);
+                        }
+                      },
+                    ) ??
+                    const SizedBox.shrink(),
                 actionButton,
               ],
             ),
@@ -1659,16 +2232,16 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         ),
       );
     }
+    flushArtGroup();
 
     // Zusätzliche Felder: Params ohne Schema-Definition (nicht per Key/Label doppelt anzeigen)
-    final reservedKeys = _csvSettings?.reservedParamKeysForDialog() ??
-        const {'lfdNummer', 'photoPaths'};
     for (final key in _params.keys) {
       if (_schemaDefinesParamKey(schema, key)) continue;
       if (_isLocationLocked(key)) continue;
+      if (_isHierarchyParamKey(key)) continue;
       if (key.startsWith('__')) continue;
       if (key.startsWith('_')) continue; // interne/Validierungs-Felder nicht als Extra-Felder anzeigen
-      if (reservedKeys.contains(key)) continue;
+      if (_csvSettings?.matchesReservedDialogParamKey(key) == true) continue;
       if (CsvSettings.isAnlagenCsvColumnParamKey(key)) continue;
       final value = _params[key];
       if (value is Map || value is List) continue; // keine komplexen Typen als einfaches Textfeld
@@ -1693,43 +2266,21 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       );
       final isFieldValidatedExtra = AnlageValidationService.isFieldValidated(tempAnlageForExtra, key);
       final isFieldMissingExtra = AnlageValidationService.isFieldMarkedAsMissing(tempAnlageForExtra, key);
+      final ftExtra = _ft;
 
-      Widget actionButtonExtra;
-      if (isEmpty) {
-        actionButtonExtra = Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => _toggleFieldMissing(key),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isFieldMissingExtra ? Colors.grey[200] : Colors.red[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: isFieldMissingExtra ? Colors.grey[400]! : Colors.red[300]!, width: 1.5),
-              ),
-              child: Icon(Icons.close, color: isFieldMissingExtra ? Colors.grey[700] : Colors.red[600], size: 20),
-            ),
-          ),
-        );
-      } else {
-        actionButtonExtra = Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => _toggleFieldValidation(key),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isFieldValidatedExtra ? Colors.green[50] : Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: isFieldValidatedExtra ? Colors.green[400]! : Colors.grey[400]!, width: 1.5),
-              ),
-              child: Icon(Icons.check_circle, color: isFieldValidatedExtra ? Colors.green[600] : Colors.grey[500], size: 20),
-            ),
-          ),
-        );
-      }
+      final actionButtonExtra = isEmpty
+          ? _buildFieldActionButton(
+              isEmpty: true,
+              isValidated: false,
+              isMissing: isFieldMissingExtra,
+              onTap: () => _toggleFieldMissing(key),
+            )
+          : _buildFieldActionButton(
+              isEmpty: false,
+              isValidated: isFieldValidatedExtra,
+              isMissing: false,
+              onTap: () => _toggleFieldValidation(key),
+            );
 
       void applyTextValueExtra(String val) {
         final wasEmpty = _params[key] == null || _params[key].toString().trim().isEmpty;
@@ -1744,10 +2295,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
-            color: isFieldMissingExtra ? Colors.grey[200] : Colors.grey[50],
+            color: isFieldMissingExtra ? ftExtra.fieldBgMissing : ftExtra.fieldBg,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isFieldValidatedExtra ? Colors.green.withOpacity(0.3) : Colors.grey.withOpacity(0.2),
+              color: isFieldValidatedExtra ? ftExtra.validationFieldBorder : ftExtra.borderSubtle,
               width: isFieldValidatedExtra ? 1.5 : 1,
             ),
           ),
@@ -1758,15 +2309,25 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                 Expanded(
                   child: TextField(
                     controller: controller,
-                    style: TextStyle(fontSize: 15, color: Colors.grey[900]),
-                    decoration: InputDecoration(
-                      labelText: key,
-                      labelStyle: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
-                      border: InputBorder.none,
+                    focusNode: _focusNodeFor(key),
+                    style: TextStyle(fontSize: 15, color: ftExtra.textPrimary),
+                    decoration: _schemaFieldDecoration(
+                      label: _displayFieldLabel(key),
+                      ft: ftExtra,
                     ),
                     onChanged: (val) => applyTextValueExtra(val),
                   ),
                 ),
+                _speechMicForField(
+                      key: key,
+                      show: true,
+                      fieldLabel: key,
+                      onRecognized: (text) {
+                        controller.text = text;
+                        applyTextValueExtra(text);
+                      },
+                    ) ??
+                    const SizedBox.shrink(),
                 actionButtonExtra,
               ],
             ),
@@ -1797,6 +2358,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     final childLabel =
         _childLevelLabel.isNotEmpty ? _childLevelLabel : leafLabel;
     final maxHeight = MediaQuery.of(context).size.height * 0.9;
+    final ft = _ft;
     final dialogTitle = isEdit
         ? '$leafLabel bearbeiten'
         : (isChildCreate
@@ -1807,7 +2369,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: Container(
-          color: Colors.white,
+          color: ft.scaffold,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1818,13 +2380,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      widget.discipline.color.withOpacity(0.1),
-                      widget.discipline.color.withOpacity(0.05),
+                      widget.discipline.uiBackground.withValues(
+                        alpha: ft.isDark ? 0.35 : 1.0,
+                      ),
+                      widget.discipline.uiBackground.withValues(
+                        alpha: ft.isDark ? 0.15 : 0.5,
+                      ),
                     ],
                   ),
                   border: Border(
                     bottom: BorderSide(
-                      color: Colors.grey.withOpacity(0.2),
+                      color: ft.divider,
                       width: 1,
                     ),
                   ),
@@ -1839,12 +2405,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: widget.discipline.color.withOpacity(0.15),
+                              color: widget.discipline.uiBackground,
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Icon(
                               widget.discipline.icon,
-                              color: widget.discipline.color,
+                              color: widget.discipline.uiColor,
                               size: 24,
                             ),
                           ),
@@ -1859,7 +2425,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                   style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.grey[900],
+                                    color: ft.textPrimary,
                                     letterSpacing: -0.3,
                                   ),
                                 ),
@@ -1870,7 +2436,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
-                                      color: Colors.grey[800],
+                                      color: ft.textPrimary.withValues(alpha: 0.85),
                                     ),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
@@ -1883,7 +2449,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                       style: TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w500,
-                                        color: Colors.grey[600],
+                                        color: ft.textSecondary,
                                       ),
                                     ),
                                   ],
@@ -1894,7 +2460,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.grey[600],
+                                      color: ft.textSecondary,
                                     ),
                                   ),
                                 ],
@@ -1904,41 +2470,42 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         ],
                       ),
                     ),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).primaryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
+                    if (ref.watch(settingsProvider).typenschildOcrEnabled)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).primaryColor.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
-                          onTap: _takePhotoForOcr,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.document_scanner,
-                                  color: Theme.of(context).primaryColor,
-                                  size: 22,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'OCR',
-                                  style: TextStyle(
+                        ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _takePhotoForOcr,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.document_scanner,
                                     color: Theme.of(context).primaryColor,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
+                                    size: 22,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'OCR',
+                                    style: TextStyle(
+                                      color: Theme.of(context).primaryColor,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -1953,6 +2520,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                       ..._buildReadOnlyHierarchyFields(),
                       ..._buildSchemaFields(),
 
+                      // QR-Code Nummer
+                      const SizedBox(height: 8),
+                      _buildQrCodeSection(),
+
                       // Fotos
                       const SizedBox(height: 8),
                       _buildPhotoSection(),
@@ -1964,10 +2535,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
               // Aktion-Buttons
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: ft.scaffold,
                   border: Border(
                     top: BorderSide(
-                      color: Colors.grey.withOpacity(0.2),
+                      color: ft.divider,
                       width: 1,
                     ),
                   ),
@@ -1993,7 +2564,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         side: BorderSide(
-                          color: Colors.grey[300]!,
+                          color: ft.cancelButtonBorder,
                           width: 1.5,
                         ),
                       ),
@@ -2003,13 +2574,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           Icon(
                             Icons.close,
                             size: 20,
-                            color: Colors.grey[700],
+                            color: ft.cancelButtonText,
                           ),
                           const SizedBox(width: 8),
                           Text(
                             'Abbrechen',
                             style: TextStyle(
-                              color: Colors.grey[700],
+                              color: ft.cancelButtonText,
                               fontWeight: FontWeight.w600,
                               fontSize: 15,
                             ),
@@ -2041,10 +2612,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                           if (leafKey != null &&
                               leafKey.isNotEmpty &&
                               displayKey != null &&
-                              !CsvSettings.paramKeysMatch(leafKey, displayKey)) {
+                              !CsvSettings.paramKeysMatch(leafKey, displayKey) &&
+                              !csv.mustNotReceiveDisplayName(leafKey)) {
                             _params[leafKey] = name;
                           }
                         }
+                        _applyLockedLocationParams();
 
                         final saveParams = Map<String, dynamic>.from(_params);
                         CsvSettings.migrateParamsFromAnlagenColumnKeys(

@@ -5,6 +5,7 @@ import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../database/database_service.dart';
 import '../../services/template_service.dart';
+import '../../theme/app_palette.dart';
 
 typedef TemplateFormProceedCallback = void Function({
   required String selectedGewerk,
@@ -311,7 +312,7 @@ class _TemplateAnlageDialogState extends State<TemplateAnlageDialog> {
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   child: Text(
                     'Fehler beim Laden der Vorlagen: $_error',
-                    style: const TextStyle(color: Colors.red),
+                    style: const TextStyle(color: AppPalette.error),
                   ),
                 )
               else if (!hasTypes)

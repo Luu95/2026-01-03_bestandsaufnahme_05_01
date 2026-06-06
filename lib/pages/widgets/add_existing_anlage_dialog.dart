@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../../database/database_service.dart';
 import '../../models/anlage.dart';
+import '../../theme/app_palette.dart';
 
 /// Bottom-Sheet-Dialog: Liste aller Anlagen des Gebäudes/Flurs, die noch nicht
 /// als Marker auf dem Grundriss liegen. Auswahl einer Anlage gibt sie zurück.
@@ -101,7 +102,7 @@ class _AddExistingAnlageDialogState extends State<AddExistingAnlageDialog> {
                     itemBuilder: (context, index) {
                       final a = _anlagen[index];
                       return ListTile(
-                        leading: Icon(Icons.category, color: a.discipline.color),
+                        leading: Icon(Icons.category, color: a.discipline.uiColor),
                         title: Text(a.name),
                         subtitle: Text(a.discipline.label),
                         onTap: () => Navigator.of(context).pop(a),
