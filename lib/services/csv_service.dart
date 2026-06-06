@@ -738,6 +738,47 @@ class CsvService {
     return anlagen.where((a) => !_isSyntheticHierarchyNode(a)).toList();
   }
 
+  /// Export-Reihenfolge: bei CSV-Import strikt nach Original-Zeilenindex,
+  /// sonst hierarchisch. Synthetische Hierarchie-Knoten werden ausgeschlossen.
+  static List<Anlage> _anlagenForCsvExport(
+    List<Anlage> anlagen,
+    CsvSettings csvSettings,
+  ) {
+    final leaves = _leafAnlagenForExport(anlagen);
+    if (leaves.isEmpty) return leaves;
+
+    if (csvSettings.importHeaderRow.isNotEmpty) {
+      return List<Anlage>.from(leaves)
+        ..sort((a, b) {
+          final rawA = a.params[CsvSettings.csvRowIndexParamKey];
+          final rawB = b.params[CsvSettings.csvRowIndexParamKey];
+          if (rawA == null && rawB == null) return 0;
+          if (rawA == null) return 1;
+          if (rawB == null) return -1;
+          return compareAnlagenCsvRowIndex(a.params, b.params);
+        });
+    }
+    return _orderAnlagenHierarchically(leaves);
+  }
+
+  /// CSV-Daten 1:1 aus gespeicherten Import-Zellen (Header + Zeilen).
+  static List<List<String>>? _buildRoundTripCsvData(
+    List<Anlage> orderedAnlagen,
+    CsvSettings csvSettings,
+  ) {
+    if (!canRoundTripAnlagenCsvExport(csvSettings, orderedAnlagen)) {
+      return null;
+    }
+    final headerRow = List<String>.from(csvSettings.importHeaderRow);
+    final csvData = <List<String>>[headerRow];
+    for (final anlage in orderedAnlagen) {
+      csvData.add(
+        buildExportRowFromCsvRowCells(anlage.params, headerRow),
+      );
+    }
+    return csvData;
+  }
+
   static List<Anlage> _orderAnlagenHierarchically(List<Anlage> anlagen) {
     final parentsInOrder = <String, Anlage>{};
     final parentOrder = <String>[];
@@ -1447,6 +1488,13 @@ class CsvService {
           params['__parentLfdNummer'] = immediateParentLfd;
         }
 
+        captureCsvRowCellsToParams(
+          headerRow: headerRow,
+          row: row,
+          params: params,
+          rowIndex: i,
+        );
+
         debugPrint(
           'Blatt $nameValue (lfd: $lfdNummerValue): Disziplin=$disciplineLabelValue, '
           'Parent=${params['__parentLfdNummer']}',
@@ -1501,8 +1549,7 @@ class CsvService {
       ];
       final useFotoColumns = fotoLabels.any((l) => l != null && l.trim().isNotEmpty);
 
-      final orderedAnlagen =
-          _orderAnlagenHierarchically(_leafAnlagenForExport(anlagen));
+      final orderedAnlagen = _anlagenForCsvExport(anlagen, csvSettings);
       var disciplineList = List<Disziplin>.from(disciplines);
       if (disciplineList.isEmpty &&
           dbService != null &&
@@ -1516,55 +1563,64 @@ class CsvService {
         globalSchema = await _loadGlobalSchema(projectId);
       }
 
-      final dataColumnKeys = buildExportHeaderRow(csvSettings);
-      if (dataColumnKeys.isEmpty) {
-        throw Exception(
-          'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
+      final roundTripCsv = _buildRoundTripCsvData(orderedAnlagen, csvSettings);
+      final List<List<String>> csvData;
+      if (roundTripCsv != null) {
+        csvData = roundTripCsv;
+        debugPrint(
+          'CSV Export 1:1 (${orderedAnlagen.length} Zeilen, ${csvSettings.importHeaderRow.length} Spalten)',
         );
-      }
-
-      final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
-      final useQrColumn = csvSettings.hasQrCodeExportColumn;
-      final useExtraExportColumns = useFotoColumns || useQrColumn;
-      final qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
-
-      final headerRow = useExtraExportColumns
-          ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
-          : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
-      final csvData = <List<String>>[headerRow];
-
-      debugPrint(
-        'CSV Export (${orderedAnlagen.length} Blatt-Datensätze, ${dataColumnKeys.length} Spalten): $headerRow',
-      );
-
-      final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
-
-      for (final anlage in orderedAnlagen) {
-        const emptyFotoNumbers = ['', '', '', ''];
-        final dataRow = _buildColumnMappedExportRow(
-          anlage: anlage,
-          csvSettings: csvSettings,
-          disciplines: disciplineList,
-          globalSchema: globalSchema,
-          targetLength: dataColumnKeys.length,
-        );
-
-        if (useExtraExportColumns) {
-          if (qrAppended) {
-            final qrVal =
-                anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
-            dataRow.add(qrVal);
-          }
-          if (useFotoColumns) {
-            for (final i in appendedIndices) {
-              dataRow.add(emptyFotoNumbers[i]);
-            }
-          }
-        } else {
-          dataRow.addAll(['', '', '', '']);
+      } else {
+        final dataColumnKeys = buildExportHeaderRow(csvSettings);
+        if (dataColumnKeys.isEmpty) {
+          throw Exception(
+            'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
+          );
         }
 
-        csvData.add(dataRow);
+        final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
+        final useQrColumn = csvSettings.hasQrCodeExportColumn;
+        final useExtraExportColumns = useFotoColumns || useQrColumn;
+        final qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
+
+        final headerRow = useExtraExportColumns
+            ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
+            : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
+        csvData = <List<String>>[headerRow];
+
+        debugPrint(
+          'CSV Export (${orderedAnlagen.length} Blatt-Datensätze, ${dataColumnKeys.length} Spalten): $headerRow',
+        );
+
+        final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
+
+        for (final anlage in orderedAnlagen) {
+          const emptyFotoNumbers = ['', '', '', ''];
+          final dataRow = _buildColumnMappedExportRow(
+            anlage: anlage,
+            csvSettings: csvSettings,
+            disciplines: disciplineList,
+            globalSchema: globalSchema,
+            targetLength: dataColumnKeys.length,
+          );
+
+          if (useExtraExportColumns) {
+            if (qrAppended) {
+              final qrVal =
+                  anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
+              dataRow.add(qrVal);
+            }
+            if (useFotoColumns) {
+              for (final i in appendedIndices) {
+                dataRow.add(emptyFotoNumbers[i]);
+              }
+            }
+          } else {
+            dataRow.addAll(['', '', '', '']);
+          }
+
+          csvData.add(dataRow);
+        }
       }
 
       // CSV-String erstellen (UTF-8 mit BOM für Excel-Kompatibilität)
@@ -1677,8 +1733,7 @@ class CsvService {
 
     int fotoCounter = 1;
 
-    final orderedAnlagenForHeader =
-        _orderAnlagenHierarchically(_leafAnlagenForExport(anlagen));
+    final orderedAnlagen = _anlagenForCsvExport(anlagen, csvSettings);
     var disciplineList = List<Disziplin>.from(disciplines);
     if (disciplineList.isEmpty &&
         dbService != null &&
@@ -1692,24 +1747,40 @@ class CsvService {
       globalSchema = await _loadGlobalSchema(projectId);
     }
 
-    final dataColumnKeys = buildExportHeaderRow(csvSettings);
-    if (dataColumnKeys.isEmpty) {
-      throw Exception(
-        'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
-      );
+    final useRoundTrip = canRoundTripAnlagenCsvExport(csvSettings, orderedAnlagen);
+
+    List<String> dataColumnKeys;
+    List<String> headerRow;
+    bool useExtraExportColumns;
+    bool qrAppended;
+    List<int> appendedIndices;
+
+    if (useRoundTrip) {
+      dataColumnKeys = List<String>.from(csvSettings.importHeaderRow);
+      headerRow = List<String>.from(dataColumnKeys);
+      useExtraExportColumns = false;
+      qrAppended = false;
+      appendedIndices = const [];
+    } else {
+      dataColumnKeys = buildExportHeaderRow(csvSettings);
+      if (dataColumnKeys.isEmpty) {
+        throw Exception(
+          'Keine CSV-Spalten konfiguriert. Bitte Hierarchie- und Attribut-Spalten in den CSV-Einstellungen setzen.',
+        );
+      }
+
+      final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
+      final useQrColumn = csvSettings.hasQrCodeExportColumn;
+      useExtraExportColumns = useFotoColumns || useQrColumn;
+      qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
+
+      headerRow = useExtraExportColumns
+          ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
+          : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
+      appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
     }
 
-    final qrLabel = csvSettings.qrCodeNummerSpalteLabel;
-    final useQrColumn = csvSettings.hasQrCodeExportColumn;
-    final useExtraExportColumns = useFotoColumns || useQrColumn;
-    final qrAppended = useQrColumn && _isQrAppended(dataColumnKeys, qrLabel);
-
-    final csvData = <List<String>>[];
-    final headerRow = useExtraExportColumns
-        ? _buildExportHeader(dataColumnKeys, fotoLabels, qrCodeLabel: qrLabel)
-        : (List<String>.from(dataColumnKeys)..addAll(['Foto1', 'Foto2', 'Foto3', 'Foto4']));
-    csvData.add(headerRow);
-    final appendedIndices = useFotoColumns ? _appendedFotoIndices(dataColumnKeys, fotoLabels) : <int>[];
+    final csvData = <List<String>>[headerRow];
 
     int neueAnlagenZaehler = 1;
 
@@ -1717,7 +1788,6 @@ class CsvService {
     await fotosDir.create(recursive: true);
 
     final Map<String, Directory> gewerkDirs = {};
-    final orderedAnlagen = orderedAnlagenForHeader;
 
     for (final anlage in orderedAnlagen) {
       String lfdNummer = anlage.params['lfdNummer']?.toString() ?? '';
@@ -1771,13 +1841,15 @@ class CsvService {
         }
       }
 
-      var dataRow = _buildColumnMappedExportRow(
-        anlage: anlage,
-        csvSettings: csvSettings,
-        disciplines: disciplineList,
-        globalSchema: globalSchema,
-        targetLength: dataColumnKeys.length,
-      );
+      var dataRow = useRoundTrip
+          ? buildExportRowFromCsvRowCells(anlage.params, headerRow)
+          : _buildColumnMappedExportRow(
+              anlage: anlage,
+              csvSettings: csvSettings,
+              disciplines: disciplineList,
+              globalSchema: globalSchema,
+              targetLength: dataColumnKeys.length,
+            );
       if (useFotoColumns) {
         for (var col = 0; col < dataColumnKeys.length && col < dataRow.length; col++) {
           final label = dataColumnKeys[col];
@@ -1788,20 +1860,22 @@ class CsvService {
         }
       }
 
-      if (useExtraExportColumns) {
-        if (qrAppended) {
-          final qrVal =
-              anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
-          dataRow.add(qrVal);
-        }
-        if (useFotoColumns) {
-          for (final i in appendedIndices) {
+      if (!useRoundTrip) {
+        if (useExtraExportColumns) {
+          if (qrAppended) {
+            final qrVal =
+                anlage.params[CsvSettings.qrCodeNummerParamKey]?.toString().trim() ?? '';
+            dataRow.add(qrVal);
+          }
+          if (useFotoColumns) {
+            for (final i in appendedIndices) {
+              dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
+            }
+          }
+        } else {
+          for (int i = 0; i < 4; i++) {
             dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
           }
-        }
-      } else {
-        for (int i = 0; i < 4; i++) {
-          dataRow.add(i < fotoNumbers.length ? fotoNumbers[i] : '');
         }
       }
 

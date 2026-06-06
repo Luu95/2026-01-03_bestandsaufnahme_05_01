@@ -99,6 +99,12 @@ class CsvSettings {
   /// Interner Param-Key für die QR-Code-Nummer in Anlagen-Params.
   static const qrCodeNummerParamKey = 'qrCodeNummer';
 
+  /// Rohe CSV-Zellen pro Header-Label (Import → Export 1:1).
+  static const csvRowCellsParamKey = '__csvRowCells';
+
+  /// Import-Reihenfolge (0-basiert, keine Sortierung beim Export).
+  static const csvRowIndexParamKey = '__csvRowIndex';
+
   final HierarchyLevelConfig level1;
   final HierarchyLevelConfig level2;
   final HierarchyLevelConfig level3;
@@ -789,7 +795,8 @@ class CsvSettings {
     return null;
   }
 
-  /// Schema-Feld für festen ATT-Slot; Legacy-Fallback über Listenindex.
+  /// Schema-Feld für festen ATT-Slot.
+  /// Legacy: Listenindex nur wenn kein Feld attSlot gespeichert hat.
   static Map<String, dynamic>? schemaFieldAtAttSlot(
     int attSlot,
     List<Map<String, dynamic>> fields,
@@ -798,11 +805,10 @@ class CsvSettings {
     for (final f in fields) {
       if (attSlotFromSchemaField(f) == attSlot) return f;
     }
+    final usesAttSlots = fields.any((f) => attSlotFromSchemaField(f) != null);
+    if (usesAttSlots) return null;
     final idx = attSlot - 1;
-    if (idx >= 0 && idx < fields.length) {
-      final legacy = fields[idx];
-      if (attSlotFromSchemaField(legacy) == null) return legacy;
-    }
+    if (idx >= 0 && idx < fields.length) return fields[idx];
     return null;
   }
 
@@ -817,7 +823,9 @@ class CsvSettings {
     if (k == 'lfdNummer' ||
         k == 'photoPaths' ||
         k == '__parentLfdNummer' ||
-        k == '__syntheticParent') {
+        k == '__syntheticParent' ||
+        k == csvRowCellsParamKey ||
+        k == csvRowIndexParamKey) {
       return true;
     }
     if (isAnlagenCsvColumnParamKey(k)) return true;

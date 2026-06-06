@@ -244,6 +244,7 @@ class TemplateService {
     List<dynamic> row,
     CsvSettings csvSettings, {
     List<String>? headerRow,
+    int rowIndex = 0,
   }) {
     final header = headerRow ?? csvSettings.importHeaderRow;
     final mapping = CsvSettings.resolveImportAttributeMapping(
@@ -251,21 +252,57 @@ class TemplateService {
       settings: csvSettings,
     );
 
+    String schemaJson = '';
     if (CsvSettings.headerLooksLikeAnlagenWertFormat(header) &&
         mapping.pairs.isNotEmpty) {
-      return _buildParameterJsonFromAnlagenPairsRow(row, mapping.pairs);
-    }
-
-    if (mapping.quadruplets.isNotEmpty) {
-      return _buildParameterJsonFromConfiguredQuadruplets(
+      schemaJson = _buildParameterJsonFromAnlagenPairsRow(row, mapping.pairs);
+    } else if (mapping.quadruplets.isNotEmpty) {
+      schemaJson = _buildParameterJsonFromConfiguredQuadruplets(
         row,
         mapping.quadruplets,
       );
+    } else {
+      schemaJson = _buildParameterJsonFromAttributeQuadruplets(
+        row,
+        _firstAttributeScanColumn(csvSettings),
+      );
     }
-    return _buildParameterJsonFromAttributeQuadruplets(
-      row,
-      _firstAttributeScanColumn(csvSettings),
+
+    return _mergeParameterJsonWithCsvRow(
+      schemaJson: schemaJson,
+      headerRow: header,
+      row: row,
+      rowIndex: rowIndex,
     );
+  }
+
+  static String _mergeParameterJsonWithCsvRow({
+    required String schemaJson,
+    required List<String> headerRow,
+    required List<dynamic> row,
+    required int rowIndex,
+  }) {
+    final decoded = <String, dynamic>{};
+    if (schemaJson.trim().isNotEmpty) {
+      try {
+        final parsed = json.decode(schemaJson);
+        if (parsed is Map) {
+          decoded.addAll(Map<String, dynamic>.from(parsed));
+        }
+      } catch (_) {}
+    }
+
+    final cells = <String, String>{};
+    for (var i = 0; i < headerRow.length; i++) {
+      final h = headerRow[i].trim();
+      if (h.isEmpty) continue;
+      cells[h] = _safeCell(row, i);
+    }
+    decoded[CsvSettings.csvRowCellsParamKey] = cells;
+    decoded[CsvSettings.csvRowIndexParamKey] = rowIndex;
+
+    if (decoded.isEmpty) return '';
+    return json.encode(decoded);
   }
 
   /// Lädt Vorlagen aus der Datenbank (projektbezogen)
@@ -402,6 +439,7 @@ class TemplateService {
     // Parse Datenzeilen und speichere direkt in DB
     int count = 0;
     int skipped = 0;
+    var dataRowIndex = 0;
     for (var i = 1; i < csvData.length; i++) {
       final row = csvData[i];
       if (row.isEmpty || row.every((cell) => cell.toString().trim().isEmpty)) {
@@ -417,6 +455,7 @@ class TemplateService {
             row,
             csvSettings,
             headerRow: importHeaderRow,
+            rowIndex: dataRowIndex,
           );
           await dbService.insertTemplate(
             projectId,
@@ -429,6 +468,7 @@ class TemplateService {
           
           uniqueGewerke.add(template.gewerk);
           count++;
+          dataRowIndex++;
         } else {
           skipped++;
         }
@@ -614,6 +654,7 @@ class TemplateService {
           row,
           csvSettings,
           headerRow: headerRow,
+          rowIndex: i - 1,
         );
         final template = Template.fromCsvRowWithSettings(
           row,
@@ -724,7 +765,10 @@ class TemplateService {
       final decoded = json.decode(parameterString);
       if (decoded is! Map) return {};
       return decoded.entries
-          .where((e) => e.key != '_schema')
+          .where((e) =>
+              e.key != '_schema' &&
+              e.key != CsvSettings.csvRowCellsParamKey &&
+              e.key != CsvSettings.csvRowIndexParamKey)
           .map((e) => MapEntry(e.key.toString(), e.value))
           .fold<Map<String, dynamic>>({}, (m, e) => m..[e.key] = e.value);
     } catch (_) {
