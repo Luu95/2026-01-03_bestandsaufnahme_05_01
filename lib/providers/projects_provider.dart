@@ -144,7 +144,7 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
       
       for (final idx in indices) {
         if (idx >= 0 && idx < projects.length) {
-          await _dbService.deleteProject(projects[idx].id);
+          await _dbService.softDeleteProject(projects[idx].id);
           projects.removeAt(idx);
         }
       }
@@ -249,7 +249,7 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
       indices.sort((a, b) => b.compareTo(a));
       for (final idx in indices) {
         if (idx >= 0 && idx < project.buildings.length) {
-          await _dbService.deleteBuilding(project.buildings[idx].id);
+          await _dbService.softDeleteBuilding(project.buildings[idx].id);
           project.buildings.removeAt(idx);
         }
       }

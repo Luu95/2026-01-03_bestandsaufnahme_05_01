@@ -75,6 +75,60 @@ String _cellValue(dynamic value) {
   return value.toString();
 }
 
+/// Spaltenindizes der Hierarchie-Ebenen (dürfen bei 1:1-Export nicht durch Formularwerte überschrieben werden).
+Set<int> hierarchyExportColumnIndices(
+  CsvSettings csvSettings,
+  List<String> headers,
+) {
+  final cols = <int>{};
+  void addCol(int? col) {
+    if (col != null && col >= 0 && col < headers.length) cols.add(col);
+  }
+
+  void addByLabel(String? label) {
+    final t = label?.trim() ?? '';
+    if (t.isEmpty) return;
+    for (var i = 0; i < headers.length; i++) {
+      if (CsvSettings.paramKeysMatch(headers[i], t)) addCol(i);
+    }
+  }
+
+  // Immer: Header „Ebene1“/„Ebene2“/„Ebene3“ schützen.
+  for (var i = 0; i < headers.length; i++) {
+    if (CsvSettings.isEbeneHierarchyHeader(headers[i])) addCol(i);
+  }
+
+  for (var level = 1; level <= 3; level++) {
+    addCol(csvSettings.findHierarchyColumnInHeaders(headers, level));
+    switch (level) {
+      case 1:
+        addByLabel(csvSettings.labelGewerk);
+        break;
+      case 2:
+        addByLabel(csvSettings.labelAnlage);
+        break;
+      case 3:
+        addByLabel(csvSettings.labelBauteil);
+        break;
+    }
+  }
+  addByLabel(csvSettings.resolveSchemaItemParamKey());
+  addByLabel(csvSettings.resolveRevisionsobjektGroupingParamKey());
+
+  addCol(csvSettings.level1.nameColumn);
+  addCol(csvSettings.level2.nameColumn);
+  addCol(csvSettings.level3.nameColumn);
+  if (csvSettings.level1.useIdColumn) addCol(csvSettings.level1.idColumn);
+  if (csvSettings.level2.useIdColumn) addCol(csvSettings.level2.idColumn);
+  if (csvSettings.level3.useIdColumn) addCol(csvSettings.level3.idColumn);
+
+  for (final level in csvSettings.enabledLevelsOrdered) {
+    addCol(level.nameColumn);
+    if (level.useIdColumn) addCol(level.idColumn);
+  }
+  return cols;
+}
+
 /// Speichert die CSV-Zeile unverändert (Header → Zelle) in [params].
 void captureCsvRowCellsToParams({
   required List<String> headerRow,
@@ -146,6 +200,7 @@ bool isInternalExportParamKey(String key) {
   final k = key.trim();
   if (k.isEmpty) return true;
   if (k.startsWith('__')) return true;
+  if (CsvSettings.isAttSlotParamKey(k)) return true;
   if (k.startsWith('_field_')) return true;
   if (k.startsWith('_') &&
       (k.endsWith('_validated') || k.endsWith('_missing'))) {
@@ -221,6 +276,24 @@ List<MapEntry<String, dynamic>> _exportableAttributeParamEntries(
   return entries;
 }
 
+/// Wie [_exportableAttributeParamEntries], sortiert nach Import-ATT-Slot (nicht alphabetisch).
+List<MapEntry<String, dynamic>> _exportableAttributeParamEntriesBySlot(
+  Map<String, dynamic> params,
+  CsvSettings csvSettings,
+) {
+  const noSlot = 999;
+  final entries = _exportableAttributeParamEntries(params, csvSettings);
+  entries.sort((a, b) {
+    final slotA = CsvSettings.attSlotForParam(params, a.key) ?? noSlot;
+    final slotB = CsvSettings.attSlotForParam(params, b.key) ?? noSlot;
+    if (slotA == noSlot && slotB == noSlot) {
+      return a.key.compareTo(b.key);
+    }
+    return slotA.compareTo(slotB);
+  });
+  return entries;
+}
+
 Map<String, dynamic>? _schemaFieldAtAttSlot(
   int attSlot,
   List<Map<String, dynamic>> orderedFields,
@@ -240,6 +313,34 @@ String attributeLabelAtAttSlot(
     (field['label'] ?? key).toString(),
   );
   return label.isNotEmpty ? label : key;
+}
+
+/// Param-Key des Attributs, das beim Import den ATT-Slot [attSlot] hatte.
+String? paramKeyForAttSlot(Map<String, dynamic> params, int attSlot) {
+  if (attSlot <= 0) return null;
+  for (final entry in params.entries) {
+    final k = entry.key.toString().trim();
+    if (k.isEmpty || CsvSettings.isAttSlotParamKey(k)) continue;
+    if (CsvSettings.attSlotForParam(params, k) == attSlot) return k;
+  }
+  return null;
+}
+
+/// Anzeigename für einen Param-Key (Schema-Label oder Key).
+String displayLabelForParamKey(
+  String paramKey,
+  List<Map<String, dynamic>> orderedFields,
+) {
+  for (final field in orderedFields) {
+    final key = (field['key'] ?? '').toString().trim();
+    if (CsvSettings.paramKeysMatch(key, paramKey)) {
+      final label = CsvSettings.normalizeFieldLabelForDisplay(
+        (field['label'] ?? key).toString(),
+      );
+      return label.isNotEmpty ? label : key;
+    }
+  }
+  return paramKey;
 }
 
 void _appendExportSchemaField(
@@ -421,7 +522,52 @@ List<AttributeColumnPair> _effectiveAttributePairs(
   return CsvSettings.detectAnlagenAttributePairsFromHeader(headers);
 }
 
+List<AttributeTripletColumn> _effectiveAttributeTriplets(
+  CsvSettings csvSettings,
+  List<String> headers,
+) {
+  if (headers.isNotEmpty) {
+    final detected = CsvSettings.detectQuadrupletsFromHeader(headers);
+    if (detected.isNotEmpty) return detected;
+  }
+  if (csvSettings.attributeTripletColumns.isNotEmpty) {
+    return csvSettings.attributeTripletColumns;
+  }
+  return const [];
+}
+
+/// Wert für einen ATT-Slot: zuerst Slot-Key, sonst Schema-/Header-Lookup.
+String _resolveSlotOrPairExportValue({
+  required String? slotParamKey,
+  required int pairIndex,
+  required AttributeColumnPair pair,
+  required List<String> headers,
+  required Map<String, dynamic> params,
+  required CsvSettings csvSettings,
+  required List<Map<String, dynamic>> orderedFields,
+  required List<MapEntry<String, dynamic>> fallbackEntries,
+}) {
+  if (slotParamKey != null && slotParamKey.trim().isNotEmpty) {
+    final fromSlot = csvSettings.paramValueForKey(params, slotParamKey) ??
+        params[slotParamKey]?.toString().trim();
+    if (fromSlot != null && fromSlot.trim().isNotEmpty) {
+      return fromSlot.trim();
+    }
+  }
+  return _resolvePairExportValue(
+    pairIndex: pairIndex,
+    pair: pair,
+    headers: headers,
+    params: params,
+    csvSettings: csvSettings,
+    orderedFields: orderedFields,
+    fallbackEntries: fallbackEntries,
+  );
+}
+
 /// Liest Hierarchie-Wert für Export.
+/// Kein Anzeigename/Bezeichnung als Fallback für Schema-/RO-Ebenen (sonst landet
+/// z. B. „test1“ in Ebene2 statt dem festen Revisionsobjekt).
 String? hierarchyExportValue(
   Map<String, dynamic> params,
   CsvSettings csvSettings,
@@ -433,14 +579,38 @@ String? hierarchyExportValue(
     return disciplineLabel?.trim();
   }
 
+  final displayName = csvSettings.displayNameValueFromParams(params)?.trim() ??
+      csvSettings.paramValueForKey(params, 'Bezeichnung')?.trim() ??
+      '';
+
+  bool isLikelyDisplayNameLeak(String value) {
+    if (displayName.isEmpty) return false;
+    if (csvSettings.schemaItemLevelNumber != level) return false;
+    return value.trim() == displayName;
+  }
+
   final fromHierarchy = csvSettings.hierarchyLevelValueFromParams(params, level);
-  if (fromHierarchy != null && fromHierarchy.isNotEmpty) {
+  if (fromHierarchy != null &&
+      fromHierarchy.isNotEmpty &&
+      !isLikelyDisplayNameLeak(fromHierarchy)) {
     return fromHierarchy;
   }
 
+  // Direkter Header-Key (Ebene1/Ebene2/…) – ohne Anzeigename-Fallback.
   for (final key in csvSettings.allParamKeysForHierarchyLevel(level)) {
+    if (csvSettings.isLeafNameParamKey(key)) continue;
+    if (CsvSettings.paramKeysMatch(key, 'Bezeichnung')) continue;
     final value = csvSettings.paramValueForKey(params, key);
-    if (value != null && value.isNotEmpty) return value;
+    if (value != null &&
+        value.isNotEmpty &&
+        !isLikelyDisplayNameLeak(value)) {
+      return value;
+    }
+  }
+
+  // Schema-/RO-Ebene: niemals Anzeigename als Hierarchie-Wert.
+  if (csvSettings.schemaItemLevelNumber == level) {
+    return null;
   }
 
   final leaf = csvSettings.leafLevel;
@@ -451,6 +621,25 @@ String? hierarchyExportValue(
     return leafName.trim();
   }
   return null;
+}
+
+/// TYPE-Zelle aus Schema-Feld (text / number / Opt1|Opt2).
+String typeExportCellFromSchemaField(Map<String, dynamic>? field) {
+  if (field == null) return '';
+  final type = (field['type'] ?? '').toString().trim().toLowerCase();
+  final options = field['options'];
+  if (options is List && options.isNotEmpty) {
+    return options.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).join('|');
+  }
+  if (type == 'dropdown' || type == 'select') return '';
+  if (type.isEmpty) return 'text';
+  return type;
+}
+
+/// Fallback für leere Wert-/ART-Spalte: Schema-`art` (z. B. „Allgemein“).
+String artFallbackFromSchemaField(Map<String, dynamic>? field) {
+  if (field == null) return '';
+  return CsvSettings.normalizeFieldLabelForDisplay(field['art']?.toString());
 }
 
 String? _exportParamValue(
@@ -502,7 +691,8 @@ List<String> buildAnlageExportRowFromImportStructure({
   if (importHeaders.isEmpty) return const [];
 
   final useGewerkeTriplets = !preserveFullImportHeader &&
-      csvSettings.attributeTripletColumns.isNotEmpty &&
+      (csvSettings.attributeTripletColumns.isNotEmpty ||
+          CsvSettings.detectQuadrupletsFromHeader(importHeaders).isNotEmpty) &&
       CsvSettings.headerLooksLikeGewerkeQuadrupletFormat(importHeaders);
   final headers = useGewerkeTriplets
       ? CsvSettings.headersForAnlagenExport(importHeaders)
@@ -514,15 +704,33 @@ List<String> buildAnlageExportRowFromImportStructure({
   final pairs = useGewerkeTriplets
       ? const <AttributeColumnPair>[]
       : _effectiveAttributePairs(csvSettings, importHeaders);
+  // 1:1-Header: wenn keine WERT-Paare, Tripletts für Wert-Overlay (ART-Spalten).
   final triplets = useGewerkeTriplets
-      ? csvSettings.attributeTripletColumns
-      : const <AttributeTripletColumn>[];
+      ? _effectiveAttributeTriplets(csvSettings, importHeaders)
+      : (preserveFullImportHeader && pairs.isEmpty
+          ? _effectiveAttributeTriplets(csvSettings, importHeaders)
+          : const <AttributeTripletColumn>[]);
   final orderedFields = orderedAttributeSchemaFieldsForExport(
     discipline: exportDiscipline,
     csvSettings: csvSettings,
     params: params,
   );
   final handledImportCols = <int>{};
+  final hierarchyCols =
+      hierarchyExportColumnIndices(csvSettings, importHeaders);
+  final storedCells = hasCsvRowCellsForExport(params)
+      ? csvRowCellsFromParams(params)
+      : const <String, String>{};
+
+  // Basis: gespeicherte Import-Zellen 1:1 (ATT-Namen/Positionen bleiben erhalten).
+  if (preserveFullImportHeader && storedCells.isNotEmpty) {
+    for (var i = 0; i < importHeaders.length; i++) {
+      final header = importHeaders[i].trim();
+      if (header.isNotEmpty) {
+        row[i] = storedCells[header] ?? '';
+      }
+    }
+  }
 
   int exportColForImportIndex(int importIndex) {
     if (preserveFullImportHeader || !useGewerkeTriplets) return importIndex;
@@ -537,41 +745,66 @@ List<String> buildAnlageExportRowFromImportStructure({
     return -1;
   }
 
-  void setExportCell(int importIndex, String value) {
+  void setExportCell(
+    int importIndex,
+    String value, {
+    bool allowHierarchyOverwrite = false,
+  }) {
+    // Hierarchie-Ebenen nicht durch Attribut-/Rest-Mapping überschreiben.
+    // Erlaubt nur bei explizitem Hierarchie-Write aus Params.
+    if (hierarchyCols.contains(importIndex) &&
+        !allowHierarchyOverwrite) {
+      return;
+    }
     final exportCol = exportColForImportIndex(importIndex);
     if (exportCol >= 0 && exportCol < row.length) {
       row[exportCol] = value;
     }
   }
 
+  // Hierarchie-Spalten immer als belegt markieren (auch ohne Überschreiben).
+  handledImportCols.addAll(hierarchyCols);
+
+  void writeHierarchyCol(int nameCol, int levelNum) {
+    if (nameCol < 0 || nameCol >= importHeaders.length) return;
+    final v = hierarchyExportValue(
+      params,
+      csvSettings,
+      levelNum,
+      disciplineLabel: anlage.discipline.label,
+      leafName: anlage.name,
+    );
+    if (v != null && v.isNotEmpty) {
+      setExportCell(nameCol, v, allowHierarchyOverwrite: true);
+    }
+    handledImportCols.add(nameCol);
+  }
+
   for (var li = 0; li < csvSettings.enabledLevelsOrdered.length; li++) {
     final config = csvSettings.enabledLevelsOrdered[li];
     final levelNum = csvSettings.levelNumberAtEnabledIndex(li);
-
-    final nameCol = config.nameColumn;
-    if (nameCol >= 0 && nameCol < importHeaders.length) {
-      setExportCell(
-        nameCol,
-        hierarchyExportValue(
-              params,
-              csvSettings,
-              levelNum,
-              disciplineLabel: anlage.discipline.label,
-              leafName: anlage.name,
-            ) ??
-            '',
-      );
-      handledImportCols.add(nameCol);
-    }
+    writeHierarchyCol(config.nameColumn, levelNum);
 
     if (config.useIdColumn && config.idColumn != null) {
       final idCol = config.idColumn!;
       if (idCol >= 0 && idCol < importHeaders.length) {
         final lfd = params['lfdNummer']?.toString().trim() ?? '';
-        if (lfd.isNotEmpty) setExportCell(idCol, lfd);
+        if (lfd.isNotEmpty) {
+          setExportCell(idCol, lfd, allowHierarchyOverwrite: true);
+        }
         handledImportCols.add(idCol);
       }
     }
+  }
+
+  // Explizit Ebene1/2/3 aus Hierarchie-Params (auch wenn Config-Index abweicht).
+  for (var i = 0; i < importHeaders.length; i++) {
+    if (!CsvSettings.isEbeneHierarchyHeader(importHeaders[i])) continue;
+    final n = int.tryParse(
+      importHeaders[i].replaceAll(RegExp(r'[^0-9]'), ''),
+    );
+    if (n == null || n < 1 || n > 3) continue;
+    writeHierarchyCol(i, n);
   }
 
   final abCol = csvSettings.anlageBauteilSpalte;
@@ -584,16 +817,20 @@ List<String> buildAnlageExportRowFromImportStructure({
   }
 
   final fallbackAttributeEntries =
-      _exportableAttributeParamEntries(params, csvSettings);
+      _exportableAttributeParamEntriesBySlot(params, csvSettings);
 
   for (var ti = 0; ti < triplets.length; ti++) {
     final triplet = triplets[ti];
-    if (triplet.nameColumn >= 0 &&
-        triplet.nameColumn < importHeaders.length) {
-      setExportCell(
-        triplet.nameColumn,
-        attributeLabelAtAttSlot(ti + 1, orderedFields),
-      );
+    final nameHeader = (triplet.nameColumn >= 0 &&
+            triplet.nameColumn < importHeaders.length)
+        ? importHeaders[triplet.nameColumn]
+        : '';
+    final attSlot =
+        CsvSettings.attNumberFromHeaderLabel(nameHeader) ?? (ti + 1);
+    final slotParamKey = paramKeyForAttSlot(params, attSlot);
+    final schemaField = _schemaFieldAtAttSlot(attSlot, orderedFields);
+
+    if (triplet.nameColumn >= 0) {
       handledImportCols.add(triplet.nameColumn);
     }
     if (triplet.typeColumn >= 0) {
@@ -602,59 +839,127 @@ List<String> buildAnlageExportRowFromImportStructure({
     if (triplet.optionsColumn >= 0) {
       handledImportCols.add(triplet.optionsColumn);
     }
+    if (triplet.valueColumn >= 0) {
+      handledImportCols.add(triplet.valueColumn);
+    }
+
+    if (triplet.nameColumn >= 0 &&
+        triplet.nameColumn < importHeaders.length &&
+        (!preserveFullImportHeader || storedCells.isEmpty)) {
+      final labelKey = slotParamKey ??
+          attributeLabelAtAttSlot(attSlot, orderedFields);
+      if (labelKey.isNotEmpty) {
+        setExportCell(
+          triplet.nameColumn,
+          slotParamKey != null
+              ? displayLabelForParamKey(slotParamKey, orderedFields)
+              : labelKey,
+        );
+      }
+    }
+
+    // TYPE/OPTIONS: aus Schema (Vorlage), sonst Import-Snapshot behalten.
+    if (triplet.typeColumn >= 0 &&
+        triplet.typeColumn < importHeaders.length) {
+      final typeCell = typeExportCellFromSchemaField(schemaField);
+      if (typeCell.isNotEmpty) {
+        final exportCol = exportColForImportIndex(triplet.typeColumn);
+        final already = (exportCol >= 0 && exportCol < row.length)
+            ? row[exportCol].trim()
+            : '';
+        if (already.isEmpty) {
+          setExportCell(triplet.typeColumn, typeCell);
+        }
+      }
+    }
+    if (triplet.optionsColumn >= 0 &&
+        triplet.optionsColumn < importHeaders.length) {
+      final typeCell = typeExportCellFromSchemaField(schemaField);
+      if (typeCell.contains('|')) {
+        final exportCol = exportColForImportIndex(triplet.optionsColumn);
+        final already = (exportCol >= 0 && exportCol < row.length)
+            ? row[exportCol].trim()
+            : '';
+        if (already.isEmpty) {
+          setExportCell(triplet.optionsColumn, typeCell);
+        }
+      }
+    }
+
     if (triplet.valueColumn >= 0 &&
         triplet.valueColumn < importHeaders.length) {
-      setExportCell(
-        triplet.valueColumn,
-        _resolveTripletExportValue(
-          slotIndex: ti,
-          triplet: triplet,
-          importHeaders: importHeaders,
-          params: params,
-          csvSettings: csvSettings,
-          orderedFields: orderedFields,
-          fallbackEntries: fallbackAttributeEntries,
+      final value = _resolveSlotOrPairExportValue(
+        slotParamKey: slotParamKey,
+        pairIndex: ti,
+        pair: AttributeColumnPair(
+          nameColumn: triplet.nameColumn,
+          valueColumn: triplet.valueColumn,
+          attNumber: attSlot,
         ),
+        headers: importHeaders,
+        params: params,
+        csvSettings: csvSettings,
+        orderedFields: orderedFields,
+        fallbackEntries: fallbackAttributeEntries,
       );
-      handledImportCols.add(triplet.valueColumn);
+      if (value.isNotEmpty) {
+        setExportCell(triplet.valueColumn, _cellValue(value));
+      } else {
+        // Kein User-Wert: Schema-art (z. B. „Allgemein“) oder Snapshot behalten.
+        final exportCol = exportColForImportIndex(triplet.valueColumn);
+        final already = (exportCol >= 0 && exportCol < row.length)
+            ? row[exportCol].trim()
+            : '';
+        if (already.isEmpty) {
+          final artFallback = artFallbackFromSchemaField(schemaField);
+          if (artFallback.isNotEmpty) {
+            setExportCell(triplet.valueColumn, artFallback);
+          }
+        }
+      }
     }
   }
 
   for (var pi = 0; pi < pairs.length; pi++) {
     final pair = pairs[pi];
+    final attSlot = CsvSettings.attSlotForPair(pair, pi);
+    final slotParamKey = paramKeyForAttSlot(params, attSlot);
+
+    if (pair.nameColumn >= 0) handledImportCols.add(pair.nameColumn);
+    if (pair.valueColumn >= 0) handledImportCols.add(pair.valueColumn);
 
     if (pair.nameColumn != pair.valueColumn &&
         pair.nameColumn >= 0 &&
-        pair.nameColumn < importHeaders.length) {
-      setExportCell(
-        pair.nameColumn,
-        attributeLabelAtAttSlot(
-          CsvSettings.attSlotForPair(pair, pi),
-          orderedFields,
-        ),
-      );
-      handledImportCols.add(pair.nameColumn);
+        pair.nameColumn < importHeaders.length &&
+        (!preserveFullImportHeader || storedCells.isEmpty)) {
+      final label = slotParamKey != null
+          ? displayLabelForParamKey(slotParamKey, orderedFields)
+          : attributeLabelAtAttSlot(attSlot, orderedFields);
+      if (label.isNotEmpty) {
+        setExportCell(pair.nameColumn, label);
+      }
     }
 
     if (pair.valueColumn >= 0 && pair.valueColumn < importHeaders.length) {
-      setExportCell(
-        pair.valueColumn,
-        _resolvePairExportValue(
-          pairIndex: pi,
-          pair: pair,
-          headers: importHeaders,
-          params: params,
-          csvSettings: csvSettings,
-          orderedFields: orderedFields,
-          fallbackEntries: fallbackAttributeEntries,
-        ),
+      final value = _resolveSlotOrPairExportValue(
+        slotParamKey: slotParamKey,
+        pairIndex: pi,
+        pair: pair,
+        headers: importHeaders,
+        params: params,
+        csvSettings: csvSettings,
+        orderedFields: orderedFields,
+        fallbackEntries: fallbackAttributeEntries,
       );
-      handledImportCols.add(pair.valueColumn);
+      if (value.isNotEmpty) {
+        setExportCell(pair.valueColumn, _cellValue(value));
+      }
     }
   }
 
   for (var i = 0; i < importHeaders.length; i++) {
     if (handledImportCols.contains(i)) continue;
+    if (hierarchyCols.contains(i)) continue;
 
     final header = importHeaders[i].trim();
     if (header.isEmpty) continue;
@@ -674,6 +979,11 @@ List<String> buildAnlageExportRowFromImportStructure({
         cellValue = _cellValue(direct);
       }
     } else {
+      // Keine Param-Werte in Hierarchie-Header schreiben (Prefix-Match-Schutz).
+      if (csvSettings.isUpperHierarchyParamKey(header) ||
+          csvSettings.isHierarchyParamKey(header)) {
+        continue;
+      }
       final val = _exportParamValue(params, csvSettings, header);
       if (val != null && val.isNotEmpty) {
         cellValue = _cellValue(val);

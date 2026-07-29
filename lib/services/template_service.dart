@@ -171,8 +171,9 @@ class TemplateService {
   /// Baut Attribut-Schema aus konfigurierten Spalten-Dreiergruppen (Header-Mapping).
   static String _buildParameterJsonFromConfiguredQuadruplets(
     List<dynamic> row,
-    List<AttributeTripletColumn> quadruplets,
-  ) {
+    List<AttributeTripletColumn> quadruplets, {
+    List<String>? headers,
+  }) {
     final schema = <Map<String, dynamic>>[];
     for (var i = 0; i < quadruplets.length; i++) {
       final group = quadruplets[i];
@@ -186,7 +187,13 @@ class TemplateService {
             ? _safeCell(row, group.optionsColumn)
             : null,
       );
-      entry['attSlot'] = i + 1;
+      final headerLabel = (headers != null &&
+              group.nameColumn >= 0 &&
+              group.nameColumn < headers.length)
+          ? headers[group.nameColumn]
+          : '';
+      entry['attSlot'] =
+          CsvSettings.attNumberFromHeaderLabel(headerLabel) ?? (i + 1);
       schema.add(entry);
     }
     if (schema.isEmpty) return '';
@@ -260,6 +267,7 @@ class TemplateService {
       schemaJson = _buildParameterJsonFromConfiguredQuadruplets(
         row,
         mapping.quadruplets,
+        headers: header,
       );
     } else {
       schemaJson = _buildParameterJsonFromAttributeQuadruplets(
@@ -830,12 +838,26 @@ class TemplateService {
       final src = byKey[key] ??
           (label.isNotEmpty ? byLabel[label] : null);
       if (src == null) return copy;
-      for (final meta in ['art', 'type', 'options', 'editable', 'label']) {
+      for (final meta in [
+        'art',
+        'type',
+        'options',
+        'editable',
+        'label',
+        'attSlot',
+        'attNumber',
+      ]) {
         final existing = copy[meta];
         final fromMaster = src[meta];
-        if ((existing == null ||
-                (existing is String && existing.toString().trim().isEmpty)) &&
-            fromMaster != null) {
+        if (fromMaster == null) continue;
+        final existingEmpty = existing == null ||
+            (existing is String && existing.toString().trim().isEmpty);
+        // Fallback-Schema setzt type:'text' – Master-Dropdown/Select darf das überschreiben.
+        final weakTextType = meta == 'type' &&
+            existing is String &&
+            existing.toString().trim().toLowerCase() == 'text' &&
+            fromMaster.toString().trim().toLowerCase() != 'text';
+        if (existingEmpty || weakTextType) {
           copy[meta] = fromMaster;
         }
       }

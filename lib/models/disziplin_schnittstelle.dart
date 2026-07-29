@@ -63,7 +63,12 @@ class Disziplin {
       if (roFields != null && roFields.isNotEmpty) {
         return [...global, ...roFields.map((f) => Map<String, dynamic>.from(f))];
       }
-      // RO bekannt gewählt, aber kein Eintrag → nur globale Felder (kein Legacy-Mix)
+      // RO gewählt, aber kein Map-Eintrag: gespeichertes Flat-Schema der Anlage nutzen
+      // (z. B. nach Speichern, wenn revisionsobjektSchemas beim Laden verworfen wurde).
+      final legacy = legacyIndividualSchemaFields;
+      if (legacy.isNotEmpty) {
+        return [...global, ...legacy];
+      }
       return global;
     }
     // Legacy-Fallback: alte Daten ohne RO-Schemas (nur wenn kein RO gewählt)

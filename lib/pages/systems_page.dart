@@ -842,6 +842,46 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final idx = _alleAnlagen.indexWhere((x) => x.id == a.id);
     if (!mounted) return;
 
+    Disziplin editDiscipline = fullAnlage.discipline;
+    String? initialRo;
+
+    final projectId = await dbService.getProjectIdByBuildingId(fullAnlage.buildingId);
+    if (projectId != null && projectId.isNotEmpty) {
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      final csvSettings = ref.read(csvSettingsProvider(projectId));
+      final ro = (csvSettings.revisionsobjektValueFromParams(fullAnlage.params) ??
+              csvSettings.schemaItemValueFromParams(fullAnlage.params) ??
+              '')
+          .trim();
+
+      if (ro.isNotEmpty) {
+        final gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+          dbService,
+          projectId,
+          gewerk: fullAnlage.discipline.label,
+        );
+        final matched = gewerkTemplates.isNotEmpty
+            ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, ro)
+            : null;
+        final schemaRo = TemplateService.resolveRevisionsobjektKeyForValue(
+              fullAnlage.discipline,
+              ro,
+              templates: gewerkTemplates,
+            ) ??
+            matched?.anlagentyp.trim() ??
+            ro;
+
+        initialRo = schemaRo;
+        editDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+          discipline: fullAnlage.discipline,
+          revisionsobjekt: schemaRo,
+          template: matched,
+          templatesForLookup: gewerkTemplates,
+        );
+      }
+    }
+
+    if (!mounted) return;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -849,10 +889,11 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => GenericAnlageDialog(
-        discipline: fullAnlage.discipline,
+        discipline: editDiscipline,
         buildingId: fullAnlage.buildingId,
         floorId: fullAnlage.floorId,
         existingAnlage: fullAnlage,
+        initialRevisionsobjekt: initialRo,
         index: idx,
         onSave: (editedAnlage, index) async {
           final gk = widget.groupingKey;

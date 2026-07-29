@@ -78,22 +78,6 @@ class AnlageValidationService {
     return isAnlageValidated(anlage);
   }
 
-  /// Berechnet den Fortschritt (Anzahl validierter / Gesamt)
-  static ValidationProgress calculateProgress(List<Anlage> anlagen) {
-    if (anlagen.isEmpty) {
-      return ValidationProgress(total: 0, validated: 0, percentage: 0.0);
-    }
-    
-    final validatedCount = anlagen.where((a) => getValidatedStatus(a)).length;
-    final percentage = (validatedCount / anlagen.length) * 100.0;
-    
-    return ValidationProgress(
-      total: anlagen.length,
-      validated: validatedCount,
-      percentage: percentage,
-    );
-  }
-
   /// Zählt fehlende Felder für eine Anlage (ignoriert als fehlend markierte Felder)
   static int getMissingFieldsCount(Anlage anlage) {
     if (anlage.name.trim().isEmpty) {
@@ -209,20 +193,5 @@ class AnlageValidationService {
     }
     return count;
   }
-}
-
-/// Datenklasse für Validierungsfortschritt
-class ValidationProgress {
-  final int total;
-  final int validated;
-  final double percentage;
-
-  ValidationProgress({
-    required this.total,
-    required this.validated,
-    required this.percentage,
-  });
-
-  int get remaining => total - validated;
 }
 

@@ -4,8 +4,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:cross_file/cross_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -853,8 +851,8 @@ class CsvService {
     return params;
   }
 
-  /// Anlagen-CSV: nur die erste Spalte je Vierergruppe (z. B. ATT1) = Wert;
-  /// Attribut-Code/Schema kommt aus Gewerkevorlagen, nicht aus TYPE/OPTIONS/ART.
+  /// Anlagen-CSV mit TYPE-Spalten: Wert nur aus ART/WERT-Spalte (leer = kein Wert).
+  /// Schema-Feld kommt aus Gewerkevorlage; ATT-Slot aus Header-Nummer.
   static void _applyAnlagenAttributeParamsFromRow({
     required Map<String, dynamic> params,
     required List<dynamic> row,
@@ -873,36 +871,52 @@ class CsvService {
     }
 
     for (var i = 0; i < quadruplets.length; i++) {
-      final col = quadruplets[i].nameColumn;
-      if (col < 0) continue;
-      final cellValue = _safeCell(row, col);
+      final quad = quadruplets[i];
+      final nameCol = quad.nameColumn;
+      if (nameCol < 0) continue;
+
+      final nameHeader = nameCol < headerRow.length ? headerRow[nameCol] : '';
+      final attSlot =
+          CsvSettings.attNumberFromHeaderLabel(nameHeader) ?? (i + 1);
+
+      // Nur ART/WERT als Wert – leere Wertspalte bleibt leer (kein Fallback auf Feldname).
+      if (quad.valueColumn < 0) continue;
+      final cellValue = _safeCell(row, quad.valueColumn);
       if (cellValue.isEmpty) continue;
 
       var paramKey = '';
-      final attSlot = i + 1;
       final field = CsvSettings.schemaFieldAtAttSlot(attSlot, schemaFields);
       if (field != null) {
         paramKey = _schemaFieldParamKey(field);
       }
-      if (paramKey.isEmpty && col < headerRow.length) {
-        final header = headerRow[col].trim();
-        if (header.isNotEmpty) {
-          for (final field in schemaFields) {
-            final key = _schemaFieldParamKey(field);
-            final label = (field['label'] ?? '').toString();
-            if (CsvSettings.paramKeysMatch(key, header) ||
-                CsvSettings.paramKeysMatch(label, header)) {
+      if (paramKey.isEmpty && nameCol < headerRow.length) {
+        final nameCell = _safeCell(row, nameCol);
+        final header = nameHeader.trim();
+        final candidates = <String>[
+          if (nameCell.isNotEmpty) nameCell,
+          if (header.isNotEmpty) header,
+        ];
+        for (final candidate in candidates) {
+          for (final schemaField in schemaFields) {
+            final key = _schemaFieldParamKey(schemaField);
+            final label = (schemaField['label'] ?? '').toString();
+            if (CsvSettings.paramKeysMatch(key, candidate) ||
+                CsvSettings.paramKeysMatch(label, candidate)) {
               paramKey = key;
               break;
             }
           }
-          if (paramKey.isEmpty) {
-            paramKey = _paramKeyForHeaderLabel(header);
-          }
+          if (paramKey.isNotEmpty) break;
+        }
+        if (paramKey.isEmpty && nameCell.isNotEmpty) {
+          paramKey = _paramKeyForHeaderLabel(nameCell);
+        } else if (paramKey.isEmpty && header.isNotEmpty) {
+          paramKey = _paramKeyForHeaderLabel(header);
         }
       }
       if (paramKey.isEmpty) continue;
       params[paramKey] = _parseDynamicValue(cellValue);
+      CsvSettings.writeAttSlotForParam(params, paramKey, attSlot);
     }
   }
 
@@ -967,6 +981,7 @@ class CsvService {
       if (paramKey.isEmpty) continue;
       final parsed = _parseDynamicValue(attrValue);
       params[paramKey] = parsed;
+      CsvSettings.writeAttSlotForParam(params, paramKey, attSlot);
       if (pair.valueColumn >= 0 && pair.valueColumn < headerRow.length) {
         final valueHeader = headerRow[pair.valueColumn].trim();
         if (valueHeader.isNotEmpty) {
@@ -1637,33 +1652,6 @@ class CsvService {
     }
   }
 
-  /// Exportiert Anlagen zu CSV (Teilen oder Speichern-Dialog).
-  static Future<String?> exportAnlagenCsvForDisciplines({
-    required List<Anlage> anlagen,
-    required CsvSettings csvSettings,
-    List<Disziplin> disciplines = const [],
-    String? projectId,
-    String? buildingId,
-    DatabaseService? dbService,
-    ExportDestination destination = ExportDestination.share,
-  }) async {
-    final built = await buildAnlagenCsvExportFile(
-      anlagen: anlagen,
-      csvSettings: csvSettings,
-      disciplines: disciplines,
-      projectId: projectId,
-      buildingId: buildingId,
-      dbService: dbService,
-    );
-    return _deliverExportFile(
-      file: built.file,
-      fileName: built.fileName,
-      destination: destination,
-      shareText: 'Anlagen-Export',
-      shareSubject: 'Anlagen CSV Export',
-    );
-  }
-
   /// Erstellt ein ZIP-Archiv mit CSV und Fotos. Gibt die temporäre ZIP-Datei zurück.
   static Future<ExportBuiltFile> buildAnlagenZipExportFile({
     required List<Anlage> anlagen,
@@ -1854,69 +1842,6 @@ class CsvService {
 
     debugPrint('ZIP erstellt: ${anlagen.length} Anlagen, ${fotoCounter - 1} Fotos');
     return zipFile;
-  }
-
-  /// Exportiert Anlagen mit Fotos in ein ZIP-Archiv.
-  /// Gibt bei [ExportDestination.saveToDevice] den Speicherpfad zurück.
-  static Future<String?> exportAnlagenWithPhotos({
-    required List<Anlage> anlagen,
-    required CsvSettings csvSettings,
-    required PhotoExportStructure structure,
-    List<Disziplin> disciplines = const [],
-    String? projectId,
-    String? buildingId,
-    DatabaseService? dbService,
-    ExportDestination destination = ExportDestination.share,
-  }) async {
-    try {
-      final built = await buildAnlagenZipExportFile(
-        anlagen: anlagen,
-        csvSettings: csvSettings,
-        structure: structure,
-        disciplines: disciplines,
-        projectId: projectId,
-        buildingId: buildingId,
-        dbService: dbService,
-      );
-
-      try {
-        return await _deliverExportFile(
-          file: built.file,
-          fileName: built.fileName,
-          destination: destination,
-          shareText: 'Anlagen-Export mit Fotos',
-          shareSubject: 'Anlagen ZIP Export',
-        );
-      } finally {
-        if (await built.file.exists()) {
-          await built.file.delete();
-        }
-      }
-    } catch (e, stackTrace) {
-      debugPrint('ZIP-Export Fehler: $e');
-      debugPrint('Stack Trace: $stackTrace');
-      throw Exception('Fehler beim ZIP-Export: $e');
-    }
-  }
-
-  /// Speichert eine Export-Datei direkt auf dem Gerät (Datei-Dialog oder App-Ordner).
-  static Future<String?> _deliverExportFile({
-    required File file,
-    required String fileName,
-    required ExportDestination destination,
-    required String shareText,
-    required String shareSubject,
-  }) async {
-    if (destination == ExportDestination.saveToDevice) {
-      return saveFileToDevice(file: file, fileName: fileName);
-    }
-
-    await Share.shareXFiles(
-      [XFile(file.path)],
-      text: shareText,
-      subject: shareSubject,
-    );
-    return null;
   }
 
   static Future<Directory> _writableExportDirectory() async {

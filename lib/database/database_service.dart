@@ -3,7 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:drift/drift.dart';
-import 'package:flutter/material.dart' show Icons, Colors;
+import 'package:flutter/material.dart' show Icons;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database.dart';
 import '../models/project.dart' as models;
@@ -12,6 +12,7 @@ import '../models/floor_plan.dart' as models;
 import '../models/anlage.dart' as models;
 import '../models/attachments.dart' as models;
 import '../models/disziplin_schnittstelle.dart';
+import '../services/template_service.dart';
 import '../theme/app_palette.dart';
 
 //
@@ -168,11 +169,6 @@ class DatabaseService {
     }
 
     return projects;
-  }
-
-  /// @deprecated Verwende [softDeleteProject] für sicheres Löschen.
-  Future<void> deleteProject(String id) async {
-    await softDeleteProject(id);
   }
 
   // ========== BUILDINGS ==========
@@ -361,11 +357,6 @@ class DatabaseService {
     return buildings;
   }
 
-  /// @deprecated Verwende [softDeleteBuilding] für sicheres Löschen.
-  Future<void> deleteBuilding(String id) async {
-    await softDeleteBuilding(id);
-  }
-
   // ========== FLOOR PLANS ==========
 
   Future<void> insertFloorPlan(models.FloorPlan floorPlan, String buildingId) async {
@@ -424,13 +415,24 @@ class DatabaseService {
         })
         .map((f) => Map<String, dynamic>.from(f))
         .toList();
+
+    final mergedRo = Map<String, List<Map<String, dynamic>>>.from(
+      base.revisionsobjektSchemas,
+    );
+    fromAnlage.revisionsobjektSchemas.forEach((key, fields) {
+      mergedRo[key] = TemplateService.mergeSchemaFieldLists(
+        mergedRo[key] ?? const [],
+        fields,
+      );
+    });
+
     return Disziplin(
       label: base.label,
       icon: base.icon,
       color: base.color,
       schema: [...base.schema, ...additional],
       groupingKey: base.groupingKey,
-      revisionsobjektSchemas: base.revisionsobjektSchemas,
+      revisionsobjektSchemas: mergedRo,
     );
   }
 

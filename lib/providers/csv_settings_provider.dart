@@ -105,6 +105,30 @@ class CsvSettings {
   /// Import-Reihenfolge (0-basiert, keine Sortierung beim Export).
   static const csvRowIndexParamKey = '__csvRowIndex';
 
+  /// Merkt sich den ATT-Slot (Spaltenposition) je Attribut-Param-Key.
+  static const attSlotParamKeyPrefix = '_att_slot_';
+
+  static String attSlotParamKey(String paramKey) =>
+      '$attSlotParamKeyPrefix$paramKey';
+
+  static bool isAttSlotParamKey(String key) =>
+      key.startsWith(attSlotParamKeyPrefix);
+
+  static int? attSlotForParam(Map<String, dynamic> params, String paramKey) {
+    final raw = params[attSlotParamKey(paramKey)];
+    if (raw is int) return raw;
+    if (raw is String) return int.tryParse(raw.trim());
+    return null;
+  }
+
+  static void writeAttSlotForParam(
+    Map<String, dynamic> params,
+    String paramKey,
+    int attSlot,
+  ) {
+    params[attSlotParamKey(paramKey)] = attSlot;
+  }
+
   final HierarchyLevelConfig level1;
   final HierarchyLevelConfig level2;
   final HierarchyLevelConfig level3;
@@ -296,8 +320,11 @@ class CsvSettings {
     }
   }
 
-  /// Alle Param-Keys einer Hierarchie-Ebene (konfigurierte Labels + Legacy).
-  List<String> allParamKeysForHierarchyLevel(int level) {
+  /// Param-Keys einer Hierarchie-Ebene ohne Leaf-/Anzeigename-Filter.
+  ///
+  /// Wichtig: darf nicht [isLeafNameParamKey] / [resolveDisplayNameParamKey]
+  /// aufrufen – sonst Endlosrekursion mit [isUpperHierarchyParamKey].
+  Set<String> _rawParamKeysForHierarchyLevel(int level) {
     final keys = <String>{...configuredHierarchyParamKeys(level)};
     final headerLabel = hierarchyLevelHeaderLabel(level);
     if (headerLabel.isNotEmpty) {
@@ -307,6 +334,12 @@ class CsvSettings {
       final listKey = resolveListGroupingParamKeyForLevel(1);
       if (listKey != null && listKey.isNotEmpty) keys.add(listKey);
     }
+    return keys;
+  }
+
+  /// Alle Param-Keys einer Hierarchie-Ebene (konfigurierte Labels + Legacy).
+  List<String> allParamKeysForHierarchyLevel(int level) {
+    final keys = _rawParamKeysForHierarchyLevel(level);
     keys.removeWhere(isLeafNameParamKey);
     return keys.toList();
   }
@@ -315,6 +348,7 @@ class CsvSettings {
   bool mustNotReceiveDisplayName(String key) {
     final k = key.trim();
     if (k.isEmpty) return false;
+    if (CsvSettings.isEbeneHierarchyHeader(k)) return true;
     if (isUpperHierarchyParamKey(k)) return true;
     final schemaLevel = schemaItemLevelNumber;
     if (schemaLevel != null) {
@@ -487,34 +521,77 @@ class CsvSettings {
     return _headerLabelAt(leaf.nameColumn);
   }
 
+  /// Ob Header/Key eine generische Ebenen-Spalte ist (Ebene1, Ebene 2, …).
+  static bool isEbeneHierarchyHeader(String key) {
+    final t = key.trim().replaceAll(RegExp(r'\s+'), '');
+    if (t.isEmpty) return false;
+    return RegExp(r'^Ebene[1-3]$', caseSensitive: false).hasMatch(t);
+  }
+
   /// Ob [key] ein Param-Key der oberen Hierarchie (Ebene 1–2) ist – nicht für Ebene-3-Anzeige.
   bool isUpperHierarchyParamKey(String key) {
     final k = key.trim();
     if (k.isEmpty) return false;
+    if (CsvSettings.isEbeneHierarchyHeader(k)) {
+      final n = int.tryParse(k.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (n != null && n <= 2) return true;
+    }
     for (var level = 1; level <= 2; level++) {
-      for (final hk in allParamKeysForHierarchyLevel(level)) {
+      for (final hk in _rawParamKeysForHierarchyLevel(level)) {
         if (paramKeysMatch(k, hk)) return true;
       }
     }
     return false;
   }
 
+  /// Ob [key] zu einer Hierarchie-Ebene (1–3 inkl. Schema-Item) gehört.
+  bool isHierarchyParamKey(String key) {
+    final k = key.trim();
+    if (k.isEmpty) return false;
+    if (CsvSettings.isEbeneHierarchyHeader(k)) return true;
+    if (isUpperHierarchyParamKey(k)) return true;
+    for (var level = 1; level <= 3; level++) {
+      final headerLabel = hierarchyLevelHeaderLabel(level).trim();
+      if (headerLabel.isNotEmpty && paramKeysMatch(k, headerLabel)) {
+        return true;
+      }
+      for (final hk in allParamKeysForHierarchyLevel(level)) {
+        if (paramKeysMatch(k, hk)) return true;
+      }
+    }
+    final schemaKey = resolveSchemaItemParamKey()?.trim();
+    if (schemaKey != null &&
+        schemaKey.isNotEmpty &&
+        paramKeysMatch(k, schemaKey)) {
+      return true;
+    }
+    return false;
+  }
+
   /// Param-Key, der in der Anlagenübersicht als Beschriftung der Ebene 3 genutzt wird.
-  /// Priorität: expliziter Param-Key (Gewerkevorlage) → Anlagen-CSV-Spalte → Blatt-Spalte.
+  /// Priorität: expliziter Param-Key → Anzeige-Spalte → Blatt-Spalte → „Bezeichnung“.
+  /// Niemals Hierarchie-/Ebene-Keys (sonst landet der Anzeigename in Ebene2).
   String? resolveDisplayNameParamKey() {
     final explicit = displayNameParamKey.trim();
-    if (explicit.isNotEmpty) return explicit;
+    if (explicit.isNotEmpty) {
+      return mustNotReceiveDisplayName(explicit) ? null : explicit;
+    }
     final fromDisplayColumn = _headerLabelAt(displayNameSpalte);
-    if (fromDisplayColumn != null && fromDisplayColumn.isNotEmpty) {
+    if (fromDisplayColumn != null &&
+        fromDisplayColumn.isNotEmpty &&
+        !mustNotReceiveDisplayName(fromDisplayColumn) &&
+        !CsvSettings.isEbeneHierarchyHeader(fromDisplayColumn)) {
       return fromDisplayColumn;
     }
     final leafKey = resolveNameParamKey();
     if (leafKey != null &&
         leafKey.isNotEmpty &&
+        !mustNotReceiveDisplayName(leafKey) &&
+        !CsvSettings.isEbeneHierarchyHeader(leafKey) &&
         !isUpperHierarchyParamKey(leafKey)) {
       return leafKey;
     }
-    return null;
+    return 'Bezeichnung';
   }
 
   static bool paramKeysMatch(String a, String b) {
@@ -533,6 +610,8 @@ class CsvSettings {
     if (RegExp(r'^att\d+$').hasMatch(lower)) return true;
     if (RegExp(r'^att\d+_wert$').hasMatch(lower)) return true;
     if (RegExp(r'^att_wert\d+$').hasMatch(lower)) return true;
+    if (RegExp(r'^att\d+_art$').hasMatch(lower)) return true;
+    if (RegExp(r'^att_art\d+$').hasMatch(lower)) return true;
     return false;
   }
 
@@ -742,6 +821,7 @@ class CsvSettings {
   }
 
   /// Erkennt ATT/ATT_wert-Spaltenpaare aus der Import-Headerzeile (0-basierte Indizes).
+  /// Erkennt auch ATT(n)_ART / ATT_ART(n) als Wertspalte (Gewerke-/Anlagen-Layout).
   static List<AttributeColumnPair> detectAnlagenAttributePairsFromHeader(
     List<String> headers,
   ) {
@@ -766,6 +846,19 @@ class CsvSettings {
       final attWertAlt = RegExp(r'^ATT_WERT(\d+)$').firstMatch(upper);
       if (attWertAlt != null) {
         valueColByN[int.parse(attWertAlt.group(1)!)] = i;
+        continue;
+      }
+      // ART nur als Wertspalte, wenn noch kein WERT für diesen Slot existiert.
+      final attArt = RegExp(r'^ATT(\d+)_ART$').firstMatch(upper);
+      if (attArt != null) {
+        final n = int.parse(attArt.group(1)!);
+        valueColByN.putIfAbsent(n, () => i);
+        continue;
+      }
+      final attArtAlt = RegExp(r'^ATT_ART(\d+)$').firstMatch(upper);
+      if (attArtAlt != null) {
+        final n = int.parse(attArtAlt.group(1)!);
+        valueColByN.putIfAbsent(n, () => i);
       }
     }
 
@@ -782,6 +875,18 @@ class CsvSettings {
       ));
     }
     return pairs;
+  }
+
+  /// ATT-Nummer aus Header-Label (ATT7 / ATT7_WERT / ATT7_TYPE → 7).
+  static int? attNumberFromHeaderLabel(String header) {
+    final upper = normalizeAttHeaderToken(header);
+    final m =
+        RegExp(r'^ATT(\d+)(?:_(?:WERT|ART|TYPE|OPTIONS))?$').firstMatch(upper);
+    if (m != null) return int.tryParse(m.group(1)!);
+    final alt =
+        RegExp(r'^ATT_(?:WERT|ART|TYPE|OPTIONS)(\d+)$').firstMatch(upper);
+    if (alt != null) return int.tryParse(alt.group(1)!);
+    return null;
   }
 
   /// ATT-Nummer aus Schema-Feld (1 = ATT1). Null bei Legacy-Daten ohne Slot.
@@ -866,6 +971,10 @@ class CsvSettings {
     if (w1 != null) return int.parse(w1.group(1)!);
     final w2 = RegExp(r'^ATT_WERT(\d+)$').firstMatch(upper);
     if (w2 != null) return int.parse(w2.group(1)!);
+    final a1 = RegExp(r'^ATT(\d+)_ART$').firstMatch(upper);
+    if (a1 != null) return int.parse(a1.group(1)!);
+    final a2 = RegExp(r'^ATT_ART(\d+)$').firstMatch(upper);
+    if (a2 != null) return int.parse(a2.group(1)!);
     return null;
   }
 
@@ -906,7 +1015,10 @@ class CsvSettings {
       final v = entry.value?.toString().trim() ?? '';
       if (v.isEmpty) continue;
       final upper = k.toUpperCase();
-      if (upper.contains('_WERT') || upper.startsWith('ATT_WERT')) {
+      if (upper.contains('_WERT') ||
+          upper.contains('_ART') ||
+          upper.startsWith('ATT_WERT') ||
+          upper.startsWith('ATT_ART')) {
         wertBySlot[slot] = v;
       } else {
         nameBySlot[slot] = v;
@@ -914,22 +1026,88 @@ class CsvSettings {
     }
 
     for (final slot in {...wertBySlot.keys, ...nameBySlot.keys}) {
-      final idx = slot - 1;
-      if (idx < 0 || idx >= nonGlobal.length) continue;
-      final schemaKey = (nonGlobal[idx]['key'] ?? '').toString();
+      final field = schemaFieldAtAttSlot(slot, nonGlobal);
+      var schemaKey = '';
+      if (field != null) {
+        schemaKey = (field['key'] ?? '').toString();
+      } else {
+        final idx = slot - 1;
+        if (idx >= 0 && idx < nonGlobal.length) {
+          schemaKey = (nonGlobal[idx]['key'] ?? '').toString();
+        }
+      }
       if (schemaKey.isEmpty || isAnlagenCsvColumnParamKey(schemaKey)) continue;
       final existing = params[schemaKey]?.toString().trim() ?? '';
-      if (existing.isNotEmpty) continue;
-      final preferred = wertBySlot[slot]?.isNotEmpty == true
-          ? wertBySlot[slot]
-          : nameBySlot[slot];
+      if (existing.isNotEmpty) {
+        writeAttSlotForParam(params, schemaKey, slot);
+        continue;
+      }
+      // Nur ART/WERT als Wert – leere Wertspalte bleibt leer (kein Fallback auf Feldname).
+      final preferred = wertBySlot[slot];
       if (preferred != null && preferred.isNotEmpty) {
         params[schemaKey] = preferred;
+        writeAttSlotForParam(params, schemaKey, slot);
+      } else if (nameBySlot.containsKey(slot)) {
+        // Slot bekannt, aber ohne Wert: nur ATT-Zuordnung merken.
+        writeAttSlotForParam(params, schemaKey, slot);
       }
     }
 
     for (final k in keysToRemove) {
       params.remove(k);
+    }
+  }
+
+  /// Schreibt ATT-Slot-Metadaten für Schema-Felder (Export-Zuordnung Schema-Key → Spalte).
+  static void writeAttSlotsFromSchemaFields(
+    Map<String, dynamic> params,
+    List<Map<String, dynamic>> schemaFields,
+  ) {
+    for (final field in schemaFields) {
+      if (field['isGlobal'] == true) continue;
+      final key = (field['key'] ?? '').toString().trim();
+      if (key.isEmpty || isAnlagenCsvColumnParamKey(key)) continue;
+      final slot = attSlotFromSchemaField(field);
+      if (slot == null || slot <= 0) continue;
+      writeAttSlotForParam(params, key, slot);
+    }
+  }
+
+  /// Ergänzt fehlende ATT-Slots aus Import-Header-Paaren/Tripletts.
+  static void writeAttSlotsFromImportHeader({
+    required Map<String, dynamic> params,
+    required List<String> importHeaders,
+    required List<Map<String, dynamic>> schemaFields,
+  }) {
+    if (importHeaders.isEmpty || schemaFields.isEmpty) return;
+    final nonGlobal =
+        schemaFields.where((f) => f['isGlobal'] != true).toList();
+
+    final pairs = detectAnlagenAttributePairsFromHeader(importHeaders);
+    for (var i = 0; i < pairs.length; i++) {
+      final slot = attSlotForPair(pairs[i], i);
+      final field = schemaFieldAtAttSlot(slot, nonGlobal);
+      final key = (field?['key'] ?? '').toString().trim();
+      if (key.isEmpty) continue;
+      if (attSlotForParam(params, key) == null) {
+        writeAttSlotForParam(params, key, slot);
+      }
+    }
+
+    if (pairs.isNotEmpty) return;
+
+    final triplets = detectQuadrupletsFromHeader(importHeaders);
+    for (var i = 0; i < triplets.length; i++) {
+      final nameCol = triplets[i].nameColumn;
+      final slot = (nameCol >= 0 && nameCol < importHeaders.length)
+          ? (attNumberFromHeaderLabel(importHeaders[nameCol]) ?? (i + 1))
+          : (i + 1);
+      final field = schemaFieldAtAttSlot(slot, nonGlobal);
+      final key = (field?['key'] ?? '').toString().trim();
+      if (key.isEmpty) continue;
+      if (attSlotForParam(params, key) == null) {
+        writeAttSlotForParam(params, key, slot);
+      }
     }
   }
 
@@ -1222,14 +1400,45 @@ class CsvSettings {
     final k = key.trim();
     if (k.isEmpty) return false;
 
-    final display = resolveDisplayNameParamKey()?.trim();
-    if (display != null && display.isNotEmpty && paramKeysMatch(k, display)) {
+    // Obere Hierarchie-Keys sind nie Blatt-/Anzeigename (raw, ohne Rekursion).
+    if (CsvSettings.isEbeneHierarchyHeader(k)) return false;
+    for (var level = 1; level <= 2; level++) {
+      for (final hk in _rawParamKeysForHierarchyLevel(level)) {
+        if (paramKeysMatch(k, hk)) return false;
+      }
+    }
+
+    // Kein resolveDisplayNameParamKey hier: das prüft mustNotReceiveDisplayName /
+    // isUpperHierarchyParamKey und würde über allParamKeysForHierarchyLevel
+    // wieder isLeafNameParamKey aufrufen (StackOverflow).
+    final explicit = displayNameParamKey.trim();
+    if (explicit.isNotEmpty && paramKeysMatch(k, explicit)) {
+      return true;
+    }
+
+    final fromDisplayColumn = _headerLabelAt(displayNameSpalte)?.trim();
+    if (fromDisplayColumn != null &&
+        fromDisplayColumn.isNotEmpty &&
+        !CsvSettings.isEbeneHierarchyHeader(fromDisplayColumn) &&
+        paramKeysMatch(k, fromDisplayColumn)) {
       return true;
     }
 
     final leaf = leafNameParamKey?.trim();
-    if (leaf == null || leaf.isEmpty) return false;
-    return paramKeysMatch(k, leaf);
+    if (leaf != null &&
+        leaf.isNotEmpty &&
+        !CsvSettings.isEbeneHierarchyHeader(leaf) &&
+        paramKeysMatch(k, leaf)) {
+      return true;
+    }
+
+    final hasConfiguredName = explicit.isNotEmpty ||
+        (fromDisplayColumn != null && fromDisplayColumn.isNotEmpty) ||
+        (leaf != null && leaf.isNotEmpty);
+    if (!hasConfiguredName && paramKeysMatch(k, 'Bezeichnung')) {
+      return true;
+    }
+    return false;
   }
 
   /// Alle Param-Keys für Schema-Ebene, ohne Blatt-Namen-Spalte.
@@ -1328,13 +1537,6 @@ class CsvSettings {
     if (rfKey != null && rfKey.isNotEmpty) keys.add(rfKey);
     return keys;
   }
-
-  // --- Legacy-Getter ---
-  int get gewerkSpalte => level1.nameColumn;
-  int get nameSpalte => leafLevel?.nameColumn ?? 1;
-  int get lfdNummerSpalte => leafLevel?.idColumn ?? 0;
-  int? get anlageEbeneSpalte =>
-      level2.enabled && enabledLevelsOrdered.length >= 2 ? level2.nameColumn : null;
 
   factory CsvSettings.defaults() {
     return const CsvSettings(

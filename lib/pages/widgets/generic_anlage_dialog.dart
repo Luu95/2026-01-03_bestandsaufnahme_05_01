@@ -281,49 +281,42 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         }
       }
 
-      Disziplin effectiveDiscipline = updatedDiscipline;
-
-      if (widget.existingAnlage != null) {
-        // Schema wird nach dem Laden der Params auf das aktuelle RO reduziert
-        // (_applyEffectiveSchemaFromParams), nicht das gesamte Flat-Schema anzeigen.
-        effectiveDiscipline = updatedDiscipline;
-      } else {
-        final ro = widget.initialRevisionsobjekt?.trim() ?? '';
-        var mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
-          widget.discipline.revisionsobjektSchemas,
+      var mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
+        widget.discipline.revisionsobjektSchemas,
+      );
+      updatedDiscipline.revisionsobjektSchemas.forEach((key, fields) {
+        mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
+          mergedRoSchemas[key] ?? const [],
+          fields,
         );
-        updatedDiscipline.revisionsobjektSchemas.forEach((key, fields) {
-          mergedRoSchemas[key] = TemplateService.mergeSchemaFieldLists(
-            mergedRoSchemas[key] ?? const [],
-            fields,
-          );
-        });
+      });
 
-        if (ro.isNotEmpty) {
-          // Vom Aufrufer (z. B. Gruppen-Plus) vorbereitetes Schema hat Vorrang vor DB-Flat-Schema.
-          final callerSchema = widget.discipline.schema;
-          var baseForRo = Disziplin(
-            label: widget.discipline.label,
-            icon: widget.discipline.icon,
-            color: AppPalette.primary,
-            schema: callerSchema.isNotEmpty ? callerSchema : updatedDiscipline.schema,
-            groupingKey: widget.discipline.groupingKey,
-            revisionsobjektSchemas: mergedRoSchemas,
-          );
-          effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
-            discipline: baseForRo,
-            revisionsobjekt: ro,
-          );
-        } else {
-          effectiveDiscipline = Disziplin(
-            label: updatedDiscipline.label,
-            icon: updatedDiscipline.icon,
-            color: AppPalette.primary,
-            schema: mergedSchema,
-            groupingKey: updatedDiscipline.groupingKey,
-            revisionsobjektSchemas: mergedRoSchemas,
-          );
-        }
+      final ro = widget.initialRevisionsobjekt?.trim() ?? '';
+      final Disziplin effectiveDiscipline;
+      if (ro.isNotEmpty) {
+        // Create und Edit: vorbereitetes/gespeichertes Schema hat Vorrang vor DB-Flat-Schema.
+        final callerSchema = widget.discipline.schema;
+        final baseForRo = Disziplin(
+          label: widget.discipline.label,
+          icon: widget.discipline.icon,
+          color: AppPalette.primary,
+          schema: callerSchema.isNotEmpty ? callerSchema : updatedDiscipline.schema,
+          groupingKey: widget.discipline.groupingKey,
+          revisionsobjektSchemas: mergedRoSchemas,
+        );
+        effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+          discipline: baseForRo,
+          revisionsobjekt: ro,
+        );
+      } else {
+        effectiveDiscipline = Disziplin(
+          label: updatedDiscipline.label,
+          icon: updatedDiscipline.icon,
+          color: AppPalette.primary,
+          schema: mergedSchema,
+          groupingKey: updatedDiscipline.groupingKey,
+          revisionsobjektSchemas: mergedRoSchemas,
+        );
       }
 
       if (mounted) {
@@ -372,21 +365,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     }
 
     await _loadSettingsAndPrefill();
-    final isNewFromRevisionsobjekt = widget.existingAnlage == null &&
-        widget.initialRevisionsobjekt?.trim().isNotEmpty == true;
+    final hasPreparedRoSchema = widget.initialRevisionsobjekt?.trim().isNotEmpty == true &&
+        _currentDiscipline.schema.length > _currentDiscipline.globalSchemaFields.length;
     _establishLocationLocks();
-    if (!isNewFromRevisionsobjekt) {
-      _refreshDisciplineSchemaFromTemplates();
+    if (!hasPreparedRoSchema) {
+      _applyEffectiveSchemaFromParams();
       if (widget.existingAnlage != null) {
         _establishLocationLocks();
       }
     }
     _applyRevisionsobjektPrefill();
-    if (widget.existingAnlage == null) {
-      _finalizeSchemaForRevisionsobjekt();
-    } else {
-      _refreshDisciplineSchemaFromTemplates();
-    }
+    _applyEffectiveSchemaFromParams();
     _sanitizeAnlagenImportParamsAndSchema();
     } finally {
       if (mounted) {
@@ -781,8 +770,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
   void _refreshDisciplineSchemaFromTemplates({String? revisionsobjekt}) {
     if (!mounted) return;
-    if (widget.existingAnlage == null &&
-        widget.initialRevisionsobjekt?.trim().isNotEmpty == true &&
+    // Vorbereitetes RO-Schema (Create oder Edit) nicht durch leeres DB-Schema überschreiben.
+    if (widget.initialRevisionsobjekt?.trim().isNotEmpty == true &&
         _currentDiscipline.schema.length >
             _currentDiscipline.globalSchemaFields.length) {
       return;
@@ -817,8 +806,51 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     });
   }
 
-  void _finalizeSchemaForRevisionsobjekt() {
-    _refreshDisciplineSchemaFromTemplates();
+  /// Reduziert das Schema auf das aktuelle Revisionsobjekt (Templates + RO-Map).
+  /// Für Edit essenziell, wenn beim Öffnen noch kein initialRevisionsobjekt gesetzt war.
+  void _applyEffectiveSchemaFromParams({String? revisionsobjekt}) {
+    final ro = revisionsobjekt?.trim().isNotEmpty == true
+        ? revisionsobjekt!.trim()
+        : _resolveRevisionsobjektFromParams()?.trim() ?? '';
+    if (ro.isEmpty) return;
+
+    final nextDiscipline = _disciplineWithSchemaForRevisionsobjekt(ro);
+    final nextHasFields =
+        nextDiscipline.schema.length > nextDiscipline.globalSchemaFields.length;
+    final currentHasFields = _currentDiscipline.schema.length >
+        _currentDiscipline.globalSchemaFields.length;
+
+    // Besseres Schema behalten: Template/RO-Auflösung oder vorhandenes Caller-/Anlagen-Schema.
+    if (nextHasFields) {
+      _currentDiscipline = nextDiscipline;
+      return;
+    }
+    if (currentHasFields) {
+      // Flat-Schema der Anlage in RO-Map spiegeln, damit effectiveSchemaFor greift.
+      final resolvedKey = TemplateService.resolveRevisionsobjektKeyForValue(
+            _currentDiscipline,
+            ro,
+            templates: _gewerkTemplates.isNotEmpty ? _gewerkTemplates : null,
+          ) ??
+          ro;
+      final roFields = _currentDiscipline.legacyIndividualSchemaFields;
+      if (roFields.isEmpty) return;
+      final mergedRo = Map<String, List<Map<String, dynamic>>>.from(
+        _currentDiscipline.revisionsobjektSchemas,
+      );
+      mergedRo[resolvedKey] = TemplateService.mergeSchemaFieldLists(
+        mergedRo[resolvedKey] ?? const [],
+        roFields,
+      );
+      _currentDiscipline = Disziplin(
+        label: _currentDiscipline.label,
+        icon: _currentDiscipline.icon,
+        color: _currentDiscipline.color,
+        schema: _currentDiscipline.schema,
+        groupingKey: _currentDiscipline.groupingKey,
+        revisionsobjektSchemas: mergedRo,
+      );
+    }
   }
 
   Future<void> _loadSettingsAndPrefill() async {
@@ -1833,6 +1865,15 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       params: _params,
       schemaFields: schemaFields,
     );
+    CsvSettings.writeAttSlotsFromSchemaFields(_params, schemaFields);
+    final csv = _csvSettings;
+    if (csv != null && csv.importHeaderRow.isNotEmpty) {
+      CsvSettings.writeAttSlotsFromImportHeader(
+        params: _params,
+        importHeaders: csv.importHeaderRow,
+        schemaFields: schemaFields,
+      );
+    }
 
     final filteredRoSchemas = <String, List<Map<String, dynamic>>>{};
     for (final entry in _currentDiscipline.revisionsobjektSchemas.entries) {
@@ -1871,6 +1912,20 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     var fields = roTrimmed.isNotEmpty
         ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
         : List<Map<String, dynamic>>.from(discipline.schema);
+
+    // Wenn RO gesetzt ist, aber revisionsobjektSchemas keinen Eintrag hat,
+    // effectiveSchemaFor liefert nur Globals – Flat-Schema der Anlage nutzen.
+    final nonGlobalAfterRo = fields.where((f) => f['isGlobal'] != true).toList();
+    if (roTrimmed.isNotEmpty && nonGlobalAfterRo.isEmpty) {
+      final flatNonGlobal = discipline.legacyIndividualSchemaFields;
+      if (flatNonGlobal.isNotEmpty) {
+        fields = [
+          ...discipline.globalSchemaFields,
+          ...flatNonGlobal,
+        ];
+      }
+    }
+
     fields = CsvSettings.filterSchemaFieldsForDialog(fields);
     fields = fields.where((f) {
       final key = (f['key'] ?? '').toString();
@@ -1901,9 +1956,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           masterSchema,
           templateMaster,
         );
+        // Auch Flat-Schema der Anlage als Master (Dropdowns/art).
+        final withFlat = TemplateService.mergeSchemaFieldLists(
+          mergedMaster,
+          discipline.legacyIndividualSchemaFields,
+        );
         return TemplateService.enrichSchemaFieldsFromMaster(
           fromParams,
-          mergedMaster,
+          withFlat,
         );
       }
     }
@@ -2620,10 +2680,22 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         _applyLockedLocationParams();
 
                         final saveParams = Map<String, dynamic>.from(_params);
+                        final schemaForSave = _dialogSchemaFields();
                         CsvSettings.migrateParamsFromAnlagenColumnKeys(
                           params: saveParams,
-                          schemaFields: _dialogSchemaFields(),
+                          schemaFields: schemaForSave,
                         );
+                        CsvSettings.writeAttSlotsFromSchemaFields(
+                          saveParams,
+                          schemaForSave,
+                        );
+                        if (csv != null && csv.importHeaderRow.isNotEmpty) {
+                          CsvSettings.writeAttSlotsFromImportHeader(
+                            params: saveParams,
+                            importHeaders: csv.importHeaderRow,
+                            schemaFields: schemaForSave,
+                          );
+                        }
 
                         // Erstelle Anlage
                         var anlage = Anlage(
