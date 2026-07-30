@@ -16,14 +16,12 @@ import '../../services/qr_scan_service.dart';
 import '../../theme/app_palette.dart';
 import '../../services/template_service.dart';
 import '../../utils/app_log.dart';
+import '../../utils/photo_file_utils.dart';
 import 'photo_manager.dart';
 import 'ocr_camera_page.dart';
 import 'qr_camera_page.dart';
 import 'speech_field_button.dart';
 import '../../services/speech_service.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 /// Custom InputBorder, der die untere Linie rechts kürzer macht (für grobmotorische Bedienung)
 class ShortenedUnderlineInputBorder extends InputBorder {
@@ -325,7 +323,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         });
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden der Disziplin in GenericAnlageDialog: $e');
+      appLog('Fehler beim Laden der Disziplin in GenericAnlageDialog: $e');
       _currentDiscipline = widget.discipline;
     }
 
@@ -341,10 +339,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       }
       final existingPaths = widget.existingAnlage!.params['photoPaths'] as List<dynamic>?;
       if (existingPaths != null) {
-        final files = existingPaths
-            .map((p) => File(p.toString()))
-            .where((f) => f.existsSync())
-            .toList();
+        final files = await filterExistingPhotoFiles(existingPaths);
         _photoManager.updateImageFiles(files);
       }
       final existingQr =
@@ -904,7 +899,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         }
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
+      appLog('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
     }
   }
 
@@ -1064,11 +1059,22 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           _qrCodeController.text = qrValue;
           _params[CsvSettings.qrCodeNummerParamKey] = qrValue;
         });
-      } catch (_) {
+      } catch (e) {
         if (mounted) Navigator.of(context).pop();
+        appLog('QR-Scan fehlgeschlagen', error: e);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('QR-Scan fehlgeschlagen: $e')),
+          );
+        }
       }
-    } catch (_) {
-      // Kamera abgebrochen oder nicht verfügbar
+    } catch (e) {
+      appLog('Kamera für QR-Scan nicht verfügbar oder abgebrochen', error: e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kamera nicht verfügbar')),
+        );
+      }
     }
   }
 
@@ -1097,7 +1103,12 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         await _performOcr(image);
       }
     } catch (e) {
-      // Kamera-Fehler ignorieren
+      appLog('OCR-Kamera fehlgeschlagen', error: e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kamera-Fehler: $e')),
+        );
+      }
     }
   }
 
@@ -1114,6 +1125,9 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       Navigator.of(context).pop(); // Lade-Dialog schließen
 
       if (results.isEmpty || (results['hersteller'] == null && results['baujahr'] == null)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Keine Typenschild-Daten erkannt')),
+        );
         return;
       }
 
@@ -1121,6 +1135,10 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
+      appLog('OCR fehlgeschlagen', error: e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('OCR fehlgeschlagen: $e')),
+      );
     }
   }
 

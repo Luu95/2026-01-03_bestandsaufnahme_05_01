@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/project.dart';
 import '../models/building.dart';
 import '../database/database_service.dart';
+import '../utils/app_log.dart';
 import 'database_provider.dart';
 
 /// State-Klasse für die Projekte-Verwaltung
@@ -12,12 +13,14 @@ class ProjectsState {
   final bool isLoading;
   final int? selectedProjectIndex;
   final int? selectedBuildingIndex;
-//tedtnn
+  final String? lastError;
+
   ProjectsState({
     required this.projects,
     this.isLoading = false,
     this.selectedProjectIndex,
     this.selectedBuildingIndex,
+    this.lastError,
   });
 
   ProjectsState copyWith({
@@ -25,12 +28,15 @@ class ProjectsState {
     bool? isLoading,
     int? selectedProjectIndex,
     int? selectedBuildingIndex,
+    String? lastError,
+    bool clearError = false,
   }) {
     return ProjectsState(
       projects: projects ?? this.projects,
       isLoading: isLoading ?? this.isLoading,
       selectedProjectIndex: selectedProjectIndex ?? this.selectedProjectIndex,
       selectedBuildingIndex: selectedBuildingIndex ?? this.selectedBuildingIndex,
+      lastError: clearError ? null : (lastError ?? this.lastError),
     );
   }
 
@@ -61,9 +67,13 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
     loadProjects();
   }
 
+  void clearError() {
+    state = state.copyWith(clearError: true);
+  }
+
   /// Lädt alle Projekte aus der Datenbank
   Future<void> loadProjects() async {
-    state = state.copyWith(isLoading: true);
+    state = state.copyWith(isLoading: true, clearError: true);
     try {
       final projects = await _dbService.getAllProjects();
       int? selectedProjectIndex;
@@ -81,14 +91,18 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
         isLoading: false,
         selectedProjectIndex: selectedProjectIndex,
         selectedBuildingIndex: selectedBuildingIndex,
+        clearError: true,
       );
-    } catch (e) {
+    } catch (e, st) {
+      appLog('loadProjects fehlgeschlagen', error: e, stackTrace: st);
       state = state.copyWith(
         projects: [],
         isLoading: false,
         selectedProjectIndex: null,
         selectedBuildingIndex: null,
+        lastError: 'Projekte konnten nicht geladen werden: $e',
       );
+      // Kein rethrow: Aufruf aus dem Konstruktor; UI reagiert über lastError.
     }
   }
 
@@ -115,9 +129,11 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
     try {
       await _dbService.insertProject(project);
       final projects = [...state.projects, project];
-      state = state.copyWith(projects: projects);
-    } catch (e) {
-      // Fehlerbehandlung
+      state = state.copyWith(projects: projects, clearError: true);
+    } catch (e, st) {
+      appLog('addProject fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Projekt konnte nicht angelegt werden: $e');
+      rethrow;
     }
   }
 
@@ -129,10 +145,12 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
       final index = projects.indexWhere((p) => p.id == project.id);
       if (index >= 0) {
         projects[index] = project;
-        state = state.copyWith(projects: projects);
+        state = state.copyWith(projects: projects, clearError: true);
       }
-    } catch (e) {
-      // Fehlerbehandlung
+    } catch (e, st) {
+      appLog('updateProject fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Projekt konnte nicht gespeichert werden: $e');
+      rethrow;
     }
   }
 
@@ -169,9 +187,12 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
         projects: projects,
         selectedProjectIndex: selectedProjectIndex,
         selectedBuildingIndex: selectedBuildingIndex,
+        clearError: true,
       );
-    } catch (e) {
-      // Fehlerbehandlung
+    } catch (e, st) {
+      appLog('deleteProjects fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Projekte konnten nicht gelöscht werden: $e');
+      rethrow;
     }
   }
 
@@ -187,8 +208,10 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
 
       project.buildings[buildingIndex] = building;
       await updateProject(project);
-    } catch (e) {
-      // Fehlerbehandlung
+    } catch (e, st) {
+      appLog('updateBuilding fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Gebäude konnte nicht gespeichert werden: $e');
+      rethrow;
     }
   }
 
@@ -233,10 +256,13 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
         projects: projects,
         selectedProjectIndex: selectedProjectIndex,
         selectedBuildingIndex: selectedBuildingIndex,
+        clearError: true,
       );
       await loadProjects();
-    } catch (e) {
-      // Fehlerbehandlung
+    } catch (e, st) {
+      appLog('addBuilding fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Gebäude konnte nicht angelegt werden: $e');
+      rethrow;
     }
   }
 
@@ -266,9 +292,11 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
 
       await updateProject(project);
       await loadProjects();
-      state = state.copyWith(selectedBuildingIndex: selectedBuildingIndex);
-    } catch (e) {
-      // Fehlerbehandlung
+      state = state.copyWith(selectedBuildingIndex: selectedBuildingIndex, clearError: true);
+    } catch (e, st) {
+      appLog('deleteBuildings fehlgeschlagen', error: e, stackTrace: st);
+      state = state.copyWith(lastError: 'Gebäude konnten nicht gelöscht werden: $e');
+      rethrow;
     }
   }
 }
@@ -284,6 +312,3 @@ final currentProjectProvider = Provider<Project?>((ref) {
   final state = ref.watch(projectsProvider);
   return state.selectedProject;
 });
-
-//nn
-//zg

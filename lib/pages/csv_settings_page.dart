@@ -10,15 +10,13 @@ import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
 import '../providers/database_provider.dart';
 import '../services/anlagen_csv_import_service.dart';
+import '../services/csv_service.dart';
 import '../services/template_service.dart';
 import '../providers/projects_provider.dart';
 import 'widgets/schema_editor_dialog.dart';
 import '../theme/app_palette.dart';
 import 'widgets/settings_card.dart';
 import '../utils/app_log.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class CsvSettingsPage extends ConsumerStatefulWidget {
   final String projectId;
@@ -261,7 +259,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         setState(() => _hasAnlagenCsvImported = hasAnlagen);
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden des Import-Status: $e');
+      appLog('Fehler beim Laden des Import-Status: $e');
     }
   }
 
@@ -323,7 +321,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         });
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden der CSV-Einstellungen: $e');
+      appLog('Fehler beim Laden der CSV-Einstellungen: $e');
     }
   }
 
@@ -344,7 +342,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         });
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden der Disziplinen: $e');
+      appLog('Fehler beim Laden der Disziplinen: $e');
     }
   }
 
@@ -359,7 +357,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         setState(() => _projectTemplates = templates);
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden der Vorlagen: $e');
+      appLog('Fehler beim Laden der Vorlagen: $e');
     }
   }
 
@@ -444,7 +442,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       final existing = json.decode(prefs.getString(key) ?? '{}') as Map<String, dynamic>;
       await prefs.setString(key, json.encode({...existing, ...flags}));
     } catch (e) {
-      debugPrint('Fehler beim automatischen Speichern der CSV-Einstellungen: $e');
+      appLog('Fehler beim automatischen Speichern der CSV-Einstellungen: $e');
     }
   }
 
@@ -459,7 +457,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _saveDisciplines(),
       ]);
     } catch (e) {
-      debugPrint('Fehler beim automatischen Speichern: $e');
+      appLog('Fehler beim automatischen Speichern: $e');
     } finally {
       if (mounted) {
         _isSaving = false;
@@ -498,7 +496,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           backgroundColor: theme.scaffoldBackgroundColor,
           appBar: AppBar(
             title: const Text(
-              'CSV-Einstellungen',
+              'CSV-Import',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             elevation: 0,
@@ -510,7 +508,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             bottom: const TabBar(
               isScrollable: true,
               tabs: [
-                Tab(icon: Icon(Icons.map), text: 'CSV-Mapping'),
+                Tab(icon: Icon(Icons.upload_file), text: 'CSV-Import'),
                 Tab(icon: Icon(Icons.schema), text: 'Eingabefelder'),
               ],
             ),
@@ -548,34 +546,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildInfoCard(
-            'Spaltenzuordnung gilt einheitlich für Anlagen-Import, Anlagen-Export und Gewerkevorlagen. '
-            'Nach einem CSV-Import werden die Spaltenüberschriften für die Auswahl übernommen.',
+            'Laden Sie eine Vorlage herunter, befüllen Sie sie und importieren Sie die Datei. '
+            'Attribut-Spalten (ATT…) werden automatisch aus dem CSV-Header erkannt.',
           ),
           const SizedBox(height: 12),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildHeaderAction(
-                icon: Icons.upload_file,
-                label: 'Gewerkevorlagen',
-                color: AppPalette.warning,
-                imported: _projectTemplates.isNotEmpty,
-                onPressed: _importTemplates,
-              ),
-              _buildHeaderAction(
-                icon: Icons.download,
-                label: 'Anlagen-CSV',
-                color: AppPalette.success,
-                imported: _hasAnlagenCsvImported,
-                onPressed: _importAnlagenCsv,
-              ),
-            ],
-          ),
+          _buildCsvImportSection(),
           const SizedBox(height: 20),
           _buildSectionHeader(
-            title: 'CSV-Mapping',
+            title: 'Hierarchie-Ebenen',
             subtitle: _hierarchySubtitle(),
           ),
           const SizedBox(height: 12),
@@ -621,8 +599,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               _scheduleAutoSave();
             },
           ),
-          const SizedBox(height: 16),
-          _buildCollapsibleAttributeQuadrupletsSection(),
           const SizedBox(height: 16),
           _buildCollapsibleQrCodeSpalteSection(),
           const SizedBox(height: 12),
@@ -815,7 +791,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(
-                  'Importieren Sie im Tab „CSV-Mapping“ Gewerkevorlagen, '
+                  'Importieren Sie im Tab „CSV-Import“ Gewerkevorlagen, '
                   'damit $_labelGewerk und $_schemaItemLevelLabel hier erscheinen.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
@@ -999,6 +975,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
+      appLog('Vorlagen-Import fehlgeschlagen', error: e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Vorlagen-Import fehlgeschlagen: $e')),
+      );
     }
   }
 
@@ -1113,11 +1093,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
     } catch (e, stackTrace) {
-      debugPrint('Fehler beim Löschen der Vorlagen: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('Fehler beim Löschen der Vorlagen', error: e, stackTrace: stackTrace);
       
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Vorlagen konnten nicht gelöscht werden: $e')),
+      );
     }
   }
 
@@ -2078,6 +2060,189 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
+  Widget _buildCsvImportSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildCsvActionCard(
+          title: 'Gewerkevorlagen',
+          subtitle: _projectTemplates.isNotEmpty
+              ? '${_projectTemplates.length} Vorlagen importiert'
+              : 'Noch keine Vorlagen importiert',
+          color: AppPalette.warning,
+          icon: Icons.category_outlined,
+          imported: _projectTemplates.isNotEmpty,
+          onImport: _importTemplates,
+          onDownloadTemplate: _downloadGewerkeVorlagenTemplate,
+        ),
+        const SizedBox(height: 8),
+        _buildCsvActionCard(
+          title: 'Anlagen-CSV',
+          subtitle: _hasAnlagenCsvImported
+              ? 'CSV-Format wurde eingelesen'
+              : 'Noch keine Anlagen importiert',
+          color: AppPalette.success,
+          icon: Icons.list_alt_outlined,
+          imported: _hasAnlagenCsvImported,
+          onImport: _importAnlagenCsv,
+          onDownloadTemplate: _downloadAnlagenTemplate,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCsvActionCard({
+    required String title,
+    required String subtitle,
+    required Color color,
+    required IconData icon,
+    required bool imported,
+    required VoidCallback onImport,
+    required VoidCallback onDownloadTemplate,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: imported
+              ? AppPalette.successBorder
+              : color.withValues(alpha: 0.3),
+          width: imported ? 1.5 : 1,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        color: imported
+            ? AppPalette.success.withValues(alpha: 0.04)
+            : color.withValues(alpha: 0.03),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Icon(icon, color: imported ? AppPalette.success : color, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 14),
+                    ),
+                    if (imported) ...[
+                      const SizedBox(width: 6),
+                      Icon(Icons.check_circle,
+                          size: 15, color: AppPalette.success),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.55)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onImport,
+                icon: const Icon(Icons.upload_file, size: 16),
+                label: const Text('Importieren'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: color,
+                  side: BorderSide(color: color.withValues(alpha: 0.6)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+              ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                onPressed: onDownloadTemplate,
+                icon: const Icon(Icons.download_outlined, size: 16),
+                label: const Text('Vorlage'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor:
+                      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  side: BorderSide(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.2)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _downloadAnlagenTemplate() async {
+    try {
+      final csvSettings = ref.read(csvSettingsProvider(widget.projectId));
+      final built = await CsvService.buildAnlagenCsvTemplate(
+        csvSettings: csvSettings,
+      );
+      if (!mounted) return;
+      final saved = await CsvService.saveFileToDevice(
+        file: built.file,
+        fileName: built.fileName,
+      );
+      if (!mounted) return;
+      if (saved != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Anlagen-Vorlage heruntergeladen')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      appLog('Anlagen-Vorlage Download fehlgeschlagen', error: e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fehler: $e')),
+      );
+    }
+  }
+
+  Future<void> _downloadGewerkeVorlagenTemplate() async {
+    try {
+      final csvSettings = ref.read(csvSettingsProvider(widget.projectId));
+      final file = await TemplateService.buildGewerkeVorlagenCsvTemplate(
+        csvSettings: csvSettings,
+      );
+      if (!mounted) return;
+      final saved = await CsvService.saveFileToDevice(
+        file: file,
+        fileName: 'gewerkevorlagen_vorlage.csv',
+      );
+      if (!mounted) return;
+      if (saved != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Gewerkevorlagen-Vorlage heruntergeladen')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      appLog('Gewerkevorlagen-Vorlage Download fehlgeschlagen', error: e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fehler: $e')),
+      );
+    }
+  }
+
   Widget _buildHeaderAction({
     required IconData icon,
     required String label,
@@ -2314,7 +2479,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ? await dbService.countTemplatesByProjectId(widget.projectId)
           : 0;
 
-      debugPrint(
+      appLog(
         'Endgültiges Löschen: $anlagenCount Anlagen, ${disciplines.length} Gewerke, '
         '$floorsCount Grundrisse, $templateCount Vorlagen',
       );
@@ -2353,14 +2518,14 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       final keysToRemove = allKeys.where((key) => key.startsWith(buildingPrefix)).toList();
       for (final key in keysToRemove) {
         await prefs.remove(key);
-        debugPrint('Gelöscht: $key');
+        appLog('Gelöscht: $key');
       }
       
       // Fallback: Alte Disziplinen aus SharedPreferences löschen (falls vorhanden)
       final oldDisciplinesKey = 'disziplinen_${widget.buildingId}';
       await prefs.remove(oldDisciplinesKey);
       
-      debugPrint('Alle SharedPreferences-Einträge für Gebäude ${widget.buildingId} gelöscht');
+      appLog('Alle SharedPreferences-Einträge für Gebäude ${widget.buildingId} gelöscht');
 
       // Disziplinen und Vorlagen neu laden
       if (mounted) {
@@ -2388,7 +2553,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             ? await dbService.countTemplatesByProjectId(widget.projectId)
             : 0;
 
-        debugPrint(
+        appLog(
           'Nach dem Löschen: ${remainingDisciplines.length} Gewerke, '
           '$remainingAnlagen Anlagen, $remainingTemplates Vorlagen verbleibend',
         );
@@ -2421,8 +2586,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         }
       }
     } catch (e, stackTrace) {
-      debugPrint('Fehler beim Löschen aller Daten: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('Fehler beim Löschen aller Daten: $e');
+      appLog('Stack Trace: $stackTrace');
       
       if (!mounted) return;
       Navigator.of(context).pop(); // Lade-Dialog schließen

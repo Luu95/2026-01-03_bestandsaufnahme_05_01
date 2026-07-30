@@ -4,16 +4,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:flutter/material.dart' show Icons;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database.dart';
 import '../models/project.dart' as models;
 import '../models/building.dart' as models;
 import '../models/floor_plan.dart' as models;
 import '../models/anlage.dart' as models;
-import '../models/attachments.dart' as models;
 import '../models/disziplin_schnittstelle.dart';
 import '../services/template_service.dart';
 import '../theme/app_palette.dart';
+import '../utils/app_log.dart';
 
 //
 
@@ -22,6 +24,7 @@ class _BuildingAnlagenListCache {
   final Map<String, List<models.Anlage>> byDiscipline = {};
 }
 
+/// Persistenz über Drift ([AppDatabase]). SharedPreferences nur für Flags/Settings.
 class DatabaseService {
   final AppDatabase _db;
   final Map<String, Map<String, Disziplin>> _disciplinesCache = {};
@@ -40,37 +43,48 @@ class DatabaseService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('disciplines_initialized_$buildingId') ?? false;
   }
-  
-  // Singleton-Instanz
-  static DatabaseService? _instance;
-  
-  DatabaseService._(this._db);
-  
-  factory DatabaseService(AppDatabase db) {
-    _instance ??= DatabaseService._(db);
-    return _instance!;
-  }
-  
-  static DatabaseService? get instance => _instance;
+
+  DatabaseService(this._db);
 
   // ========== PROJECTS ==========
 
   Future<List<models.Project>> getAllProjects() async {
     final projectRows = await _db.getAllProjects();
-    final projects = <models.Project>[];
+    if (projectRows.isEmpty) return [];
 
-    for (final row in projectRows) {
-      final buildings = await getBuildingsByProjectId(row.id);
-      projects.add(models.Project(
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        customer: row.customer,
-        buildings: buildings,
-      ));
+    final buildingRows = await _db.getAllActiveBuildings();
+    final floorPlanRows = await _db.getAllFloorPlans();
+
+    final floorsByBuildingId = <String, List<models.FloorPlan>>{};
+    for (final f in floorPlanRows) {
+      floorsByBuildingId.putIfAbsent(f.buildingId, () => []).add(
+            models.FloorPlan(
+              id: f.id,
+              name: f.name,
+              pdfPath: f.pdfPath,
+              pdfName: f.pdfName,
+            ),
+          );
     }
 
-    return projects;
+    final buildingsByProjectId = <String, List<models.Building>>{};
+    for (final row in buildingRows) {
+      buildingsByProjectId.putIfAbsent(row.projectId, () => []).add(
+            _buildingRowToModelSync(row, floorsByBuildingId[row.id] ?? const []),
+          );
+    }
+
+    return projectRows
+        .map(
+          (row) => models.Project(
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            customer: row.customer,
+            buildings: buildingsByProjectId[row.id] ?? [],
+          ),
+        )
+        .toList();
   }
 
   Future<models.Project?> getProjectById(String id) async {
@@ -198,14 +212,22 @@ class DatabaseService {
 
     // FloorPlans laden
     final floorPlanRows = await _db.getFloorPlansByBuildingId(row.id);
-    final floors = floorPlanRows.map((f) => models.FloorPlan(
-          id: f.id,
-          name: f.name,
-          pdfPath: f.pdfPath,
-          pdfName: f.pdfName,
-        )).toList();
+    final floors = floorPlanRows
+        .map((f) => models.FloorPlan(
+              id: f.id,
+              name: f.name,
+              pdfPath: f.pdfPath,
+              pdfName: f.pdfName,
+            ))
+        .toList();
 
-    // RenovationYears parsen
+    return _buildingRowToModelSync(row, floors);
+  }
+
+  models.Building _buildingRowToModelSync(
+    BuildingDb row,
+    List<models.FloorPlan> floors,
+  ) {
     final renovationYears = row.renovationYears.isNotEmpty
         ? (json.decode(row.renovationYears) as List<dynamic>)
             .map((e) => (e as num).toInt())
@@ -225,6 +247,7 @@ class DatabaseService {
       protectedMonument: row.protectedMonument,
       units: row.units,
       floorArea: row.floorArea,
+      // Legacy-Feld: Anlagen liegen in der Anlagen-Tabelle, nicht mehr in Building.systems.
       systems: models.BuildingSystems(),
       floors: floors,
     );
@@ -392,8 +415,8 @@ class DatabaseService {
       try {
         final disc = Disziplin.fromJson(json.decode(row.data) as Map<String, dynamic>);
         map[disc.label.toLowerCase()] = disc;
-      } catch (_) {
-        // Ignorieren: kaputter JSON-Eintrag
+      } catch (e) {
+        appLog('Kaputter Disziplin-JSON für Gebäude $buildingId', error: e);
       }
     }
     _disciplinesCache[buildingId] = map;
@@ -447,7 +470,8 @@ class DatabaseService {
         base: currentDiscipline ?? storedDiscipline,
         fromAnlage: storedDiscipline,
       );
-    } catch (_) {
+    } catch (e) {
+      appLog('Anlage-Disziplin JSON ungültig', error: e);
       discipline = currentDiscipline ??
           Disziplin(
             label: row.markerType,
@@ -602,6 +626,40 @@ class DatabaseService {
       ),
     );
     _invalidateAnlagenListCache(anlage.buildingId);
+  }
+
+  /// Upsert vieler Anlagen in einer Transaktion (vermeidet N+1 bei Speichern).
+  Future<void> upsertAnlagenBatch(List<models.Anlage> anlagen) async {
+    if (anlagen.isEmpty) return;
+    final buildingIds = <String>{};
+    await _db.transaction(() async {
+      for (final anlage in anlagen) {
+        buildingIds.add(anlage.buildingId);
+        final existing = await _db.getAnlageById(anlage.id);
+        if (existing != null) {
+          await _db.updateAnlage(
+            anlage.id,
+            AnlagenCompanion(
+              parentId: Value(anlage.parentId),
+              name: Value(anlage.name),
+              params: Value(json.encode(anlage.params)),
+              floorId: Value(anlage.floorId.isEmpty ? null : anlage.floorId),
+              isMarker: Value(anlage.isMarker),
+              markerInfo: anlage.markerInfo != null
+                  ? Value(json.encode(anlage.markerInfo))
+                  : const Value.absent(),
+              markerType: Value(anlage.markerType),
+              discipline: Value(json.encode(anlage.discipline.toJson())),
+            ),
+          );
+        } else {
+          await _db.insertAnlage(_anlageCompanion(anlage));
+        }
+      }
+    });
+    for (final id in buildingIds) {
+      _invalidateAnlagenListCache(id);
+    }
   }
 
   /// Aktualisiert alle Anlagen einer Disziplin, wenn diese umbenannt wurde.
@@ -798,23 +856,51 @@ class DatabaseService {
     await permanentlyDeleteAnlage(id);
   }
 
-  void _deletePhotoFilesFromParamsJson(String? paramsJson) {
+  Future<void> _deletePhotoFilesFromParamsJson(String? paramsJson) async {
     if (paramsJson == null || paramsJson.trim().isEmpty) return;
     try {
       final params = json.decode(paramsJson) as Map<String, dynamic>;
       final photoPaths = params['photoPaths'];
       if (photoPaths is! List) return;
-      for (final p in photoPaths) {
-        final path = p?.toString().trim() ?? '';
+
+      Directory? docsDir;
+      Directory? supportDir;
+      try {
+        docsDir = await getApplicationDocumentsDirectory();
+        supportDir = await getApplicationSupportDirectory();
+      } catch (e) {
+        appLog('App-Verzeichnisse für Foto-Löschung nicht ermittelbar', error: e);
+        return;
+      }
+
+      final allowedRoots = <String>[
+        p.normalize(docsDir.path),
+        p.normalize(supportDir.path),
+      ];
+
+      for (final raw in photoPaths) {
+        final path = raw?.toString().trim() ?? '';
         if (path.isEmpty) continue;
-        final file = File(path);
-        if (file.existsSync()) {
-          try {
-            file.deleteSync();
-          } catch (_) {}
+        final normalized = p.normalize(path);
+        final allowed = allowedRoots.any(
+          (root) => normalized == root || p.isWithin(root, normalized),
+        );
+        if (!allowed) {
+          appLog('Foto-Löschung übersprungen (außerhalb App-Sandbox): $normalized');
+          continue;
+        }
+        final file = File(normalized);
+        try {
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          appLog('Foto-Datei konnte nicht gelöscht werden: $normalized', error: e);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      appLog('Params-JSON für Foto-Löschung ungültig', error: e);
+    }
   }
 
   /// Löscht alle Anlagen-Zeilen eines Gebäudes (aktiv + Papierkorb/soft-deleted).
@@ -835,18 +921,42 @@ class DatabaseService {
     final activeRows = await _db.getAnlagenByBuildingId(buildingId);
     final deletedRows = await _db.getDeletedAnlagenByBuildingId(buildingId);
     for (final row in [...activeRows, ...deletedRows]) {
-      _deletePhotoFilesFromParamsJson(row.params);
+      await _deletePhotoFilesFromParamsJson(row.params);
     }
 
     if (floorPlansForFileCleanup != null) {
+      Directory? docsDir;
+      Directory? supportDir;
+      try {
+        docsDir = await getApplicationDocumentsDirectory();
+        supportDir = await getApplicationSupportDirectory();
+      } catch (e) {
+        appLog('App-Verzeichnisse für Grundriss-Löschung nicht ermittelbar', error: e);
+      }
+      final allowedRoots = <String>[
+        if (docsDir != null) p.normalize(docsDir.path),
+        if (supportDir != null) p.normalize(supportDir.path),
+      ];
+
       for (final floor in floorPlansForFileCleanup) {
         final path = floor.pdfPath?.trim();
         if (path == null || path.isEmpty) continue;
-        final file = File(path);
-        if (file.existsSync()) {
-          try {
-            file.deleteSync();
-          } catch (_) {}
+        final normalized = p.normalize(path);
+        final allowed = allowedRoots.isEmpty ||
+            allowedRoots.any(
+              (root) => normalized == root || p.isWithin(root, normalized),
+            );
+        if (!allowed) {
+          appLog('Grundriss-Löschung übersprungen (außerhalb App-Sandbox): $normalized');
+          continue;
+        }
+        final file = File(normalized);
+        try {
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          appLog('Grundriss-PDF konnte nicht gelöscht werden: $normalized', error: e);
         }
       }
     }
@@ -916,42 +1026,6 @@ class DatabaseService {
     await _db.deleteDisziplin(buildingId, label);
     _disciplinesCache.remove(buildingId);
     await _markDisciplinesInitialized(buildingId);
-  }
-
-  // ========== ATTACHMENTS ==========
-
-  Future<models.Attachments?> getAttachmentsByBuildingId(String buildingId) async {
-    final row = await _db.getAttachmentsByBuildingId(buildingId);
-    if (row == null) return null;
-
-    return models.Attachments(
-      photos: (json.decode(row.photos) as List<dynamic>).cast<String>(),
-      plans: (json.decode(row.plans) as List<dynamic>).cast<String>(),
-      notes: row.notes,
-    );
-  }
-
-  Future<void> insertAttachments(models.Attachments attachments, String buildingId) async {
-    final attachmentsId = buildingId;
-    await _db.insertAttachments(AttachmentsTableCompanion.insert(
-      id: attachmentsId,
-      buildingId: buildingId,
-      photos: json.encode(attachments.photos),
-      plans: json.encode(attachments.plans),
-      notes: attachments.notes,
-    ));
-  }
-
-  Future<void> updateAttachments(models.Attachments attachments, String buildingId) async {
-    final attachmentsId = buildingId;
-    await _db.updateAttachments(
-      attachmentsId,
-      AttachmentsTableCompanion(
-        photos: Value(json.encode(attachments.photos)),
-        plans: Value(json.encode(attachments.plans)),
-        notes: Value(attachments.notes),
-      ),
-    );
   }
 
   // ========== PROJECT ID ==========

@@ -8,9 +8,6 @@ import 'package:path/path.dart' as path;
 import '../../utils/app_log.dart';
 import '../../theme/app_palette.dart';
 
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
-
 class OcrCameraPage extends StatefulWidget {
   const OcrCameraPage({
     Key? key,
@@ -35,12 +32,12 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
 
   Future<void> _initializeCamera() async {
     try {
-      debugPrint('OCR Camera: Starte Kamera-Initialisierung...');
+      appLog('OCR Camera: Starte Kamera-Initialisierung...');
       _cameras = await availableCameras();
-      debugPrint('OCR Camera: Verfügbare Kameras: ${_cameras?.length ?? 0}');
+      appLog('OCR Camera: Verfügbare Kameras: ${_cameras?.length ?? 0}');
       
       if (_cameras == null || _cameras!.isEmpty) {
-        debugPrint('OCR Camera: Keine Kamera verfügbar');
+        appLog('OCR Camera: Keine Kamera verfügbar');
         if (mounted) {
           setState(() {
             _errorMessage = 'Keine Kamera verfügbar';
@@ -49,16 +46,16 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
         return;
       }
 
-      debugPrint('OCR Camera: Erstelle CameraController...');
+      appLog('OCR Camera: Erstelle CameraController...');
       _controller = CameraController(
         _cameras![0],
         ResolutionPreset.high,
         enableAudio: false,
       );
 
-      debugPrint('OCR Camera: Initialisiere Controller...');
+      appLog('OCR Camera: Initialisiere Controller...');
       await _controller!.initialize();
-      debugPrint('OCR Camera: Controller erfolgreich initialisiert');
+      appLog('OCR Camera: Controller erfolgreich initialisiert');
 
       if (mounted) {
         setState(() {
@@ -66,8 +63,8 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
         });
       }
     } catch (e, stackTrace) {
-      debugPrint('OCR Camera: Fehler beim Initialisieren: $e');
-      debugPrint('OCR Camera: StackTrace: $stackTrace');
+      appLog('OCR Camera: Fehler beim Initialisieren: $e');
+      appLog('OCR Camera: StackTrace: $stackTrace');
       if (mounted) {
         setState(() {
           _errorMessage = 'Fehler beim Initialisieren der Kamera: $e';
@@ -98,7 +95,7 @@ class _OcrCameraPageState extends State<OcrCameraPage> {
         Navigator.of(context).pop(savedImage);
       }
     } catch (e) {
-      debugPrint('OCR Camera: Fehler beim Aufnehmen: $e');
+      appLog('OCR Camera: Fehler beim Aufnehmen: $e');
       if (mounted) {
         setState(() {
           _isCapturing = false;

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/csv_hierarchy_level.dart';
+import '../utils/app_log.dart';
 
 /// Ein explizites Paar: eine Spalte für den Attributnamen, eine für den Attributwert.
 class AttributeColumnPair {
@@ -1775,7 +1776,9 @@ class CsvSettings {
         settings = CsvSettings.defaults();
       }
       return _migrateLegacyTemplateCsvSettings(prefs, projectId, settings);
-    } catch (_) {}
+    } catch (e) {
+      appLog('CsvSettings.loadForProject fehlgeschlagen', error: e);
+    }
     return CsvSettings.defaults();
   }
 
@@ -1837,7 +1840,8 @@ class CsvSettings {
       }
       await prefs.remove(legacyKey);
       return updated;
-    } catch (_) {
+    } catch (e) {
+      appLog('Legacy CSV-Settings Migration fehlgeschlagen', error: e);
       return settings;
     }
   }
@@ -1858,7 +1862,9 @@ class CsvSettingsNotifier extends StateNotifier<CsvSettings> {
         state = CsvSettings.fromJson(decoded);
         return;
       }
-    } catch (_) {}
+    } catch (e) {
+      appLog('CsvSettingsNotifier.load fehlgeschlagen', error: e);
+    }
   }
 
   Future<void> save(CsvSettings settings) async {

@@ -1,6 +1,5 @@
 // models/project.dart
 
-import 'dart:convert';
 import 'building.dart';
 
 class Project {
@@ -39,11 +38,4 @@ class Project {
     'customer': customer,
     'buildings': buildings.map((b) => b.toJson()).toList(),
   };
-
-  // Convenience: Encoding als String
-  String toJsonString() => json.encode(toJson());
-
-  // Convenience: Decoding aus String
-  static Project fromJsonString(String str) =>
-      Project.fromJson(json.decode(str) as Map<String, dynamic>);
 }

@@ -1,6 +1,5 @@
 // lib/models/anlage.dart
 
-import 'dart:convert';
 import 'disziplin_schnittstelle.dart';
 
 class Anlage {
@@ -65,17 +64,5 @@ class Anlage {
       markerType: map['markerType'] as String,
       discipline: disc,
     );
-  }
-
-  /// Decodiert eine Liste von Anlagen aus einem JSON-String
-  static List<Anlage> decodeList(String data) {
-    final List<dynamic> jsonList = json.decode(data);
-    return jsonList.map((json) => Anlage.fromJson(json)).toList();
-  }
-
-  /// Encodiert eine Liste von Anlagen zu einem JSON-String
-  static String encodeList(List<Anlage> anlagen) {
-    final List<Map<String, dynamic>> jsonList = anlagen.map((a) => a.toJson()).toList();
-    return json.encode(jsonList);
   }
 }

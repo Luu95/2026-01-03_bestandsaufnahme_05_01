@@ -9,9 +9,6 @@ import '../../models/disziplin_manager.dart';
 import '../../database/database_service.dart';
 import '../../utils/app_log.dart';
 
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
-
 class TechnikMainTab extends StatefulWidget {
   final DatabaseService dbService;
   final Building building;
@@ -114,7 +111,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
         });
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden des Expansion-Zustands: $e');
+      appLog('Fehler beim Laden des Expansion-Zustands: $e');
     }
   }
 
@@ -124,7 +121,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
       final key = 'expanded_disciplines_${widget.building.id}';
       await prefs.setStringList(key, _expandedDisciplines.toList());
     } catch (e) {
-      debugPrint('Fehler beim Speichern des Expansion-Zustands: $e');
+      appLog('Fehler beim Speichern des Expansion-Zustands: $e');
     }
   }
 
@@ -141,7 +138,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
         // Callback aufrufen, um Disziplinen neu zu laden
         widget.onSchemaUpdated?.call();
       } catch (e) {
-        debugPrint('Fehler beim Speichern der neuen Disziplin: $e');
+        appLog('Fehler beim Speichern der neuen Disziplin: $e');
       }
     }
   }

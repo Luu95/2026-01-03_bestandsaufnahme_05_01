@@ -173,6 +173,9 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteProject(String id) => (delete(projects)..where((p) => p.id.equals(id))).go();
 
   // CRUD-Methoden für Buildings
+  Future<List<BuildingDb>> getAllActiveBuildings() =>
+      (select(buildings)..where((b) => b.isDeleted.equals(false))).get();
+
   Future<List<BuildingDb>> getBuildingsByProjectId(String projectId) =>
       (select(buildings)
             ..where((b) => b.projectId.equals(projectId) & b.isDeleted.equals(false)))
@@ -208,6 +211,8 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteBuilding(String id) => (delete(buildings)..where((b) => b.id.equals(id))).go();
 
   // CRUD-Methoden für FloorPlans
+  Future<List<FloorPlanDb>> getAllFloorPlans() => select(floorPlans).get();
+
   Future<List<FloorPlanDb>> getFloorPlansByBuildingId(String buildingId) => (select(floorPlans)..where((f) => f.buildingId.equals(buildingId))).get();
   Future<FloorPlanDb?> getFloorPlanById(String id) => (select(floorPlans)..where((f) => f.id.equals(id))).getSingleOrNull();
   Future<int> insertFloorPlan(FloorPlansCompanion floorPlan) => into(floorPlans).insert(floorPlan);

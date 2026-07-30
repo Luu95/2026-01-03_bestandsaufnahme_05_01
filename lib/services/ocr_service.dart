@@ -4,10 +4,8 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 import '../utils/app_log.dart';
 
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
-
 class OcrService {
+  static const bool _verboseOcr = false;
   static final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
   // Mapping: Verschiedene Bezeichnungen für dasselbe Feld
@@ -69,33 +67,18 @@ class OcrService {
 
   /// Hauptfunktion: Erkennt Typenschild-Daten mit verbesserter Logik
   static Future<Map<String, String>> recognizeTypenschild(File imageFile) async {
-    debugPrint('=== OCR SERVICE: Starte Typenschild-Erkennung ===');
-    debugPrint('Bild: ${imageFile.path}');
+    appLog('OCR: Starte Typenschild-Erkennung (${imageFile.path})');
     
     final InputImage inputImage = InputImage.fromFile(imageFile);
     final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
 
-    // DEBUG: Vollständiger roher Text
-    debugPrint('\n--- ROHER OCR-TEXT ---');
-    debugPrint(recognizedText.text);
-    debugPrint('--- ENDE ROHER TEXT ---\n');
-
-    // DEBUG: Struktur analysieren
-    _debugTextStructure(recognizedText);
-
     Map<String, String> results = {};
 
-    // Strategie 1: Geografische Positionssuche (neu - für Tabellen)
-    debugPrint('\n=== STRATEGIE 1: Geografische Positionssuche ===');
-    final geoResults = _extractWithGeographicSearch(recognizedText);
-    debugPrint('Ergebnisse: $geoResults');
-    results.addAll(geoResults);
+    // Strategie 1: Geografische Positionssuche (für Tabellen)
+    results.addAll(_extractWithGeographicSearch(recognizedText));
 
-    // Strategie 2: Block-basierte Erkennung (nutzt Struktur)
-    debugPrint('\n=== STRATEGIE 2: Block-basierte Erkennung ===');
+    // Strategie 2: Block-basierte Erkennung
     final blockResults = _extractFromBlocks(recognizedText);
-    debugPrint('Ergebnisse: $blockResults');
-    // Nur hinzufügen, wenn noch nicht vorhanden
     blockResults.forEach((key, value) {
       if (!results.containsKey(key)) {
         results[key] = value;
@@ -103,11 +86,8 @@ class OcrService {
     });
 
     // Strategie 3: Regex-basierte Erkennung (Fallback)
-    debugPrint('\n=== STRATEGIE 3: Regex-basierte Erkennung ===');
     final fullText = recognizedText.text.toLowerCase();
     final regexResults = _extractWithRegex(fullText);
-    debugPrint('Ergebnisse: $regexResults');
-    // Nur hinzufügen, wenn noch nicht vorhanden
     regexResults.forEach((key, value) {
       if (!results.containsKey(key)) {
         results[key] = value;
@@ -115,53 +95,22 @@ class OcrService {
     });
 
     // Strategie 4: Kontextuelle Erkennung
-    debugPrint('\n=== STRATEGIE 4: Kontextuelle Erkennung ===');
     final contextualResults = _extractContextual(recognizedText);
-    debugPrint('Ergebnisse: $contextualResults');
-    // Nur hinzufügen, wenn noch nicht vorhanden
     contextualResults.forEach((key, value) {
       if (!results.containsKey(key)) {
         results[key] = value;
       }
     });
 
-    // Post-Processing: Bereinigung und Validierung
-    debugPrint('\n=== POST-PROCESSING: Bereinigung und Validierung ===');
-    debugPrint('Vorher: $results');
     final cleaned = _cleanAndValidate(results);
-    debugPrint('Nachher: $cleaned');
-
-    debugPrint('\n=== FINALE ERGEBNISSE ===');
-    debugPrint('Erkannte Felder: ${cleaned.keys.toList()}');
-    cleaned.forEach((key, value) {
-      debugPrint('  $key: "$value"');
-    });
-    debugPrint('=== ENDE OCR SERVICE ===\n');
-
+    appLog('OCR: ${cleaned.length} Felder erkannt: ${cleaned.keys.toList()}');
     return cleaned;
   }
 
-  /// DEBUG: Analysiert die Textstruktur
+  /// Ausführliche Strukturanalyse – absichtlich ungenutzt (Spam-Reduktion).
+  // ignore: unused_element
   static void _debugTextStructure(RecognizedText recognizedText) {
-    debugPrint('\n--- TEXT-STRUKTUR ANALYSE ---');
-    debugPrint('Anzahl Blöcke: ${recognizedText.blocks.length}');
-    
-    for (int blockIdx = 0; blockIdx < recognizedText.blocks.length; blockIdx++) {
-      final block = recognizedText.blocks[blockIdx];
-      debugPrint('\nBlock $blockIdx:');
-      debugPrint('  Text: "${block.text}"');
-      debugPrint('  BoundingBox: ${block.boundingBox}');
-      debugPrint('  Anzahl Zeilen: ${block.lines.length}');
-      
-      for (int lineIdx = 0; lineIdx < block.lines.length; lineIdx++) {
-        final line = block.lines[lineIdx];
-        debugPrint('  Zeile $lineIdx:');
-        debugPrint('    Text: "${line.text}"');
-        debugPrint('    BoundingBox: left=${line.boundingBox.left.toStringAsFixed(1)}, top=${line.boundingBox.top.toStringAsFixed(1)}, right=${line.boundingBox.right.toStringAsFixed(1)}, bottom=${line.boundingBox.bottom.toStringAsFixed(1)}');
-        debugPrint('    Höhe: ${line.boundingBox.height.toStringAsFixed(1)}');
-      }
-    }
-    debugPrint('--- ENDE STRUKTUR ANALYSE ---\n');
+    if (_verboseOcr) appLog('OCR-Struktur: ${recognizedText.blocks.length} Blöcke');
   }
 
   /// NEU: Geografische Positionssuche - für Tabellen-Layouts
@@ -176,19 +125,19 @@ class OcrService {
       }
     }
 
-    debugPrint('Gefundene Zeilen: ${allLines.length}');
+    if (_verboseOcr) appLog('Gefundene Zeilen: ${allLines.length}');
     for (var line in allLines) {
-      debugPrint('  "${line.text}" @ (${line.box.left.toStringAsFixed(1)}, ${line.box.top.toStringAsFixed(1)})');
+      if (_verboseOcr) appLog('  "${line.text}" @ (${line.box.left.toStringAsFixed(1)}, ${line.box.top.toStringAsFixed(1)})');
     }
 
     // Für jedes Feld suchen
     for (var fieldKey in _fieldMappings.keys) {
       if (results.containsKey(fieldKey)) continue;
       
-      debugPrint('\nSuche nach Feld: $fieldKey');
+      if (_verboseOcr) appLog('\nSuche nach Feld: $fieldKey');
       
       for (var label in _fieldMappings[fieldKey]!) {
-        debugPrint('  Prüfe Label: "$label"');
+        if (_verboseOcr) appLog('  Prüfe Label: "$label"');
         
         // Suche Zeile mit diesem Label
         for (int i = 0; i < allLines.length; i++) {
@@ -196,8 +145,8 @@ class OcrService {
           final text = currentLine.text.toLowerCase();
           
           if (text.contains(label)) {
-            debugPrint('    ✓ Label gefunden in Zeile $i: "${currentLine.text}"');
-            debugPrint('      Position: (${currentLine.box.left.toStringAsFixed(1)}, ${currentLine.box.top.toStringAsFixed(1)})');
+            if (_verboseOcr) appLog('    ✓ Label gefunden in Zeile $i: "${currentLine.text}"');
+            if (_verboseOcr) appLog('      Position: (${currentLine.box.left.toStringAsFixed(1)}, ${currentLine.box.top.toStringAsFixed(1)})');
             
             String? foundValue;
             String? foundMethod;
@@ -208,20 +157,20 @@ class OcrService {
             
             if (match != null) {
               final candidate = match.group(1)?.trim() ?? '';
-              debugPrint('      Check A (gleiche Zeile): Kandidat "$candidate"');
+              if (_verboseOcr) appLog('      Check A (gleiche Zeile): Kandidat "$candidate"');
               
               if (candidate.length > 1 && !_isAnotherLabel(candidate)) {
                 foundValue = candidate;
                 foundMethod = 'gleiche Zeile';
-                debugPrint('      ✓ Akzeptiert als Wert');
+                if (_verboseOcr) appLog('      ✓ Akzeptiert als Wert');
               } else {
-                debugPrint('      ✗ Abgelehnt (ist Label oder zu kurz)');
+                if (_verboseOcr) appLog('      ✗ Abgelehnt (ist Label oder zu kurz)');
               }
             }
 
             // Check B: Geografisch rechts daneben (gleiche Y-Höhe, größere X-Position)
             if (foundValue == null) {
-              debugPrint('      Check B (geografisch rechts):');
+              if (_verboseOcr) appLog('      Check B (geografisch rechts):');
               String? foundRight;
               double minXDiff = double.infinity;
 
@@ -233,17 +182,17 @@ class OcrService {
                 final tolerance = currentLine.box.height / 2;
                 final xDiff = otherLine.box.left - currentLine.box.right;
 
-                debugPrint('        Zeile $j: "${otherLine.text}"');
-                debugPrint('          Y-Diff: ${yDiff.toStringAsFixed(1)}, Toleranz: ${tolerance.toStringAsFixed(1)}');
-                debugPrint('          X-Diff: ${xDiff.toStringAsFixed(1)}');
+                if (_verboseOcr) appLog('        Zeile $j: "${otherLine.text}"');
+                if (_verboseOcr) appLog('          Y-Diff: ${yDiff.toStringAsFixed(1)}, Toleranz: ${tolerance.toStringAsFixed(1)}');
+                if (_verboseOcr) appLog('          X-Diff: ${xDiff.toStringAsFixed(1)}');
 
                 if (yDiff < tolerance && xDiff > -10 && xDiff < minXDiff) {
                   if (!_isAnotherLabel(otherLine.text)) {
                     foundRight = otherLine.text;
                     minXDiff = xDiff;
-                    debugPrint('          ✓ Kandidat gefunden');
+                    if (_verboseOcr) appLog('          ✓ Kandidat gefunden');
                   } else {
-                    debugPrint('          ✗ Abgelehnt (ist Label)');
+                    if (_verboseOcr) appLog('          ✗ Abgelehnt (ist Label)');
                   }
                 }
               }
@@ -251,9 +200,9 @@ class OcrService {
               if (foundRight != null) {
                 foundValue = foundRight;
                 foundMethod = 'geografisch rechts';
-                debugPrint('      ✓ Wert gefunden rechts: "$foundRight"');
+                if (_verboseOcr) appLog('      ✓ Wert gefunden rechts: "$foundRight"');
               } else {
-                debugPrint('      ✗ Kein Wert rechts gefunden');
+                if (_verboseOcr) appLog('      ✗ Kein Wert rechts gefunden');
               }
             }
 
@@ -263,20 +212,20 @@ class OcrService {
               final yDiff = nextLine.box.top - currentLine.box.bottom;
               final maxYDiff = currentLine.box.height * 1.5;
               
-              debugPrint('      Check C (darunter):');
-              debugPrint('        Nächste Zeile: "${nextLine.text}"');
-              debugPrint('        Y-Diff: ${yDiff.toStringAsFixed(1)}, Max: ${maxYDiff.toStringAsFixed(1)}');
+              if (_verboseOcr) appLog('      Check C (darunter):');
+              if (_verboseOcr) appLog('        Nächste Zeile: "${nextLine.text}"');
+              if (_verboseOcr) appLog('        Y-Diff: ${yDiff.toStringAsFixed(1)}, Max: ${maxYDiff.toStringAsFixed(1)}');
               
               if (yDiff < maxYDiff) {
                 if (!_isAnotherLabel(nextLine.text)) {
                   foundValue = nextLine.text;
                   foundMethod = 'darunter';
-                  debugPrint('        ✓ Wert gefunden darunter: "$foundValue"');
+                  if (_verboseOcr) appLog('        ✓ Wert gefunden darunter: "$foundValue"');
                 } else {
-                  debugPrint('        ✗ Abgelehnt (ist Label)');
+                  if (_verboseOcr) appLog('        ✗ Abgelehnt (ist Label)');
                 }
               } else {
-                debugPrint('        ✗ Zu weit entfernt');
+                if (_verboseOcr) appLog('        ✗ Zu weit entfernt');
               }
             }
 
@@ -285,13 +234,13 @@ class OcrService {
               final cleanedValue = _removeUnits(foundValue, fieldKey);
               if (cleanedValue.isNotEmpty) {
                 results[fieldKey] = cleanedValue;
-                debugPrint('    ✓✓✓ FELD ERKANNT: $fieldKey = "$cleanedValue" (Methode: $foundMethod)');
+                if (_verboseOcr) appLog('    ✓✓✓ FELD ERKANNT: $fieldKey = "$cleanedValue" (Methode: $foundMethod)');
                 break;
               } else {
-                debugPrint('    ✗ Wert nach Einheiten-Entfernung leer');
+                if (_verboseOcr) appLog('    ✗ Wert nach Einheiten-Entfernung leer');
               }
             } else {
-              debugPrint('    ✗ Kein Wert gefunden für Label "$label"');
+              if (_verboseOcr) appLog('    ✗ Kein Wert gefunden für Label "$label"');
             }
           }
         }
@@ -309,7 +258,7 @@ class OcrService {
     for (var labels in _fieldMappings.values) {
       for (var l in labels) {
         if (lower == l || lower.startsWith('$l:')) {
-          debugPrint('        _isAnotherLabel: "$text" ist Label "$l"');
+          if (_verboseOcr) appLog('        _isAnotherLabel: "$text" ist Label "$l"');
           return true;
         }
       }
@@ -323,7 +272,7 @@ class OcrService {
     
     for (final block in recognizedText.blocks) {
       final blockText = block.text.toLowerCase();
-      debugPrint('Block: "${block.text}"');
+      if (_verboseOcr) appLog('Block: "${block.text}"');
       
       // Suche nach Label-Wert-Paaren in jedem Block
       for (final fieldKey in _fieldMappings.keys) {
@@ -337,13 +286,13 @@ class OcrService {
           final match = pattern.firstMatch(blockText);
           if (match != null && !results.containsKey(fieldKey)) {
             String value = match.group(1)?.trim() ?? '';
-            debugPrint('  Gefunden: $fieldKey = "$value" (Label: $label)');
+            if (_verboseOcr) appLog('  Gefunden: $fieldKey = "$value" (Label: $label)');
             // Entferne Einheiten am Ende
             value = _removeUnits(value, fieldKey);
             if (value.isNotEmpty) {
               results[fieldKey] = value;
             } else {
-              debugPrint('  ✗ Wert nach Einheiten-Entfernung leer');
+              if (_verboseOcr) appLog('  ✗ Wert nach Einheiten-Entfernung leer');
             }
           }
         }
@@ -359,13 +308,13 @@ class OcrService {
 
     // Hersteller: Oft am Anfang oder nach "Hersteller"
     if (!results.containsKey('hersteller')) {
-      debugPrint('Suche Hersteller...');
+      if (_verboseOcr) appLog('Suche Hersteller...');
       for (final label in _fieldMappings['hersteller']!) {
         final pattern = RegExp('$label\\s*[:\\s]+\\s*([a-zäöüß\\s]+)', caseSensitive: false);
         final match = pattern.firstMatch(fullText);
         if (match != null) {
           final value = match.group(1)?.trim().toUpperCase() ?? '';
-          debugPrint('  Gefunden via Regex: "$value" (Label: $label)');
+          if (_verboseOcr) appLog('  Gefunden via Regex: "$value" (Label: $label)');
           results['hersteller'] = value;
           break;
         }
@@ -373,12 +322,12 @@ class OcrService {
       
       // Fallback: Bekannte Hersteller-Marken erkennen
       if (!results.containsKey('hersteller')) {
-        debugPrint('  Suche bekannte Marken...');
+        if (_verboseOcr) appLog('  Suche bekannte Marken...');
         final knownBrands = ['viessmann', 'buderus', 'vaillant', 'wolf', 'weishaupt', 
                             'junkers', 'brötje', 'stiebel eltron', 'eigenbau'];
         for (final brand in knownBrands) {
           if (fullText.contains(brand)) {
-            debugPrint('  Gefunden bekannte Marke: $brand');
+            if (_verboseOcr) appLog('  Gefunden bekannte Marke: $brand');
             results['hersteller'] = brand.toUpperCase();
             break;
           }
@@ -388,13 +337,13 @@ class OcrService {
 
     // Typ/Modell: Oft nach "Typ" oder als Produktnummer
     if (!results.containsKey('typ')) {
-      debugPrint('Suche Typ...');
+      if (_verboseOcr) appLog('Suche Typ...');
       for (final label in _fieldMappings['typ']!) {
         final pattern = RegExp('$label\\s*[:\\s]+\\s*([a-z0-9\\-\\s]+)', caseSensitive: false);
         final match = pattern.firstMatch(fullText);
         if (match != null) {
           final value = match.group(1)?.trim() ?? '';
-          debugPrint('  Gefunden via Regex: "$value" (Label: $label)');
+          if (_verboseOcr) appLog('  Gefunden via Regex: "$value" (Label: $label)');
           results['typ'] = value;
           break;
         }
@@ -403,19 +352,19 @@ class OcrService {
 
     // Baujahr: 4-stellige Jahreszahl
     if (!results.containsKey('baujahr')) {
-      debugPrint('Suche Baujahr...');
+      if (_verboseOcr) appLog('Suche Baujahr...');
       final yearPattern = RegExp(r'\b(19|20)\d{2}\b');
       final matches = yearPattern.allMatches(fullText);
       if (matches.isNotEmpty) {
         final year = matches.first.group(0) ?? '';
-        debugPrint('  Gefunden via Regex: "$year"');
+        if (_verboseOcr) appLog('  Gefunden via Regex: "$year"');
         results['baujahr'] = year;
       }
     }
 
     // Leistung: Zahl gefolgt von kW oder W
     if (!results.containsKey('leistung')) {
-      debugPrint('Suche Leistung...');
+      if (_verboseOcr) appLog('Suche Leistung...');
       final powerPattern = RegExp(r'(\d+[\.,]?\d*)\s*(kw|w|watt|kilowatt)', caseSensitive: false);
       final match = powerPattern.firstMatch(fullText);
       if (match != null) {
@@ -426,31 +375,31 @@ class OcrService {
           final numValue = double.tryParse(value) ?? 0;
           value = (numValue / 1000).toString();
         }
-        debugPrint('  Gefunden via Regex: "$value" $unit');
+        if (_verboseOcr) appLog('  Gefunden via Regex: "$value" $unit');
         results['leistung'] = value;
       }
     }
 
     // Volumenstrom: Zahl gefolgt von m³/h
     if (!results.containsKey('volumenstrom')) {
-      debugPrint('Suche Volumenstrom...');
+      if (_verboseOcr) appLog('Suche Volumenstrom...');
       final volumePattern = RegExp(r'(\d+[\.,]?\d*)\s*(m³/h|m3/h|m³|m3)', caseSensitive: false);
       final match = volumePattern.firstMatch(fullText);
       if (match != null) {
         final value = match.group(1)?.replaceAll(',', '.') ?? '';
-        debugPrint('  Gefunden via Regex: "$value"');
+        if (_verboseOcr) appLog('  Gefunden via Regex: "$value"');
         results['volumenstrom'] = value;
       }
     }
 
     // Energieverbrauch: Zahl gefolgt von kWh
     if (!results.containsKey('energieverbrauch')) {
-      debugPrint('Suche Energieverbrauch...');
+      if (_verboseOcr) appLog('Suche Energieverbrauch...');
       final energyPattern = RegExp(r'(\d+[\.,]?\d*)\s*(kwh|wh)', caseSensitive: false);
       final match = energyPattern.firstMatch(fullText);
       if (match != null) {
         final value = match.group(1)?.replaceAll(',', '.') ?? '';
-        debugPrint('  Gefunden via Regex: "$value"');
+        if (_verboseOcr) appLog('  Gefunden via Regex: "$value"');
         results['energieverbrauch'] = value;
       }
     }
@@ -465,7 +414,7 @@ class OcrService {
     // Durchlaufe alle Textblöcke und suche nach benachbarten Label-Wert-Paaren
     for (final block in recognizedText.blocks) {
       final lines = block.text.split('\n');
-      debugPrint('Kontextuelle Suche in ${lines.length} Zeilen');
+      if (_verboseOcr) appLog('Kontextuelle Suche in ${lines.length} Zeilen');
       
       for (int i = 0; i < lines.length; i++) {
         final line = lines[i].toLowerCase().trim();
@@ -476,7 +425,7 @@ class OcrService {
           
           for (final label in _fieldMappings[fieldKey]!) {
             if (line.contains(label)) {
-              debugPrint('  Label "$label" gefunden in Zeile $i: "$line"');
+              if (_verboseOcr) appLog('  Label "$label" gefunden in Zeile $i: "$line"');
               // Wert könnte in derselben Zeile oder der nächsten sein
               String? value;
               
@@ -485,18 +434,18 @@ class OcrService {
               final sameLineMatch = sameLinePattern.firstMatch(line);
               if (sameLineMatch != null) {
                 value = sameLineMatch.group(1)?.trim();
-                debugPrint('    Wert in gleicher Zeile: "$value"');
+                if (_verboseOcr) appLog('    Wert in gleicher Zeile: "$value"');
               } else if (i + 1 < lines.length) {
                 // Wert in nächster Zeile
                 value = lines[i + 1].trim();
-                debugPrint('    Wert in nächster Zeile: "$value"');
+                if (_verboseOcr) appLog('    Wert in nächster Zeile: "$value"');
               }
               
               if (value != null && value.isNotEmpty) {
                 value = _removeUnits(value, fieldKey);
                 if (value.isNotEmpty) {
                   results[fieldKey] = value;
-                  debugPrint('  ✓ Gefunden: $fieldKey = "$value"');
+                  if (_verboseOcr) appLog('  ✓ Gefunden: $fieldKey = "$value"');
                 }
               }
             }
@@ -516,7 +465,7 @@ class OcrService {
         final before = cleaned;
         cleaned = cleaned.replaceAll(RegExp('\\s*$unit\\s*', caseSensitive: false), '');
         if (before != cleaned) {
-          debugPrint('    Einheit entfernt: "$unit" aus "$before" -> "$cleaned"');
+          if (_verboseOcr) appLog('    Einheit entfernt: "$unit" aus "$before" -> "$cleaned"');
         }
       }
     }
@@ -529,7 +478,7 @@ class OcrService {
     
     for (final entry in results.entries) {
       String value = entry.value.trim();
-      debugPrint('Validiere: $entry.key = "$value"');
+      if (_verboseOcr) appLog('Validiere: $entry.key = "$value"');
       
       // Entferne häufige OCR-Fehler
       value = value.replaceAll(RegExp(r'[|]'), 'I'); // | zu I
@@ -540,9 +489,9 @@ class OcrService {
           final year = int.tryParse(value);
           if (year != null && year >= 1900 && year <= 2100) {
             cleaned[entry.key] = value;
-            debugPrint('  ✓ Gültiges Baujahr');
+            if (_verboseOcr) appLog('  ✓ Gültiges Baujahr');
           } else {
-            debugPrint('  ✗ Ungültiges Baujahr: $year');
+            if (_verboseOcr) appLog('  ✗ Ungültiges Baujahr: $year');
           }
           break;
         case 'leistung':
@@ -554,18 +503,18 @@ class OcrService {
           final num = double.tryParse(numStr);
           if (num != null && num > 0) {
             cleaned[entry.key] = numStr;
-            debugPrint('  ✓ Gültiger numerischer Wert: $numStr');
+            if (_verboseOcr) appLog('  ✓ Gültiger numerischer Wert: $numStr');
           } else {
-            debugPrint('  ✗ Ungültiger numerischer Wert: "$numStr"');
+            if (_verboseOcr) appLog('  ✗ Ungültiger numerischer Wert: "$numStr"');
           }
           break;
         default:
           // String-Werte: Mindestens 2 Zeichen
           if (value.length >= 2) {
             cleaned[entry.key] = value;
-            debugPrint('  ✓ Gültiger String-Wert');
+            if (_verboseOcr) appLog('  ✓ Gültiger String-Wert');
           } else {
-            debugPrint('  ✗ String zu kurz: "${value.length}" Zeichen');
+            if (_verboseOcr) appLog('  ✗ String zu kurz: "${value.length}" Zeichen');
           }
       }
     }

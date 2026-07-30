@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../database/database_service.dart';
@@ -12,10 +13,9 @@ import '../providers/csv_settings_provider.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_column_layout.dart';
 import '../utils/csv_utils.dart';
+import '../utils/csv_parse_isolate.dart';
 import '../theme/app_palette.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
+import 'package:flutter/foundation.dart';
 
 /// Repräsentiert eine Vorlage aus der Gewerkevorlagen.csv
 class Template {
@@ -124,8 +124,8 @@ class TemplateService {
           bestGoodRows = good;
           bestAvgLen = avgLen;
         }
-      } catch (_) {
-        // Ignorieren, probiere nächsten Kandidaten
+      } catch (e) {
+        appLog('Delimiter-Kandidat $d fehlgeschlagen', error: e);
       }
     }
 
@@ -297,7 +297,9 @@ class TemplateService {
         if (parsed is Map) {
           decoded.addAll(Map<String, dynamic>.from(parsed));
         }
-      } catch (_) {}
+      } catch (e) {
+        appLog('Schema-JSON in Vorlage ungültig', error: e);
+      }
     }
 
     final cells = <String, String>{};
@@ -343,7 +345,8 @@ class TemplateService {
     // Wenn kein filePath angegeben, öffne FilePicker
     if (filePath == null || filePath.isEmpty) {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
       );
       if (result == null || result.files.single.path == null) {
         throw Exception('Keine CSV-Datei ausgewählt');
@@ -420,14 +423,15 @@ class TemplateService {
           bestScore = score;
           bestDelimiter = d;
         }
-      } catch (_) {}
+      } catch (e) {
+        appLog('Delimiter-Kandidat $d fehlgeschlagen', error: e);
+      }
     }
     delimiter = bestDelimiter;
-    final csvData = CsvToListConverter(
-      fieldDelimiter: delimiter,
-      eol: '\n',
-      shouldParseNumbers: false,
-    ).convert(csvString);
+    final csvData = await compute(parseCsvRowsIsolate, {
+      'csv': csvString,
+      'delimiter': delimiter,
+    });
 
     if (csvData.isEmpty) {
       throw Exception('CSV-Datei ist leer');
@@ -481,12 +485,12 @@ class TemplateService {
           skipped++;
         }
       } catch (e) {
-        debugPrint('Fehler beim Parsen der Vorlage in Zeile ${i + 1}: $e');
+        appLog('Fehler beim Parsen der Vorlage in Zeile ${i + 1}: $e');
         skipped++;
       }
     }
 
-    debugPrint(
+    appLog(
       'Vorlagen-Import abgeschlossen: projectId=$projectId, valid=$count, skipped=$skipped, delimiter=$delimiter, requiredMaxIndex=$requiredMaxIndex, uniqueGewerke=${uniqueGewerke.length}',
     );
 
@@ -496,7 +500,7 @@ class TemplateService {
       try {
         await _syncDisciplineSchemasFromTemplates(dbService, buildingId, projectId);
       } catch (e) {
-        debugPrint('Fehler beim Sync der Disziplinen aus Vorlagen: $e');
+        appLog('Fehler beim Sync der Disziplinen aus Vorlagen: $e');
         // Fehler wird ignoriert, damit der Import nicht fehlschlägt
       }
     }
@@ -593,7 +597,7 @@ class TemplateService {
     }
 
     await dbService.replaceDisciplines(buildingId, result);
-    debugPrint(
+    appLog(
       'Disziplinen aus Vorlagen: ${result.length} Gewerke für Gebäude $buildingId',
     );
     return result;
@@ -613,7 +617,8 @@ class TemplateService {
     if (filePath == null || filePath.isEmpty) {
       // Versuche die Datei aus dem Standard-Pfad zu laden
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
       );
       if (result == null || result.files.single.path == null) {
         return [];
@@ -634,11 +639,10 @@ class TemplateService {
     final bytes = await file.readAsBytes();
     final csvString = CsvUtils.normalizeCsvStringFromBytes(bytes);
     final delimiter = CsvUtils.detectDelimiterFromLine(csvString.split('\n').first);
-    final csvData = CsvToListConverter(
-      fieldDelimiter: delimiter,
-      eol: '\n',
-      shouldParseNumbers: false,
-    ).convert(csvString);
+    final csvData = await compute(parseCsvRowsIsolate, {
+      'csv': csvString,
+      'delimiter': delimiter,
+    });
 
     if (csvData.isEmpty) {
       return [];
@@ -679,7 +683,7 @@ class TemplateService {
           templates.add(withParams);
         }
       } catch (e) {
-        debugPrint('Fehler beim Parsen der Vorlage in Zeile ${i + 1}: $e');
+        appLog('Fehler beim Parsen der Vorlage in Zeile ${i + 1}: $e');
       }
     }
 
@@ -779,7 +783,8 @@ class TemplateService {
               e.key != CsvSettings.csvRowIndexParamKey)
           .map((e) => MapEntry(e.key.toString(), e.value))
           .fold<Map<String, dynamic>>({}, (m, e) => m..[e.key] = e.value);
-    } catch (_) {
+    } catch (e) {
+      appLog('Template-Parameter JSON ungültig', error: e);
       return {};
     }
   }
@@ -793,7 +798,8 @@ class TemplateService {
       final raw = decoded['_schema'];
       if (raw is! List) return [];
       return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    } catch (_) {
+    } catch (e) {
+      appLog('Template-_schema JSON ungültig', error: e);
       return [];
     }
   }
@@ -994,5 +1000,62 @@ class TemplateService {
   // aus den in den Vorlagen vorkommenden Gewerken erstellt hat.
   // Dieses Verhalten wurde entfernt, damit beim Vorlagen-Import
   // keine neuen Gewerke mehr ungefragt in der Technik-Übersicht entstehen.
+
+  /// Erstellt eine leere Gewerkevorlagen-CSV mit dem korrekten Header.
+  /// Die Datei enthält nur die Headerzeile und kann vom Nutzer befüllt werden.
+  static Future<File> buildGewerkeVorlagenCsvTemplate({
+    required CsvSettings csvSettings,
+    int attSlotCount = 5,
+  }) async {
+    final headers = <String>[];
+
+    // Hierarchie-Spalten: Label aus gespeichertem importHeaderRow oder labelX
+    final enabledLevels = csvSettings.enabledLevelsOrdered;
+    for (var i = 0; i < enabledLevels.length; i++) {
+      final levelNum = csvSettings.levelNumberAtEnabledIndex(i);
+      final label = csvSettings.hierarchyLevelHeaderLabel(levelNum).trim();
+      if (label.isNotEmpty) {
+        headers.add(label);
+      } else {
+        if (levelNum == 1) headers.add(csvSettings.labelGewerk);
+        if (levelNum == 2) headers.add(csvSettings.labelAnlage);
+        if (levelNum == 3) headers.add(csvSettings.labelBauteil);
+      }
+    }
+    if (headers.isEmpty) {
+      headers.addAll([csvSettings.labelGewerk, csvSettings.labelAnlage]);
+    }
+
+    // ATT-Dreiergruppen aus vorhandenen Einstellungen oder Standard
+    final triplets = csvSettings.attributeTripletColumns;
+    if (triplets.isNotEmpty) {
+      for (var i = 0; i < triplets.length; i++) {
+        final n = i + 1;
+        headers.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
+      }
+    } else {
+      for (var n = 1; n <= attSlotCount; n++) {
+        headers.addAll(['ATT$n', 'ATT${n}_TYPE', 'ATT${n}_WERT']);
+      }
+    }
+
+    final exportDelimiter =
+        csvSettings.exportDelimiter.isNotEmpty ? csvSettings.exportDelimiter : ';';
+    final csvString = ListToCsvConverter(
+      fieldDelimiter: exportDelimiter,
+      eol: '\n',
+    ).convert([headers]);
+
+    final utf8Bom = [0xEF, 0xBB, 0xBF];
+    final csvBytes = utf8Bom + utf8.encode(csvString);
+
+    final directory = await getTemporaryDirectory();
+    const fileName = 'gewerkevorlagen_vorlage.csv';
+    final file = File('${directory.path}/$fileName');
+    await file.writeAsBytes(csvBytes);
+
+    appLog('Gewerkevorlagen-Vorlage erstellt: ${headers.length} Spalten');
+    return file;
+  }
 }
 

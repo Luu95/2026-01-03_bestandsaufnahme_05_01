@@ -11,9 +11,6 @@ import '../providers/projects_provider.dart';
 import '../pages/widgets/schema_editor_dialog.dart';
 import '../utils/app_log.dart';
 
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
-
 /// Widget zum Verwalten (Anzeigen, Hinzufügen, Bearbeiten, Löschen) von Disziplinen.
 /// Disziplinen werden gebäudespezifisch gespeichert.
 class DisziplinManagerWidget extends ConsumerStatefulWidget {
@@ -357,7 +354,7 @@ class _DisziplinEditDialogState extends State<DisziplinEditDialog> {
         }
       }
     } catch (e) {
-      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+      appLog('Fehler beim Laden des globalen Schemas: $e');
     }
   }
 

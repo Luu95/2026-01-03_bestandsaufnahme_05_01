@@ -7,6 +7,7 @@ import '../../models/marker.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../theme/app_palette.dart';
 import '../../database/database_service.dart';
+import '../../utils/photo_file_utils.dart';
 import 'photo_manager.dart';
 
 /// Bottom-Sheet zum Hinzufügen oder Bearbeiten eines Markers auf dem PDF-Grundriss.
@@ -98,15 +99,15 @@ class _MarkerFormDialogState extends State<MarkerFormDialog>
     }
 
     // vorhandene Fotos laden
-    if (widget.existing?.params?['photoPaths'] is List) {
-      final paths = List<dynamic>.from(widget.existing!.params!['photoPaths']);
-      final files = paths
-          .map((p) => File(p.toString()))
-          .where((f) => f.existsSync())
-          .toList();
-      if (files.isNotEmpty) {
-        _photoManager.updateImageFiles(files);
-      }
+    _loadExistingPhotos();
+  }
+
+  Future<void> _loadExistingPhotos() async {
+    if (widget.existing?.params?['photoPaths'] is! List) return;
+    final paths = List<dynamic>.from(widget.existing!.params!['photoPaths']);
+    final files = await filterExistingPhotoFiles(paths);
+    if (files.isNotEmpty && mounted) {
+      setState(() => _photoManager.updateImageFiles(files));
     }
   }
 

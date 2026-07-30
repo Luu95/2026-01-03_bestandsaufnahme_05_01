@@ -7,7 +7,6 @@ import 'package:path/path.dart' as path;
 import '../../utils/app_log.dart';
 import '../../theme/app_palette.dart';
 
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class QrCameraPage extends StatefulWidget {
   const QrCameraPage({Key? key}) : super(key: key);
@@ -71,7 +70,7 @@ class _QrCameraPageState extends State<QrCameraPage> {
         Navigator.of(context).pop(savedImage);
       }
     } catch (e) {
-      debugPrint('QR Camera: Fehler beim Aufnehmen: $e');
+      appLog('QR Camera: Fehler beim Aufnehmen: $e');
       if (mounted) {
         setState(() => _isCapturing = false);
       }

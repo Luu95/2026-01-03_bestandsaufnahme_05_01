@@ -4,6 +4,9 @@ import 'floor_plan.dart';
 import 'anlage.dart';
 
 /// Verwaltet alle Anlagen-Listen pro Disziplin anhand von String-Keys.
+///
+/// Legacy-Hülle: Anlagen liegen in der Drift-Tabelle `anlagen`.
+/// [Building.systems] bleibt für Konstruktor-Kompatibilität, wird aber leer gehalten.
 class BuildingSystems {
   /// Map, in der der Key das Disziplin-Label ist.
   final Map<String, List<Anlage>> systemsMap;
@@ -49,6 +52,7 @@ class Building {
   bool protectedMonument;
   int units;
   double floorArea;
+  /// Legacy: immer leer; Anlagen über DatabaseService.
   BuildingSystems systems;
   List<FloorPlan> floors;
 

@@ -60,7 +60,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
     }
 
     // PDF öffnen, falls vorhanden
-    if (floor.pdfPath != null && File(floor.pdfPath!).existsSync()) {
+    if (floor.pdfPath != null && await File(floor.pdfPath!).exists()) {
       await Navigator.push(
         context,
         PageRouteBuilder(
@@ -76,7 +76,15 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
           },
         ),
       );
-      await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
+      try {
+        await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Gebäude speichern fehlgeschlagen: $e')),
+          );
+        }
+      }
       return;
     }
 
@@ -99,7 +107,16 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
     });
 
     // PDF-Pfade werden jetzt in Drift gespeichert, keine SharedPreferences mehr nötig
-    await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
+    try {
+      await ref.read(projectsProvider.notifier).updateBuilding(widget.building);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gebäude speichern fehlgeschlagen: $e')),
+        );
+      }
+      return;
+    }
 
     // direkt Vollbild anzeigen
     await Navigator.push(
@@ -148,7 +165,7 @@ class _FloorPlansTabState extends ConsumerState<FloorPlansTab> {
   Widget _buildFloorTile(int idx, FloorPlan floor) {
     final isSelected = widget.selectedFloorIndexes.contains(idx);
     final isExpanded = _expandedFloorIds.contains(floor.id);
-    final hasPdf = floor.pdfPath != null && File(floor.pdfPath!).existsSync();
+    final hasPdf = floor.pdfPath != null && floor.pdfPath!.trim().isNotEmpty;
     final title = floor.name.trim().isNotEmpty
         ? floor.name.trim()
         : (floor.pdfName?.trim().isNotEmpty == true ? floor.pdfName!.trim() : 'Unbenannte Etage');

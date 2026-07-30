@@ -137,7 +137,7 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
     setState(() => _isLoading = true);
 
     final pdfPath = widget.floor.pdfPath;
-    if (pdfPath != null && File(pdfPath).existsSync()) {
+    if (pdfPath != null && await File(pdfPath).exists()) {
       try {
         final doc = await PdfDocument.openFile(pdfPath);
         _pdfDocument = doc;

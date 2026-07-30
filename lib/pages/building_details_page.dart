@@ -48,9 +48,7 @@ import 'csv_settings_page.dart';
 import 'recycle_bin_page.dart';
 import 'widgets/confirm_delete_dialog.dart';
 import 'widgets/systems_list_tile_styles.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
+import 'widgets/building_details_fab.dart';
 
 class BuildingDetailsPage extends ConsumerStatefulWidget {
   const BuildingDetailsPage({Key? key}) : super(key: key);
@@ -107,6 +105,79 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   /// Gewerkevorlagen im aktuellen Projekt importiert.
   bool _hasProjectTemplates = false;
+
+  void _showProviderError(Object e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Fehler: $e')),
+    );
+  }
+
+  void _syncFromProjectsState(ProjectsState projectsState) {
+    final projects = projectsState.projects;
+    final selectedProjectIndex = projectsState.selectedProjectIndex ?? -1;
+    final selectedBuildingIndex = projectsState.selectedBuildingIndex ?? -1;
+
+    Project newProject = _currentProject;
+    if (selectedProjectIndex >= 0 && selectedProjectIndex < projects.length) {
+      newProject = projects[selectedProjectIndex];
+    } else if (projects.isEmpty) {
+      newProject = Project(
+        id: '',
+        name: '',
+        description: '',
+        customer: '',
+        buildings: [],
+      );
+    }
+
+    Building newBuilding = _building;
+    if (newProject.buildings.isNotEmpty &&
+        selectedBuildingIndex >= 0 &&
+        selectedBuildingIndex < newProject.buildings.length) {
+      newBuilding = newProject.buildings[selectedBuildingIndex];
+    } else if (newProject.buildings.isEmpty) {
+      newBuilding = Building(
+        id: '',
+        name: '',
+        address: '',
+        postalCode: '',
+        city: '',
+        type: '',
+        bgf: 0.0,
+        constructionYear: 0,
+        renovationYears: [],
+        protectedMonument: false,
+        units: 0,
+        floorArea: 0.0,
+        systems: BuildingSystems(),
+        floors: [],
+      );
+    }
+
+    final buildingChanged = _building.id != newBuilding.id;
+    final projectChanged = _currentProject.id != newProject.id;
+
+    if (!buildingChanged &&
+        !projectChanged &&
+        _currentProjectIndex == selectedProjectIndex &&
+        _currentBuildingIndex == selectedBuildingIndex &&
+        identical(_currentProject, newProject) &&
+        identical(_building, newBuilding)) {
+      return;
+    }
+
+    setState(() {
+      _currentProjectIndex = selectedProjectIndex;
+      _currentProject = newProject;
+      _currentBuildingIndex = selectedBuildingIndex;
+      _building = newBuilding;
+    });
+
+    if (buildingChanged && newBuilding.id.isNotEmpty) {
+      _loadDisciplines();
+    }
+  }
 
   @override
   void initState() {
@@ -171,8 +242,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               );
               _systemsPageKeys[discipline]?.currentState?.exitSelectionMode();
             } catch (e) {
-              // Disziplin nicht gefunden, ignorieren
-              debugPrint('Disziplin $label nicht gefunden beim Tab-Wechsel');
+              appLog('Disziplin $label nicht gefunden beim Tab-Wechsel', error: e);
             }
           }
           setState(() {
@@ -294,7 +364,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           await dbService.replaceDisciplines(_building.id, disciplines);
         }
       } catch (e) {
-        debugPrint('Fehler beim Extrahieren von Disziplinen aus Anlagen: $e');
+        appLog('Fehler beim Extrahieren von Disziplinen aus Anlagen: $e');
       }
     }
     
@@ -341,7 +411,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
 
       // CSV importieren
-      debugPrint('Starte CSV-Import für Building: ${_building.id}');
+      appLog('Starte CSV-Import für Building: ${_building.id}');
       if (_currentProject.id.isNotEmpty) {
         await ref.read(csvSettingsProvider(_currentProject.id).notifier).load();
       }
@@ -360,7 +430,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           }
         },
       );
-      debugPrint(
+      appLog(
         'CSV-Import: ${persistResult.savedCount} importiert, '
         '${persistResult.skippedCount} übersprungen, ${persistResult.errorCount} Fehler',
       );
@@ -371,15 +441,15 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       }
 
       // Disziplinen neu laden (wichtig, da Schema aktualisiert wurde)
-      debugPrint('Lade Disziplinen neu...');
+      appLog('Lade Disziplinen neu...');
       await _loadDisciplines(
         clearExpandedState: true,
         refreshSystemsPages: true,
       );
       _refreshSystemsPages();
     } catch (e, stackTrace) {
-      debugPrint('CSV-Import Fehler: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('CSV-Import Fehler: $e');
+      appLog('Stack Trace: $stackTrace');
       
       // Dialog schließen
       if (mounted) {
@@ -501,7 +571,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
       final dbService = ref.read(databaseServiceProvider);
       final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
-      debugPrint('Export: ${anlagen.length} Anlagen gefunden');
+      appLog('Export: ${anlagen.length} Anlagen gefunden');
 
       if (anlagen.isEmpty) {
         if (mounted) {
@@ -548,7 +618,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _showExportSavedMessage(savedPath);
         }
 
-        debugPrint('CSV-Export abgeschlossen');
+        appLog('CSV-Export abgeschlossen');
       } else if (exportType == 'zip') {
         // ZIP mit Fotos exportieren - zeige Dialog für Ordnerstruktur
         final structure = await showDialog<PhotoExportStructure>(
@@ -633,11 +703,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _showExportSavedMessage(savedPath);
         }
 
-        debugPrint('ZIP-Export abgeschlossen');
+        appLog('ZIP-Export abgeschlossen');
       }
     } catch (e, stackTrace) {
-      debugPrint('Export Fehler: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('Export Fehler: $e');
+      appLog('Stack Trace: $stackTrace');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -693,7 +763,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
         } catch (e) {
           // Disziplin nicht gefunden, ignorieren
-          debugPrint('Disziplin $label nicht gefunden beim Discipline-Expand');
+          appLog('Disziplin $label nicht gefunden beim Discipline-Expand');
         }
       }
     }
@@ -721,7 +791,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         indexInList: idx,
       );
     }
-    await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    try {
+      await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    } catch (e) {
+      _showProviderError(e);
+      return;
+    }
     _exitFloorplansSelectionMode();
     if (mounted) setState(() {});
   }
@@ -754,8 +829,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             return SlideTransition(position: animation.drive(tween), child: child);
           },
         ),
-      ).then((_) {
-        ref.read(projectsProvider.notifier).updateBuilding(_building);
+      ).then((_) async {
+        try {
+          await ref.read(projectsProvider.notifier).updateBuilding(_building);
+        } catch (e) {
+          _showProviderError(e);
+        }
       });
     }
   }
@@ -808,7 +887,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         floorList: _building.floors,
         indexInList: idx,
       );
-      await ref.read(projectsProvider.notifier).updateBuilding(_building);
+      try {
+        await ref.read(projectsProvider.notifier).updateBuilding(_building);
+      } catch (e) {
+        _showProviderError(e);
+        return;
+      }
       if (mounted) setState(() {});
     }
   }
@@ -841,19 +925,23 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     );
 
     if (result == true && nameController.text.trim().isNotEmpty) {
-      final neueId = DateTime.now().millisecondsSinceEpoch.toString();
-      final newProject = Project(
-        id: neueId,
-        name: nameController.text.trim(),
-        description: '',
-        customer: '',
-        buildings: [],
-      );
+      try {
+        final neueId = DateTime.now().millisecondsSinceEpoch.toString();
+        final newProject = Project(
+          id: neueId,
+          name: nameController.text.trim(),
+          description: '',
+          customer: '',
+          buildings: [],
+        );
 
-      await ref.read(projectsProvider.notifier).addProject(newProject);
-      final projectsState = ref.read(projectsProvider);
-      if (projectsState.projects.length == 1) {
-        ref.read(projectsProvider.notifier).selectProject(0);
+        await ref.read(projectsProvider.notifier).addProject(newProject);
+        final projectsState = ref.read(projectsProvider);
+        if (projectsState.projects.length == 1) {
+          ref.read(projectsProvider.notifier).selectProject(0);
+        }
+      } catch (e) {
+        _showProviderError(e);
       }
     }
   }
@@ -886,25 +974,29 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     );
 
     if (result == true && nameController.text.trim().isNotEmpty) {
-      final neueId = DateTime.now().millisecondsSinceEpoch.toString();
-      final neuesBuilding = Building(
-        id: neueId,
-        name: nameController.text.trim(),
-        address: '',
-        postalCode: '',
-        city: '',
-        type: '',
-        bgf: 0.0,
-        constructionYear: 0,
-        renovationYears: <int>[],
-        protectedMonument: false,
-        units: 0,
-        floorArea: 0.0,
-        systems: BuildingSystems(),
-        floors: <FloorPlan>[],
-      );
+      try {
+        final neueId = DateTime.now().millisecondsSinceEpoch.toString();
+        final neuesBuilding = Building(
+          id: neueId,
+          name: nameController.text.trim(),
+          address: '',
+          postalCode: '',
+          city: '',
+          type: '',
+          bgf: 0.0,
+          constructionYear: 0,
+          renovationYears: <int>[],
+          protectedMonument: false,
+          units: 0,
+          floorArea: 0.0,
+          systems: BuildingSystems(),
+          floors: <FloorPlan>[],
+        );
 
-      await ref.read(projectsProvider.notifier).addBuilding(neuesBuilding);
+        await ref.read(projectsProvider.notifier).addBuilding(neuesBuilding);
+      } catch (e) {
+        _showProviderError(e);
+      }
     }
   }
 
@@ -926,7 +1018,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       if (!confirmed) return;
     }
 
-    await ref.read(projectsProvider.notifier).deleteBuildings(toDelete);
+    try {
+      await ref.read(projectsProvider.notifier).deleteBuildings(toDelete);
+    } catch (e) {
+      _showProviderError(e);
+      return;
+    }
 
     setState(() {
       _buildingSelectionMode = false;
@@ -961,7 +1058,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       if (!confirmed) return;
     }
 
-    await ref.read(projectsProvider.notifier).deleteProjects(toDeleteProjects);
+    try {
+      await ref.read(projectsProvider.notifier).deleteProjects(toDeleteProjects);
+    } catch (e) {
+      _showProviderError(e);
+      return;
+    }
 
     setState(() {
       _projectSelectionMode = false;
@@ -1363,7 +1465,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         (d) => d.label == ctx.discipline.label,
         orElse: () => ctx.discipline,
       );
-    } catch (_) {}
+    } catch (e) {
+      appLog('Disziplinen für Gebäude konnten nicht geladen werden', error: e);
+    }
 
     await _openAddAnlageWithPlacement(
       discipline,
@@ -1386,7 +1490,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         try {
           final disc = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
           _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
-        } catch (_) {}
+        } catch (e) {
+          appLog('Systems-Selection beenden fehlgeschlagen', error: e);
+        }
       }
     }
 
@@ -1424,7 +1530,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         try {
           final disc = _systemsPageKeys.keys.firstWhere((d) => d.label == label);
           _systemsPageKeys[disc]?.currentState?.exitSelectionMode();
-        } catch (_) {}
+        } catch (e) {
+          appLog('Systems-Selection beenden fehlgeschlagen', error: e);
+        }
       }
     }
     if (_groupSelectionMode) {
@@ -1479,7 +1587,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final label = _selectedDisciplineLabels.first;
     try {
       return _systemsPageKeys.keys.firstWhere((d) => d.label == label);
-    } catch (_) {
+    } catch (e) {
+      appLog('Ausgewählte Disziplin nicht in Keys gefunden: $label', error: e);
       return null;
     }
   }
@@ -1716,7 +1825,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == activeLabels.first);
         _systemsPageKeys[discipline]?.currentState?.openAddBauteilDialogForSelection();
       } catch (e) {
-        debugPrint('Disziplin ${activeLabels.first} nicht gefunden beim Bauteil-Hinzufügen');
+        appLog('Disziplin ${activeLabels.first} nicht gefunden beim Bauteil-Hinzufügen', error: e);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Gewerk „${activeLabels.first}“ nicht gefunden')),
+          );
+        }
       }
     }
   }
@@ -1732,7 +1846,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         final discipline = _systemsPageKeys.keys.firstWhere((d) => d.label == activeLabels.first);
         _systemsPageKeys[discipline]?.currentState?.moveSelectedAnlagen();
       } catch (e) {
-        debugPrint('Disziplin ${activeLabels.first} nicht gefunden beim Verschieben');
+        appLog('Disziplin ${activeLabels.first} nicht gefunden beim Verschieben', error: e);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Gewerk „${activeLabels.first}“ nicht gefunden')),
+          );
+        }
       }
     }
   }
@@ -1743,31 +1862,25 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   @override
   Widget build(BuildContext context) {
-    // Aktualisiere lokale Variablen aus Provider-State
     final projectsState = ref.watch(projectsProvider);
+    ref.listen<ProjectsState>(projectsProvider, (previous, next) {
+      _syncFromProjectsState(next);
+    });
+
     final projects = projectsState.projects;
     final selectedProjectIndex = projectsState.selectedProjectIndex ?? -1;
     final selectedBuildingIndex = projectsState.selectedBuildingIndex ?? -1;
-    
-    if (selectedProjectIndex >= 0 && selectedProjectIndex < projects.length) {
-      _currentProjectIndex = selectedProjectIndex;
-      _currentProject = projects[selectedProjectIndex];
-    }
-    
-    if (_currentProject.buildings.isNotEmpty && selectedBuildingIndex >= 0 && selectedBuildingIndex < _currentProject.buildings.length) {
-      final newBuilding = _currentProject.buildings[selectedBuildingIndex];
-      // Prüfe, ob sich das Gebäude geändert hat
-      if (_building.id != newBuilding.id) {
-        _currentBuildingIndex = selectedBuildingIndex;
-        _building = newBuilding;
-        // Disziplinen für das neue Gebäude laden
-        _loadDisciplines();
-      } else {
-        _currentBuildingIndex = selectedBuildingIndex;
-        _building = newBuilding;
-      }
-    }
-    
+    final displayProject =
+        (selectedProjectIndex >= 0 && selectedProjectIndex < projects.length)
+            ? projects[selectedProjectIndex]
+            : _currentProject;
+    final displayBuilding =
+        (displayProject.buildings.isNotEmpty &&
+                selectedBuildingIndex >= 0 &&
+                selectedBuildingIndex < displayProject.buildings.length)
+            ? displayProject.buildings[selectedBuildingIndex]
+            : _building;
+
     if (projects.isEmpty) {
       return Scaffold(
         drawer: _buildDrawer(context),
@@ -1795,14 +1908,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
     }
 
-    if (_currentProject.buildings.isEmpty) {
+    if (displayProject.buildings.isEmpty) {
       return Scaffold(
         drawer: _buildDrawer(context),
         onDrawerChanged: _onDrawerChanged,
         appBar: AppBar(
           elevation: 0,
           title: Text(
-            '„${_currentProject.name}“: Keine Gebäude',
+            '„${displayProject.name}“: Keine Gebäude',
             style: const TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
@@ -1843,7 +1956,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     } else if (inDisciplineSelection) {
       appBarTitle = '${_selectedDisciplineLabels.length} ausgewählt';
     } else {
-      appBarTitle = _building.name;
+      appBarTitle = displayBuilding.name;
     }
 
     final theme = Theme.of(context);
@@ -1882,7 +1995,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                         _systemsPageKeys[discipline]?.currentState?.exitSelectionMode();
                       } catch (e) {
                         // Disziplin nicht gefunden, ignorieren
-                        debugPrint('Disziplin $label nicht gefunden beim Exit');
+                        appLog('Disziplin $label nicht gefunden beim Exit');
                       }
                     }
                     setState(() {
@@ -2091,7 +2204,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Bitte zuerst Gewerkevorlagen unter CSV-Einstellungen importieren '
+                  'Bitte zuerst Gewerkevorlagen unter CSV-Import importieren '
                   'oder $leafLabel per CSV importieren.',
                 ),
               ),
@@ -2120,7 +2233,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             leafLabel = csv.resolveDatensatzUnderRevisionsobjektLabel();
           }
           buttons.add(
-            _buildFloatingActionButton(
+            BuildingDetailsFab(
               icon: Icons.add,
               tooltip: '$leafLabel hinzufügen',
               onPressed: _openAddAnlageForGroupContext,
@@ -2131,7 +2244,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       } else if (inDisciplineSelection) {
         if (_selectedDisciplineLabels.length == 1) {
           buttons.add(
-            _buildFloatingActionButton(
+            BuildingDetailsFab(
               icon: Icons.edit,
               tooltip: 'Gewerk bearbeiten',
               onPressed: _editSelectedDiscipline,
@@ -2142,7 +2255,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               ? ref.read(csvSettingsProvider(_currentProject.id)).resolveLeafLevelLabel()
               : 'Anlage';
           buttons.add(
-            _buildFloatingActionButton(
+            BuildingDetailsFab(
               icon: Icons.add,
               tooltip: '$leafLabel hinzufügen',
               onPressed: () async {
@@ -2156,7 +2269,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           );
         }
         buttons.add(
-          _buildFloatingActionButton(
+          BuildingDetailsFab(
             icon: Icons.delete_outline,
             tooltip: 'Gewerk löschen',
             onPressed: _deleteSelectedDiscipline,
@@ -2177,7 +2290,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             hasOnlyBauteile = _systemsPageKeys[discipline]?.currentState?.hasOnlyBauteileSelected() ?? false;
           } catch (e) {
             // Disziplin nicht gefunden, ignoriere
-            debugPrint('Disziplin $activeLabel nicht gefunden beim Prüfen auf Bauteile');
+            appLog('Disziplin $activeLabel nicht gefunden beim Prüfen auf Bauteile');
           }
           
           final csvSettings = _currentProject.id.isNotEmpty
@@ -2187,7 +2300,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           if (showChildAdd && !hasOnlyBauteile) {
             final childLabel = csvSettings!.labelBauteil;
             buttons.add(
-              _buildFloatingActionButton(
+              BuildingDetailsFab(
                 icon: Icons.add,
                 tooltip: '$childLabel hinzufügen',
                 onPressed: _openBulkAddBauteilForSystemsSelection,
@@ -2196,7 +2309,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             );
           }
           buttons.add(
-            _buildFloatingActionButton(
+            BuildingDetailsFab(
               icon: Icons.drive_file_move,
               tooltip: 'Verschieben',
               onPressed: _openMoveDialogForSystemsSelection,
@@ -2205,7 +2318,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           );
         }
         buttons.add(
-          _buildFloatingActionButton(
+          BuildingDetailsFab(
             icon: Icons.delete_outline,
             tooltip: () {
               if (_currentProject.id.isEmpty) {
@@ -2223,7 +2336,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       } else if (inFloorplansSelection) {
         // Grundriss-Auswahl: Löschen
         buttons.add(
-          _buildFloatingActionButton(
+          BuildingDetailsFab(
             icon: Icons.delete_outline,
             tooltip: 'Ausgewählte Grundrisse löschen',
             onPressed: _handleDeleteSelectedFloors,
@@ -2245,24 +2358,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     return null;
   }
 
-  /// Erstellt einen einzelnen eleganten Floating Action Button
-  Widget _buildFloatingActionButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-    required Color backgroundColor,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: FloatingActionButton(
-        onPressed: onPressed,
-        tooltip: tooltip,
-        backgroundColor: backgroundColor,
-        elevation: 4,
-        child: Icon(icon, color: Colors.white),
-      ),
-    );
-  }
 
   /// Handler für das Löschen ausgewählter Anlagen
   Future<void> _handleDeleteSelectedAnlagen() async {
@@ -2412,7 +2507,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           _systemsPageKeys[discipline]?.currentState?.deleteSelectedAnlagen();
         } catch (e) {
           // Disziplin nicht gefunden, ignorieren
-          debugPrint('Disziplin $label nicht gefunden beim Löschen');
+          appLog('Disziplin $label nicht gefunden beim Löschen');
         }
       }
     }
@@ -2516,7 +2611,12 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     setState(() {
       _building.floors.add(newFloor);
     });
-    await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    try {
+      await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    } catch (e) {
+      _showProviderError(e);
+      return;
+    }
 
     await Navigator.push(
       context,
@@ -2533,7 +2633,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         },
       ),
     );
-    await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    try {
+      await ref.read(projectsProvider.notifier).updateBuilding(_building);
+    } catch (e) {
+      _showProviderError(e);
+    }
   }
 
   Widget _buildDrawer(BuildContext context) {
@@ -3150,7 +3254,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                   const SizedBox(height: 8),
                   _buildActionButton(
                     icon: Icons.settings_rounded,
-                    label: 'CSV-Einstellungen',
+                    label: 'CSV-Import',
                     color: AppPalette.primaryLight,
                     onTap: () async {
                       await Navigator.of(context).push(

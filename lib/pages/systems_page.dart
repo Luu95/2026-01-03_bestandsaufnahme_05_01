@@ -8,7 +8,6 @@ import 'package:uuid/uuid.dart';
 import '../models/anlage.dart';
 import '../models/building.dart';
 import '../models/floor_plan.dart';
-import '../models/marker.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/database_provider.dart';
 import '../providers/csv_settings_provider.dart';
@@ -23,9 +22,6 @@ import 'widgets/systems_anlage_list.dart';
 import 'systems_ui_store.dart';
 import '../utils/app_log.dart';
 import '../navigation/route_observer.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
 
 class SystemsPage extends ConsumerStatefulWidget {
   final Building building; // Das Gebäude, für das die Anlagen angezeigt werden sollen
@@ -334,13 +330,13 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       
       // Lade alle Anlagen für dieses Gebäude und diese Disziplin
       final loaded = await dbService.getAnlagenByBuildingIdAndDiscipline(buildingId, label);
-      debugPrint('SystemsPage._loadAnlagen: Geladen ${loaded.length} Anlagen für Building $buildingId, Discipline $label, Floor ${widget.floor.id}');
+      appLog('SystemsPage._loadAnlagen: Geladen ${loaded.length} Anlagen für Building $buildingId, Discipline $label, Floor ${widget.floor.id}');
 
       // Filtere nach floorId, wenn nicht global
       final filtered = widget.floor.id == 'global'
           ? loaded
           : loaded.where((a) => a.floorId == widget.floor.id).toList();
-      debugPrint('SystemsPage._loadAnlagen: Gefiltert auf ${filtered.length} Anlagen');
+      appLog('SystemsPage._loadAnlagen: Gefiltert auf ${filtered.length} Anlagen');
       
       _validationByAnlageId.clear();
       for (final a in filtered) {
@@ -373,7 +369,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         _scrollToLastOpenedAnlage();
       });
     } catch (e) {
-      debugPrint('Fehler beim Laden der Anlagen: $e');
+      appLog('Fehler beim Laden der Anlagen: $e');
       
       setState(() {
         _alleAnlagen = [];
@@ -402,17 +398,14 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             a.discipline.label == label)
         .toList();
 
-    // Speichere jede Anlage einzeln
-    for (final anlage in toPersist) {
-      try {
-        final existing = await dbService.getAnlageById(anlage.id);
-        if (existing != null) {
-          await dbService.updateAnlage(anlage);
-        } else {
-          await dbService.insertAnlage(anlage);
-        }
-      } catch (e) {
-        debugPrint('Fehler beim Speichern der Anlage ${anlage.id}: $e');
+    try {
+      await dbService.upsertAnlagenBatch(toPersist);
+    } catch (e) {
+      appLog('Fehler beim Speichern der Anlagen', error: e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Anlagen konnten nicht gespeichert werden: $e')),
+        );
       }
     }
   }
@@ -916,35 +909,6 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         },
       ),
     );
-  }
-
-  /// Wandelt ein Marker-Objekt in eine [Anlage] um und fügt sie hinzu.
-  Future<void> addMarkerAnlage(Marker marker) async {
-    final params = marker.params != null
-        ? Map<String, dynamic>.from(marker.params!)
-        : <String, dynamic>{};
-
-    final newAnlage = Anlage(
-      id: marker.id,
-      name: marker.title,
-      params: params,
-      floorId: widget.floor.id,
-      buildingId: widget.building.id,
-      isMarker: true,
-      markerInfo: {
-        'x': marker.x,
-        'y': marker.y,
-        'pageNumber': marker.pageNumber,
-      },
-      markerType: widget.discipline.label,
-      discipline: widget.discipline,
-    );
-
-    setState(() {
-      _alleAnlagen.add(newAnlage);  // Fügt die neue Marker-Anlage hinzu
-    });
-    await _saveAnlagen();  // Speichert die Anlage
-    await _loadAnlagen();  // Lädt die Liste neu
   }
 
   @override

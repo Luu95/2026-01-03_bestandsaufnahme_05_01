@@ -18,10 +18,9 @@ import '../providers/csv_settings_provider.dart';
 import '../utils/app_log.dart';
 import '../utils/csv_column_layout.dart';
 import '../utils/csv_utils.dart';
+import '../utils/csv_parse_isolate.dart';
 import '../theme/app_palette.dart';
-
-// Debug-only: verhindert Logging in Release, ohne alle Call-Sites umzubauen.
-void debugPrint(String? message, {int? wrapWidth}) => appLog(message ?? '');
+import 'package:flutter/foundation.dart';
 
 /// Enum für die Ordnerstruktur beim Foto-Export
 enum PhotoExportStructure {
@@ -1065,7 +1064,7 @@ class CsvService {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
     } catch (e) {
-      debugPrint('Fehler beim Laden des globalen Schemas: $e');
+      appLog('Fehler beim Laden des globalen Schemas: $e');
       return [];
     }
   }
@@ -1076,7 +1075,7 @@ class CsvService {
       final key = 'global_schema_$projectId';
       await prefs.setString(key, json.encode(schema));
     } catch (e) {
-      debugPrint('Fehler beim Speichern des globalen Schemas: $e');
+      appLog('Fehler beim Speichern des globalen Schemas: $e');
     }
   }
 
@@ -1107,7 +1106,8 @@ class CsvService {
     try {
       // Datei auswählen
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
       );
 
       if (result == null || result.files.single.path == null) {
@@ -1154,12 +1154,11 @@ class CsvService {
         delimiter = delimiterMode;
       }
       
-      // CSV parsen
-      final csvData = CsvToListConverter(
-        fieldDelimiter: delimiter,
-        eol: '\n',
-        shouldParseNumbers: false,
-      ).convert(csvString);
+      // CSV parsen (Isolate, damit große Dateien den UI-Thread nicht blockieren)
+      final csvData = await compute(parseCsvRowsIsolate, {
+        'csv': csvString,
+        'delimiter': delimiter,
+      });
 
       if (csvData.isEmpty) {
         throw Exception('CSV-Datei ist leer');
@@ -1180,8 +1179,8 @@ class CsvService {
       final headerRow = csvData[headerRowIndex].map((e) => e.toString().trim()).toList();
 
       // Debug: Header ausgeben
-      debugPrint('CSV Header: $headerRow');
-      debugPrint('Anzahl Header-Spalten: ${headerRow.length}');
+      appLog('CSV Header: $headerRow');
+      appLog('Anzahl Header-Spalten: ${headerRow.length}');
 
       // Datenzeilen: alle Zeilen nach der Header-Zeile
       var dataRows = csvData.sublist(headerRowIndex + 1).where((row) => row.isNotEmpty && row.any((cell) => cell.toString().trim().isNotEmpty)).toList();
@@ -1195,7 +1194,7 @@ class CsvService {
                 e.key < firstRow.length &&
                 firstRow[e.key].toLowerCase() == e.value.toLowerCase());
         if (matchesHeader) {
-          debugPrint('Erste Datenzeile entspricht Header – wird übersprungen (evtl. headerZeile prüfen)');
+          appLog('Erste Datenzeile entspricht Header – wird übersprungen (evtl. headerZeile prüfen)');
           dataRows = dataRows.sublist(1);
         }
       }
@@ -1259,7 +1258,7 @@ class CsvService {
 
       // Bestehende Disziplinen für dieses Gebäude laden
       final disciplineCache = await _loadPersistedDisciplines(dbService, buildingId);
-      debugPrint('Bestehende Disziplinen für Gebäude $buildingId: ${disciplineCache.keys.toList()}');
+      appLog('Bestehende Disziplinen für Gebäude $buildingId: ${disciplineCache.keys.toList()}');
 
       // Alle eindeutigen Disziplinen sammeln.
       // Wenn Gewerk-Gruppierung deaktiviert ist, landen alle Anlagen in einer Sammel-Disziplin.
@@ -1278,7 +1277,7 @@ class CsvService {
         uniqueDisciplines.add(settings.resolveDefaultDisciplineLabel());
       }
 
-      debugPrint('Gefundene Disziplinen in CSV: $uniqueDisciplines');
+      appLog('Gefundene Disziplinen in CSV: $uniqueDisciplines');
 
       // Globales Standard-Schema: aus CSV ableiten (aber bestehende globale Einstellungen behalten)
       final existingGlobalSchemaRaw = await _loadGlobalSchema(projectId);
@@ -1327,7 +1326,7 @@ class CsvService {
           color: AppPalette.iconMuted,
           schema: <Map<String, dynamic>>[],
         );
-        debugPrint('Neue Disziplin erstellt (ohne individuelles Schema): $discLabel');
+        appLog('Neue Disziplin erstellt (ohne individuelles Schema): $discLabel');
       }
 
       // Globales Schema in alle Disziplinen syncen (Global zuerst, danach echte individuelle Felder)
@@ -1340,7 +1339,7 @@ class CsvService {
 
       // Disziplinen für dieses Gebäude persistieren
       await _persistDisciplines(dbService, buildingId, disciplineCache.values.toList());
-      debugPrint('Disziplinen für Gebäude $buildingId gespeichert (global gesynct): ${disciplineCache.length}');
+      appLog('Disziplinen für Gebäude $buildingId gespeichert (global gesynct): ${disciplineCache.length}');
 
       // Anlagen aus CSV erstellen
       final anlagen = <Anlage>[];
@@ -1368,7 +1367,7 @@ class CsvService {
             : '';
 
         if (leafName.trim().isEmpty && leafId.isEmpty) {
-          debugPrint(
+          appLog(
             'Zeile ${headerRowIndex + 2 + i} übersprungen: Blatt-Ebene ohne Name und ohne ID',
           );
           continue;
@@ -1382,7 +1381,7 @@ class CsvService {
             ? _safeCell(row, settings.level1.nameColumn)
             : settings.resolveDefaultDisciplineLabel();
         if (disciplineLabel.trim().isEmpty) {
-          debugPrint('Zeile ${i + 1} übersprungen: Keine Disziplin angegeben');
+          appLog('Zeile ${i + 1} übersprungen: Keine Disziplin angegeben');
           continue;
         }
         final disciplineLabelValue = disciplineLabel.trim();
@@ -1396,7 +1395,7 @@ class CsvService {
 
         final discipline = disciplineCache[disciplineLabelValue.toLowerCase()];
         if (discipline == null) {
-          debugPrint('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
+          appLog('Zeile ${i + 1} übersprungen: Disziplin "$disciplineLabelValue" nicht gefunden');
           continue;
         }
 
@@ -1505,7 +1504,7 @@ class CsvService {
               discipline: discipline,
               parentId: null,
             ));
-            debugPrint('Hierarchie-Knoten "$levelName" (lfd: $nodeLfd)');
+            appLog('Hierarchie-Knoten "$levelName" (lfd: $nodeLfd)');
           }
           immediateParentLfd = nodeLfd;
         }
@@ -1521,7 +1520,7 @@ class CsvService {
           rowIndex: i,
         );
 
-        debugPrint(
+        appLog(
           'Blatt $nameValue (lfd: $lfdNummerValue): Disziplin=$disciplineLabelValue, '
           'Parent=${params['__parentLfdNummer']}',
         );
@@ -1540,15 +1539,15 @@ class CsvService {
         ));
       }
 
-      debugPrint('Insgesamt ${anlagen.length} Anlagen erstellt');
+      appLog('Insgesamt ${anlagen.length} Anlagen erstellt');
       return CsvImportResult(
         anlagen: anlagen,
         importHeaderRow: headerRow,
         detectedDelimiter: delimiter,
       );
     } catch (e, stackTrace) {
-      debugPrint('CSV-Import Fehler: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('CSV-Import Fehler: $e');
+      appLog('Stack Trace: $stackTrace');
       throw Exception('Fehler beim CSV-Import: $e');
     }
   }
@@ -1599,7 +1598,7 @@ class CsvService {
       );
 
       final csvData = <List<String>>[exportContext.headerRow];
-      debugPrint(
+      appLog(
         'CSV Export (${exportContext.mode.name}, ${orderedAnlagen.length} Zeilen, '
         '${exportContext.headerRow.length} Spalten)',
       );
@@ -1642,12 +1641,12 @@ class CsvService {
       final file = File('${directory.path}/$fileName');
       await file.writeAsBytes(csvBytes);
 
-      debugPrint('CSV-Export abgeschlossen: ${csvData.length - 1} Anlagen exportiert');
+      appLog('CSV-Export abgeschlossen: ${csvData.length - 1} Anlagen exportiert');
 
       return ExportBuiltFile(file: file, fileName: fileName);
     } catch (e, stackTrace) {
-      debugPrint('CSV-Export Fehler: $e');
-      debugPrint('Stack Trace: $stackTrace');
+      appLog('CSV-Export Fehler: $e');
+      appLog('Stack Trace: $stackTrace');
       throw Exception('Fehler beim CSV-Export: $e');
     }
   }
@@ -1840,7 +1839,7 @@ class CsvService {
 
     await exportDir.delete(recursive: true);
 
-    debugPrint('ZIP erstellt: ${anlagen.length} Anlagen, ${fotoCounter - 1} Fotos');
+    appLog('ZIP erstellt: ${anlagen.length} Anlagen, ${fotoCounter - 1} Fotos');
     return zipFile;
   }
 
@@ -1876,7 +1875,7 @@ class CsvService {
 
     final targetPath = path.join(exportDir.path, fileName);
     await File(targetPath).writeAsBytes(bytes, flush: true);
-    debugPrint('Datei gespeichert: $targetPath');
+    appLog('Datei gespeichert: $targetPath');
     return targetPath;
   }
 
@@ -1893,12 +1892,12 @@ class CsvService {
         bytes: bytes,
       );
       if (savedPath != null) {
-        debugPrint('Export gespeichert: $savedPath');
+        appLog('Export gespeichert: $savedPath');
         return savedPath;
       }
       return null;
     } catch (e) {
-      debugPrint('Speicher-Dialog fehlgeschlagen, speichere in App-Ordner: $e');
+      appLog('Speicher-Dialog fehlgeschlagen, speichere in App-Ordner: $e');
       final appDir = await _writableExportDirectory();
       return _writeBytesToDirectory(bytes, _sanitizeFileName(fileName), appDir.path);
     }
@@ -1911,6 +1910,54 @@ class CsvService {
         .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
         .replaceAll(RegExp(r'\s+'), '_')
         .trim();
+  }
+
+  /// Erstellt eine leere Anlagen-Vorlage-CSV mit dem korrekten Header des Projekts.
+  /// Die Datei enthält nur die Headerzeile und kann vom Nutzer befüllt werden.
+  static Future<ExportBuiltFile> buildAnlagenCsvTemplate({
+    required CsvSettings csvSettings,
+  }) async {
+    try {
+      final fotoLabels = [
+        csvSettings.foto1SpalteLabel,
+        csvSettings.foto2SpalteLabel,
+        csvSettings.foto3SpalteLabel,
+        csvSettings.foto4SpalteLabel,
+      ];
+      List<String> headerRow;
+      if (csvSettings.importHeaderRow.isNotEmpty) {
+        headerRow = List<String>.from(csvSettings.importHeaderRow);
+      } else {
+        final dataColumnKeys = buildExportHeaderRow(csvSettings);
+        headerRow = _buildExportHeader(
+          dataColumnKeys,
+          fotoLabels,
+          qrCodeLabel: csvSettings.qrCodeNummerSpalteLabel,
+        );
+      }
+
+      final exportDelimiter = csvSettings.exportDelimiter.isNotEmpty
+          ? csvSettings.exportDelimiter
+          : _delimiter;
+      final csvString = ListToCsvConverter(
+        fieldDelimiter: exportDelimiter,
+        eol: '\n',
+      ).convert([headerRow]);
+
+      final utf8Bom = [0xEF, 0xBB, 0xBF];
+      final csvBytes = utf8Bom + utf8.encode(csvString);
+
+      final directory = await getTemporaryDirectory();
+      const fileName = 'anlagen_vorlage.csv';
+      final file = File('${directory.path}/$fileName');
+      await file.writeAsBytes(csvBytes);
+
+      appLog('Anlagen-Vorlage erstellt: ${headerRow.length} Spalten');
+      return ExportBuiltFile(file: file, fileName: fileName);
+    } catch (e) {
+      appLog('Anlagen-Vorlage Fehler: $e');
+      throw Exception('Fehler beim Erstellen der Vorlage: $e');
+    }
   }
 
   /// Hilfsfunktion: Fügt ein Verzeichnis rekursiv zum Archiv hinzu
