@@ -21,6 +21,7 @@ import '../utils/csv_utils.dart';
 import '../utils/csv_parse_isolate.dart';
 import '../theme/app_palette.dart';
 import 'package:flutter/foundation.dart';
+import 'template_service.dart';
 
 /// Enum für die Ordnerstruktur beim Foto-Export
 enum PhotoExportStructure {
@@ -850,6 +851,75 @@ class CsvService {
     return params;
   }
 
+  /// Baut Schema-Felder aus ATT-Namen + TYPE einer Anlagen-CSV-Zeile
+  /// (auch wenn ART/WERT leer ist – damit leere Eingabefelder erscheinen).
+  static List<Map<String, dynamic>> _schemaFieldsFromAnlagenTripletRow({
+    required List<dynamic> row,
+    required List<String> headerRow,
+    required List<AttributeTripletColumn> quadruplets,
+  }) {
+    final fields = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (var i = 0; i < quadruplets.length; i++) {
+      final quad = quadruplets[i];
+      if (quad.nameColumn < 0) continue;
+      final nameCell = _safeCell(row, quad.nameColumn);
+      if (nameCell.isEmpty || CsvSettings.isAnlagenCsvColumnParamKey(nameCell)) {
+        continue;
+      }
+      if (CsvSettings.looksLikeTypeOrOptionsDefinition(nameCell)) {
+        continue;
+      }
+      final nameHeader =
+          quad.nameColumn < headerRow.length ? headerRow[quad.nameColumn] : '';
+      final attSlot =
+          CsvSettings.attNumberFromHeaderLabel(nameHeader) ?? (i + 1);
+
+      var typeStr = '';
+      if (quad.typeColumn >= 0) {
+        typeStr = _safeCell(row, quad.typeColumn);
+      }
+      // TYPE-Spalte kann Options (a|b) oder Datentyp enthalten – nie als Feldwert.
+      final entry = CsvSettings.schemaFieldFromGewerkeTypeCell(
+        nameCell,
+        typeStr,
+      );
+      entry['attSlot'] = attSlot;
+      entry.remove('art'); // ART in Anlagen-CSV = Wert, nicht Schema-Gruppe
+      final key = (entry['key'] ?? '').toString();
+      if (key.isEmpty || seen.contains(key.toLowerCase())) continue;
+      seen.add(key.toLowerCase());
+      fields.add(entry);
+    }
+    return fields;
+  }
+
+  static void _mergeSchemaIntoDisciplineForRevisionsobjekt({
+    required Disziplin discipline,
+    required String revisionsobjekt,
+    required List<Map<String, dynamic>> fields,
+  }) {
+    if (fields.isEmpty) return;
+    final ro = revisionsobjekt.trim();
+    if (ro.isEmpty) {
+      // Kein RO: als individuelle Felder ans Flat-Schema hängen
+      final existing = discipline.legacyIndividualSchemaFields;
+      final merged = TemplateService.mergeSchemaFieldLists(existing, fields);
+      final globals = discipline.globalSchemaFields;
+      discipline.schema = [...globals, ...merged];
+      return;
+    }
+
+    final existingKey = discipline.resolveRevisionsobjektKey(ro) ?? ro;
+    final existing = discipline.revisionsobjektSchemas[existingKey] ??
+        const <Map<String, dynamic>>[];
+    final merged = TemplateService.mergeSchemaFieldLists(existing, fields);
+    discipline.revisionsobjektSchemas = {
+      ...discipline.revisionsobjektSchemas,
+      existingKey: merged,
+    };
+  }
+
   /// Anlagen-CSV mit TYPE-Spalten: Wert nur aus ART/WERT-Spalte (leer = kein Wert).
   /// Schema-Feld kommt aus Gewerkevorlage; ATT-Slot aus Header-Nummer.
   static void _applyAnlagenAttributeParamsFromRow({
@@ -863,6 +933,19 @@ class CsvService {
     final ro = settings.schemaItemValueFromParams(params)?.trim() ??
         settings.revisionsobjektValueFromParams(params)?.trim() ??
         '';
+
+    // Schema aus ATT-Namen (+ TYPE) auch bei leerem Wert anlegen
+    final schemaFromRow = _schemaFieldsFromAnlagenTripletRow(
+      row: row,
+      headerRow: headerRow,
+      quadruplets: quadruplets,
+    );
+    _mergeSchemaIntoDisciplineForRevisionsobjekt(
+      discipline: discipline,
+      revisionsobjekt: ro,
+      fields: schemaFromRow,
+    );
+
     final schemaFields = <Map<String, dynamic>>[];
     for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
       if (field['isGlobal'] == true) continue;
@@ -878,45 +961,71 @@ class CsvService {
       final attSlot =
           CsvSettings.attNumberFromHeaderLabel(nameHeader) ?? (i + 1);
 
-      // Nur ART/WERT als Wert – leere Wertspalte bleibt leer (kein Fallback auf Feldname).
-      if (quad.valueColumn < 0) continue;
-      final cellValue = _safeCell(row, quad.valueColumn);
-      if (cellValue.isEmpty) continue;
-
+      final nameCell = _safeCell(row, nameCol);
       var paramKey = '';
       final field = CsvSettings.schemaFieldAtAttSlot(attSlot, schemaFields);
       if (field != null) {
         paramKey = _schemaFieldParamKey(field);
       }
-      if (paramKey.isEmpty && nameCol < headerRow.length) {
-        final nameCell = _safeCell(row, nameCol);
-        final header = nameHeader.trim();
-        final candidates = <String>[
-          if (nameCell.isNotEmpty) nameCell,
-          if (header.isNotEmpty) header,
-        ];
-        for (final candidate in candidates) {
-          for (final schemaField in schemaFields) {
-            final key = _schemaFieldParamKey(schemaField);
-            final label = (schemaField['label'] ?? '').toString();
-            if (CsvSettings.paramKeysMatch(key, candidate) ||
-                CsvSettings.paramKeysMatch(label, candidate)) {
-              paramKey = key;
-              break;
-            }
+      if (paramKey.isEmpty && nameCell.isNotEmpty) {
+        for (final schemaField in schemaFields) {
+          final key = _schemaFieldParamKey(schemaField);
+          final label = (schemaField['label'] ?? '').toString();
+          if (CsvSettings.paramKeysMatch(key, nameCell) ||
+              CsvSettings.paramKeysMatch(label, nameCell)) {
+            paramKey = key;
+            break;
           }
-          if (paramKey.isNotEmpty) break;
         }
-        if (paramKey.isEmpty && nameCell.isNotEmpty) {
+        if (paramKey.isEmpty) {
           paramKey = _paramKeyForHeaderLabel(nameCell);
-        } else if (paramKey.isEmpty && header.isNotEmpty) {
-          paramKey = _paramKeyForHeaderLabel(header);
         }
       }
       if (paramKey.isEmpty) continue;
-      params[paramKey] = _parseDynamicValue(cellValue);
+
+      // ATT-Slot immer merken (Export-Zuordnung), auch ohne Wert
       CsvSettings.writeAttSlotForParam(params, paramKey, attSlot);
+
+      // Nur ART/WERT als Wert – TYPE/OPTIONS nie als Feldwert übernehmen.
+      if (quad.valueColumn < 0) continue;
+      if (quad.valueColumn == quad.typeColumn) continue;
+      if (quad.valueColumn < headerRow.length &&
+          CsvSettings.isGewerkeTypeDefinitionHeader(
+            headerRow[quad.valueColumn],
+          )) {
+        continue;
+      }
+      final cellValue = _safeCell(row, quad.valueColumn);
+      if (cellValue.isEmpty) continue;
+
+      params[paramKey] = _parseDynamicValue(cellValue);
     }
+  }
+
+  /// Schema aus Name-Zellen des Paar-Formats (auch ohne Wert).
+  static List<Map<String, dynamic>> _schemaFieldsFromAnlagenPairRow({
+    required List<dynamic> row,
+    required List<AttributeColumnPair> pairs,
+  }) {
+    final fields = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (var i = 0; i < pairs.length; i++) {
+      final pair = pairs[i];
+      if (pair.nameColumn < 0) continue;
+      final nameCell = _safeCell(row, pair.nameColumn);
+      if (nameCell.isEmpty || CsvSettings.isAnlagenCsvColumnParamKey(nameCell)) {
+        continue;
+      }
+      if (seen.contains(nameCell.toLowerCase())) continue;
+      seen.add(nameCell.toLowerCase());
+      fields.add({
+        'key': nameCell,
+        'label': CsvSettings.normalizeFieldLabelForDisplay(nameCell),
+        'type': 'text',
+        'attSlot': CsvSettings.attSlotForPair(pair, i),
+      });
+    }
+    return fields;
   }
 
   /// Anlagen-CSV (ATTn + ATTn_wert): Wert aus Wert-Spalte, Zuordnung über Gewerkevorlagen-Schema.
@@ -931,6 +1040,17 @@ class CsvService {
     final ro = settings.schemaItemValueFromParams(params)?.trim() ??
         settings.revisionsobjektValueFromParams(params)?.trim() ??
         '';
+
+    final schemaFromRow = _schemaFieldsFromAnlagenPairRow(
+      row: row,
+      pairs: pairs,
+    );
+    _mergeSchemaIntoDisciplineForRevisionsobjekt(
+      discipline: discipline,
+      revisionsobjekt: ro,
+      fields: schemaFromRow,
+    );
+
     final schemaFields = <Map<String, dynamic>>[];
     for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
       if (field['isGlobal'] == true) continue;
@@ -940,8 +1060,14 @@ class CsvService {
     for (var i = 0; i < pairs.length; i++) {
       final pair = pairs[i];
       final attSlot = CsvSettings.attSlotForPair(pair, i);
+      if (pair.valueColumn < 0) continue;
+      if (pair.valueColumn < headerRow.length &&
+          CsvSettings.isGewerkeTypeDefinitionHeader(
+            headerRow[pair.valueColumn],
+          )) {
+        continue;
+      }
       final attrValue = _safeCell(row, pair.valueColumn);
-      if (attrValue.isEmpty) continue;
 
       var paramKey = '';
       final field = CsvSettings.schemaFieldAtAttSlot(attSlot, schemaFields);
@@ -951,9 +1077,9 @@ class CsvService {
       if (paramKey.isEmpty) {
         final nameCell = _safeCell(row, pair.nameColumn);
         if (nameCell.isNotEmpty) {
-          for (final field in schemaFields) {
-            final key = _schemaFieldParamKey(field);
-            final label = (field['label'] ?? '').toString();
+          for (final schemaField in schemaFields) {
+            final key = _schemaFieldParamKey(schemaField);
+            final label = (schemaField['label'] ?? '').toString();
             if (CsvSettings.paramKeysMatch(key, nameCell) ||
                 CsvSettings.paramKeysMatch(label, nameCell)) {
               paramKey = key;
@@ -978,9 +1104,13 @@ class CsvService {
         }
       }
       if (paramKey.isEmpty) continue;
+
+      // ATT-Slot immer merken, auch ohne Wert
+      CsvSettings.writeAttSlotForParam(params, paramKey, attSlot);
+      if (attrValue.isEmpty) continue;
+
       final parsed = _parseDynamicValue(attrValue);
       params[paramKey] = parsed;
-      CsvSettings.writeAttSlotForParam(params, paramKey, attSlot);
       if (pair.valueColumn >= 0 && pair.valueColumn < headerRow.length) {
         final valueHeader = headerRow[pair.valueColumn].trim();
         if (valueHeader.isNotEmpty) {
@@ -995,13 +1125,9 @@ class CsvService {
     required List<AttributeColumnPair> attributePairs,
     required List<AttributeTripletColumn> attributeQuadruplets,
   }) {
-    final indices = <int>{};
-    for (final level in settings.enabledLevelsOrdered) {
-      indices.add(level.nameColumn);
-      if (level.useIdColumn && level.idColumn != null) {
-        indices.add(level.idColumn!);
-      }
-    }
+    final indices = <int>{
+      ...settings.reservedImportColumnIndices(),
+    };
     for (final pair in attributePairs) {
       indices.add(pair.nameColumn);
       indices.add(pair.valueColumn);
@@ -1218,18 +1344,13 @@ class CsvService {
       );
       final eavColumns = <int, String>{};
       final qrLabel = settings.qrCodeNummerSpalteLabel?.trim() ?? '';
-      final fotoLabelsForImport = [
-        settings.foto1SpalteLabel,
-        settings.foto2SpalteLabel,
-        settings.foto3SpalteLabel,
-        settings.foto4SpalteLabel,
-      ];
       for (var i = 0; i < headerRow.length; i++) {
         if (reservedIndices.contains(i)) continue;
         final headerName = headerRow[i].trim();
         if (CsvSettings.isAnlagenCsvColumnParamKey(headerName)) continue;
-        if (qrLabel.isNotEmpty && CsvSettings.paramKeysMatch(headerName, qrLabel)) continue;
-        if (_isFotoLabel(headerName, fotoLabelsForImport)) continue;
+        // Foto-/QR-Spalten bewusst als EAV mitimportieren (Labels nur für Export-Zuordnung
+        // und zusätzlich QR → qrCodeNummer). So können Fotonummern/QR auch als Attribute
+        // aus Anlagen-CSVs kommen.
         eavColumns[i] = headerName.isNotEmpty ? headerName : 'Spalte_${i + 1}';
       }
 
@@ -1345,25 +1466,37 @@ class CsvService {
       final anlagen = <Anlage>[];
       final syntheticNodeLfdByKey = <String, String>{};
       var syntheticNodeCounter = 0;
-      var parentLevels = enabledLevels.length > 1
-          ? enabledLevels.sublist(0, enabledLevels.length - 1)
-          : <HierarchyLevelConfig>[];
-      // Ebene 1 ist bereits die Disziplin (Gewerk) – keinen doppelten Hierarchie-Knoten anlegen.
-      if (useDisciplineGrouping &&
-          settings.level1.enabled &&
-          parentLevels.isNotEmpty &&
-          parentLevels.first.nameColumn == settings.level1.nameColumn) {
-        parentLevels = parentLevels.length > 1
-            ? parentLevels.sublist(1)
-            : <HierarchyLevelConfig>[];
-      }
 
       for (var i = 0; i < dataRows.length; i++) {
         final row = dataRows[i];
 
-        final leafName = _safeCell(row, leafLevel.nameColumn);
-        final leafId = leafLevel.useIdColumn && leafLevel.idColumn != null
-            ? _safeCell(row, leafLevel.idColumn!).trim()
+        // Hierarchie-Werte aller aktiven Ebenen (leere Zellen zählen nicht)
+        final levelValues = <int, String>{};
+        for (var li = 0; li < enabledLevels.length; li++) {
+          final levelNum = settings.levelNumberAtEnabledIndex(li);
+          final level = enabledLevels[li];
+          final levelName = _safeCell(row, level.nameColumn).trim();
+          if (levelName.isNotEmpty) {
+            levelValues[levelNum] = levelName;
+          }
+        }
+
+        final effectiveLeafNum =
+            settings.resolveEffectiveLeafLevelNumber(levelValues);
+        if (effectiveLeafNum == null) {
+          appLog(
+            'Zeile ${headerRowIndex + 2 + i} übersprungen: '
+            'keine aktive Hierarchie-Ebene mit Wert',
+          );
+          continue;
+        }
+
+        final leafConfig =
+            settings.hierarchyLevelConfig(effectiveLeafNum) ??
+                settings.hierarchyLevelConfigAlways(effectiveLeafNum);
+        final leafName = levelValues[effectiveLeafNum] ?? '';
+        final leafId = leafConfig.useIdColumn && leafConfig.idColumn != null
+            ? _safeCell(row, leafConfig.idColumn!).trim()
             : '';
 
         if (leafName.trim().isEmpty && leafId.isEmpty) {
@@ -1411,16 +1544,6 @@ class CsvService {
           }
         }
 
-        // Hierarchie vor Attributen (Revisionsobjekt → Schema aus Gewerkevorlage)
-        final levelValues = <int, String>{};
-        for (var li = 0; li < enabledLevels.length; li++) {
-          final levelNum = settings.levelNumberAtEnabledIndex(li);
-          final level = enabledLevels[li];
-          final levelName = _safeCell(row, level.nameColumn).trim();
-          if (levelName.isNotEmpty) {
-            levelValues[levelNum] = levelName;
-          }
-        }
         if (levelValues.isNotEmpty) {
           settings.writeHierarchyPathToParams(params, levelValues: levelValues);
         } else if (useDisciplineGrouping) {
@@ -1452,20 +1575,32 @@ class CsvService {
           );
         }
 
-        // Hierarchie über aktive Ebenen (Eltern-Knoten pro Pfad deduplizieren)
+        // Eltern = aktive Ebenen oberhalb des effektiven Blatts (mit Wert)
         String? immediateParentLfd;
         final pathSegments = <String>[];
 
-        for (final level in parentLevels) {
-          final levelName = _safeCell(row, level.nameColumn).trim();
+        for (var li = 0; li < enabledLevels.length; li++) {
+          final levelNum = settings.levelNumberAtEnabledIndex(li);
+          if (levelNum >= effectiveLeafNum) break;
+          // Ebene 1 = Disziplin-Tab → keinen synthetischen Parent
+          if (useDisciplineGrouping &&
+              settings.level1.enabled &&
+              levelNum == 1) {
+            continue;
+          }
+
+          final level = enabledLevels[li];
+          final levelName = levelValues[levelNum]?.trim() ?? '';
           if (levelName.isEmpty) continue;
 
           final levelId = level.useIdColumn && level.idColumn != null
               ? _safeCell(row, level.idColumn!).trim()
               : '';
-          final dedupeToken = levelId.isNotEmpty ? 'id:$levelId' : 'name:$levelName';
+          final dedupeToken =
+              levelId.isNotEmpty ? 'id:$levelId' : 'name:$levelName';
           pathSegments.add('${level.nameColumn}:$dedupeToken');
-          final nodeKey = '${discipline.label}|$floorId|${pathSegments.join("|")}';
+          final nodeKey =
+              '${discipline.label}|$floorId|${pathSegments.join("|")}';
 
           var nodeLfd = syntheticNodeLfdByKey[nodeKey];
           if (nodeLfd == null) {
@@ -1479,8 +1614,8 @@ class CsvService {
               'lfdNummer': nodeLfd,
               '__syntheticParent': true,
             };
-            final levelNum = settings.levelNumberForConfig(level);
-            settings.writeHierarchyLevelToParams(nodeParams, levelNum, levelName);
+            settings.writeHierarchyLevelToParams(
+                nodeParams, levelNum, levelName);
             if (levelId.isNotEmpty &&
                 level.idColumn != null &&
                 level.idColumn! < headerRow.length) {
@@ -1522,7 +1657,7 @@ class CsvService {
 
         appLog(
           'Blatt $nameValue (lfd: $lfdNummerValue): Disziplin=$disciplineLabelValue, '
-          'Parent=${params['__parentLfdNummer']}',
+          'Parent=${params['__parentLfdNummer']}, leafLevel=$effectiveLeafNum',
         );
 
         anlagen.add(Anlage(
@@ -1538,6 +1673,13 @@ class CsvService {
           parentId: null,
         ));
       }
+
+      // Schema aus ATT-Namen (auch leere Werte) persistieren
+      await _persistDisciplines(
+        dbService,
+        buildingId,
+        disciplineCache.values.toList(),
+      );
 
       appLog('Insgesamt ${anlagen.length} Anlagen erstellt');
       return CsvImportResult(

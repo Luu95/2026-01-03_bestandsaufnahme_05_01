@@ -47,6 +47,8 @@ class SystemsListTileStyles {
     }
   }
 
+  static const BorderRadius groupRadius = BorderRadius.all(Radius.circular(12));
+
   static BoxDecoration groupContainer({
     required bool isExpanded,
     required SystemsOverviewLevel level,
@@ -54,7 +56,7 @@ class SystemsListTileStyles {
     final accent = accentForLevel(level);
     return BoxDecoration(
       color: backgroundForLevel(level),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: groupRadius,
       border: Border.all(
         color: isExpanded
             ? AppPalette.borderExpanded
@@ -70,6 +72,62 @@ class SystemsListTileStyles {
               ),
             ]
           : null,
+    );
+  }
+
+  /// Clipped shell so ExpansionTile/Material fills don't spill past rounded corners.
+  static Widget groupShell({
+    required BuildContext context,
+    required bool isExpanded,
+    required SystemsOverviewLevel level,
+    EdgeInsetsGeometry? margin,
+    BorderSide? borderSide,
+    required Widget child,
+  }) {
+    final accent = accentForLevel(level);
+    final side = borderSide ??
+        BorderSide(
+          color: isExpanded
+              ? AppPalette.borderExpanded
+              : AppPalette.borderMuted,
+          width: isExpanded ? 1.25 : 1,
+        );
+
+    return Container(
+      margin: margin,
+      decoration: isExpanded
+          ? BoxDecoration(
+              borderRadius: groupRadius,
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withOpacity(0.08),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            )
+          : null,
+      child: Material(
+        color: backgroundForLevel(level),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: groupRadius,
+          side: side,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Theme(
+          data: Theme.of(context).copyWith(
+            dividerColor: Colors.transparent,
+            expansionTileTheme: const ExpansionTileThemeData(
+              backgroundColor: Colors.transparent,
+              collapsedBackgroundColor: Colors.transparent,
+              shape: Border(),
+              collapsedShape: Border(),
+            ),
+          ),
+          child: child,
+        ),
+      ),
     );
   }
 

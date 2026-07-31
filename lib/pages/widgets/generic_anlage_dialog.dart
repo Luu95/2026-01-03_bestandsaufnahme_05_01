@@ -478,11 +478,29 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     if (csv == null) return false;
     final k = key.trim();
     if (k.isEmpty) return false;
-    if (csv.isLeafNameParamKey(k)) return false;
 
+    // „Ebene 1/2/3“-Header nie als Eingabefeld
+    if (CsvSettings.isEbeneHierarchyHeader(k)) return true;
+
+    // CSV-Blattspalte (Ebene 3) nie als Eingabefeld – Name bleibt Anlage.name
+    final leaf = csv.leafNameParamKey?.trim() ?? '';
+    if (leaf.isNotEmpty && CsvSettings.paramKeysMatch(k, leaf)) return true;
+
+    // Anzeige-Param aus Gewerkevorlage (z. B. „Name“) bleibt editierbar,
+    // sofern er nicht dieselbe Spalte wie die CSV-Blattspalte ist.
     final displayKey = csv.resolveDisplayNameParamKey()?.trim() ?? '';
-    if (displayKey.isNotEmpty && CsvSettings.paramKeysMatch(k, displayKey)) {
+    if (displayKey.isNotEmpty &&
+        CsvSettings.paramKeysMatch(k, displayKey) &&
+        (leaf.isEmpty || !CsvSettings.paramKeysMatch(displayKey, leaf))) {
       return false;
+    }
+
+    // Blatt-Ebenen-Label (z. B. Bauteil), wenn Header leer war
+    final leafLabel = csv.resolveLeafLevelLabel().trim();
+    if (leafLabel.isNotEmpty &&
+        CsvSettings.paramKeysMatch(k, leafLabel) &&
+        (displayKey.isEmpty || !CsvSettings.paramKeysMatch(displayKey, leafLabel))) {
+      return true;
     }
 
     for (var level = 1; level <= 3; level++) {
@@ -1883,8 +1901,20 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       params: _params,
       schemaFields: schemaFields,
     );
-    CsvSettings.writeAttSlotsFromSchemaFields(_params, schemaFields);
     final csv = _csvSettings;
+    if (csv != null && csv.importHeaderRow.isNotEmpty) {
+      CsvSettings.repairParamsMistakenlyFilledFromTypeColumns(
+        params: _params,
+        importHeaders: csv.importHeaderRow,
+        schemaFields: schemaFields,
+      );
+    }
+    // Auch ohne Rohzellen: TYPE-Strings (text/NUMBER/a|b) nicht als Eingabewert.
+    CsvSettings.clearParamsThatLookLikeTypeDefinitions(
+      params: _params,
+      schemaFields: schemaFields,
+    );
+    CsvSettings.writeAttSlotsFromSchemaFields(_params, schemaFields);
     if (csv != null && csv.importHeaderRow.isNotEmpty) {
       CsvSettings.writeAttSlotsFromImportHeader(
         params: _params,
@@ -1914,6 +1944,14 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     for (final k in keysToDrop) {
       _controllers[k]?.dispose();
       _controllers.remove(k);
+    }
+
+    // Nach Repair: sichtbare Controller an bereinigte Params anpassen
+    for (final entry in _controllers.entries) {
+      final desired = _params[entry.key]?.toString() ?? '';
+      if (entry.value.text != desired) {
+        entry.value.text = desired;
+      }
     }
   }
 
@@ -1948,8 +1986,28 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     fields = fields.where((f) {
       final key = (f['key'] ?? '').toString();
       if (key.isEmpty) return true;
-      return !_isHierarchyParamKey(key);
+      return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
     }).toList();
+
+    // ATT-Namen aus Import-CSV ergänzen (auch leere ART-Werte),
+    // sonst fehlen Felder, wenn nur befüllte Params im Schema landeten.
+    final fromCsvCells = (_csvSettings != null &&
+            _csvSettings!.importHeaderRow.isNotEmpty)
+        ? CsvSettings.schemaFieldsFromCsvAttRowCells(
+            _params,
+            importHeaders: _csvSettings!.importHeaderRow,
+          )
+        : const <Map<String, dynamic>>[];
+    if (fromCsvCells.isNotEmpty) {
+      // CSV zuerst, bestehendes Schema überschreibt Metadaten gleicher Keys.
+      fields = TemplateService.mergeSchemaFieldLists(fromCsvCells, fields);
+      fields = CsvSettings.filterSchemaFieldsForDialog(fields);
+      fields = fields.where((f) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isEmpty) return true;
+        return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
+      }).toList();
+    }
 
     final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
     if (nonGlobal.isEmpty) {
@@ -1957,7 +2015,11 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         _params,
         settings: _csvSettings,
       );
-      if (fromParams.isNotEmpty) {
+      final combined = TemplateService.mergeSchemaFieldLists(
+        fromCsvCells,
+        fromParams,
+      );
+      if (combined.isNotEmpty) {
         final masterSchema = roTrimmed.isNotEmpty
             ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
             : discipline.schema;
@@ -1979,10 +2041,15 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
           mergedMaster,
           discipline.legacyIndividualSchemaFields,
         );
-        return TemplateService.enrichSchemaFieldsFromMaster(
-          fromParams,
+        final enriched = TemplateService.enrichSchemaFieldsFromMaster(
+          combined,
           withFlat,
         );
+        return enriched.where((f) {
+          final key = (f['key'] ?? '').toString();
+          if (key.isEmpty) return true;
+          return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
+        }).toList();
       }
     }
     return fields;
@@ -2014,14 +2081,18 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
   }
 
   String? _schemaFieldArtGroup(Map<String, dynamic> fieldDef) {
-    final art = CsvSettings.normalizeFieldLabelForDisplay(
-      (fieldDef['art'] ?? '').toString(),
-    );
-    return art.isEmpty ? null : art;
+    return CsvSettings.effectiveSchemaArtGroup(fieldDef);
   }
 
   Widget _buildArtGroupFrame(String groupTitle, List<Widget> children) {
     final ft = _ft;
+    // Einzelnes Feld: kein äußerer Rahmen (sonst wirkt Label „doppelt“).
+    if (children.length <= 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      );
+    }
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
@@ -2089,6 +2160,8 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       final nestedInArtGroup = currentArtGroup != null;
 
       final key = fieldDef['key'] as String;
+      // Blatt-/Hierarchie-Spalten nie als Eingabefeld rendern
+      if (_isHierarchyParamKey(key) || _isLeafNameField(key)) continue;
 
       final label = _resolveSchemaFieldLabel(key, fieldDef);
       final type = (fieldDef['type'] ?? 'string').toString();

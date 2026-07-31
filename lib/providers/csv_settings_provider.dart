@@ -145,6 +145,11 @@ class CsvSettings {
   final List<AttributeColumnPair> attributeColumnPairs;
   /// Attribut-Dreiergruppen: Name, Typ, Wert/Art (wird aus Header erkannt, falls leer).
   final List<AttributeTripletColumn> attributeTripletColumns;
+  /// Manuelle Attribut-Range (0-basiert): erste Spalte der ersten Dreiergruppe.
+  /// Wenn gesetzt zusammen mit [attributeCount], hat das Vorrang vor Header-Erkennung.
+  final int? attributeStartColumn;
+  /// Anzahl Attribute (= Anzahl Dreiergruppen Name/Typ/Wert).
+  final int? attributeCount;
   final String? foto1SpalteLabel;
   final String? foto2SpalteLabel;
   final String? foto3SpalteLabel;
@@ -174,6 +179,8 @@ class CsvSettings {
     required this.labelBauteil,
     this.attributeColumnPairs = const [],
     this.attributeTripletColumns = const [],
+    this.attributeStartColumn,
+    this.attributeCount,
     this.foto1SpalteLabel,
     this.foto2SpalteLabel,
     this.foto3SpalteLabel,
@@ -190,6 +197,58 @@ class CsvSettings {
   /// True, wenn mindestens einmal ein Anlagen-CSV-Import durchgeführt wurde.
   bool get hasAnlagenCsvImport => importHeaderRow.isNotEmpty;
 
+  /// Manuelle Attribut-Range ist konfiguriert (Erste Spalte + Anzahl).
+  bool get hasManualAttributeRange =>
+      attributeStartColumn != null &&
+      attributeStartColumn! >= 0 &&
+      attributeCount != null &&
+      attributeCount! > 0;
+
+  /// Letzte Spalte der manuellen Range (0-basiert), sonst null.
+  int? get attributeLastColumn {
+    if (!hasManualAttributeRange) return null;
+    return attributeStartColumn! + attributeCount! * 3 - 1;
+  }
+
+  /// Erzeugt [count] Dreiergruppen ab [startColumn] (0-basiert): Name, Typ, Wert.
+  static List<AttributeTripletColumn> tripletsFromStartAndCount({
+    required int startColumn,
+    required int count,
+  }) {
+    if (startColumn < 0 || count <= 0) return const [];
+    final groups = <AttributeTripletColumn>[];
+    for (var i = 0; i < count; i++) {
+      final base = startColumn + i * 3;
+      groups.add(AttributeTripletColumn(
+        nameColumn: base,
+        typeColumn: base + 1,
+        artColumn: base + 2,
+      ));
+    }
+    return groups;
+  }
+
+  /// Erzeugt Dreiergruppen aus 1-basiertem Spaltenbereich (inkl. Ende).
+  /// Wirft [ArgumentError], wenn der Bereich nicht durch 3 teilbar ist.
+  static List<AttributeTripletColumn> tripletsFromInclusiveRange1Based({
+    required int firstColumn1Based,
+    required int lastColumn1Based,
+  }) {
+    if (firstColumn1Based < 1 || lastColumn1Based < firstColumn1Based) {
+      throw ArgumentError('Ungültiger Spaltenbereich (Erste ≤ Letzte, ab 1).');
+    }
+    final columnCount = lastColumn1Based - firstColumn1Based + 1;
+    if (columnCount % 3 != 0) {
+      throw ArgumentError(
+        'Anzahl Spalten ($columnCount) muss durch 3 teilbar sein.',
+      );
+    }
+    return tripletsFromStartAndCount(
+      startColumn: firstColumn1Based - 1,
+      count: columnCount ~/ 3,
+    );
+  }
+
   /// Alle aktiven Ebenen in Reihenfolge (1 → 2 → 3).
   List<HierarchyLevelConfig> get enabledLevelsOrdered {
     final levels = <HierarchyLevelConfig>[];
@@ -199,11 +258,31 @@ class CsvSettings {
     return levels;
   }
 
-  /// Unterste aktive Ebene = Blatt (ein CSV-Datensatz pro Zeile).
+  /// Unterste aktive Ebene = konfiguriertes Blatt (ein CSV-Datensatz pro Zeile).
+  /// Pro Zeile kann das effektive Blatt tiefer liegen, wenn untere Ebenen leer sind
+  /// – siehe [resolveEffectiveLeafLevelNumber].
   HierarchyLevelConfig? get leafLevel {
     final levels = enabledLevelsOrdered;
     return levels.isEmpty ? null : levels.last;
   }
+
+  /// Tiefste aktive Ebene mit nicht-leerem Wert (Level-Nummer 1–3), sonst null.
+  int? resolveEffectiveLeafLevelNumber(Map<int, String> levelValues) {
+    final levels = enabledLevelsOrdered;
+    for (var i = levels.length - 1; i >= 0; i--) {
+      final levelNum = levelNumberAtEnabledIndex(i);
+      final v = levelValues[levelNum]?.trim() ?? '';
+      if (v.isNotEmpty) return levelNum;
+    }
+    return null;
+  }
+
+  /// Spaltenindizes aller drei Ebenen-Konfigs (auch deaktiviert) – typisch 0/1/2.
+  List<int> allConfiguredHierarchyNameColumns() => [
+        level1.nameColumn,
+        level2.nameColumn,
+        level3.nameColumn,
+      ];
 
   String? _headerLabelAt(int? columnIndex) {
     if (columnIndex == null || columnIndex < 0 || columnIndex >= importHeaderRow.length) {
@@ -421,10 +500,13 @@ class CsvSettings {
   }
 
   /// Spaltenindizes, die beim Import nicht als EAV-Attribute behandelt werden.
+  /// Hierarchie-Spalten (Ebene1–3) sind immer reserviert, auch wenn deaktiviert.
   Set<int> reservedImportColumnIndices() {
     final indices = <int>{};
-    for (final level in enabledLevelsOrdered) {
-      indices.add(level.nameColumn);
+    for (final col in allConfiguredHierarchyNameColumns()) {
+      if (col >= 0) indices.add(col);
+    }
+    for (final level in [level1, level2, level3]) {
       if (level.useIdColumn && level.idColumn != null) {
         indices.add(level.idColumn!);
       }
@@ -449,6 +531,24 @@ class CsvSettings {
         return level3.enabled ? level3 : null;
       default:
         return null;
+    }
+  }
+
+  /// Aktive Hierarchie-Ebene [level] (1–3), sonst null.
+  HierarchyLevelConfig? hierarchyLevelConfig(int level) =>
+      _hierarchyLevelConfig(level);
+
+  /// Hierarchie-Ebene-Config auch wenn deaktiviert (für Spaltenindex 0/1/2).
+  HierarchyLevelConfig hierarchyLevelConfigAlways(int level) {
+    switch (level) {
+      case 1:
+        return level1;
+      case 2:
+        return level2;
+      case 3:
+        return level3;
+      default:
+        return level1;
     }
   }
 
@@ -603,7 +703,7 @@ class CsvSettings {
     return x.startsWith('${y}_') || y.startsWith('${x}_');
   }
 
-  /// Spalten-Header/Param-Keys aus Anlagen-CSV (ATT1, ATT1_wert, ATT_WERT12) – keine Dialog-Felder.
+  /// Spalten-Header/Param-Keys aus Anlagen-CSV (ATT1, ATT1_wert, ATT1_TYPE, …) – keine Dialog-Felder.
   static bool isAnlagenCsvColumnParamKey(String key) {
     final k = key.trim();
     if (k.isEmpty) return false;
@@ -613,6 +713,10 @@ class CsvSettings {
     if (RegExp(r'^att_wert\d+$').hasMatch(lower)) return true;
     if (RegExp(r'^att\d+_art$').hasMatch(lower)) return true;
     if (RegExp(r'^att_art\d+$').hasMatch(lower)) return true;
+    if (RegExp(r'^att\d+_type$').hasMatch(lower)) return true;
+    if (RegExp(r'^att_type\d+$').hasMatch(lower)) return true;
+    if (RegExp(r'^att\d+_options$').hasMatch(lower)) return true;
+    if (RegExp(r'^att_options\d+$').hasMatch(lower)) return true;
     return false;
   }
 
@@ -701,15 +805,18 @@ class CsvSettings {
       entry['type'] = 'text';
     } else if (lowerType == 'number' || lowerType == 'int') {
       entry['type'] = 'number';
+    } else if (lowerType == 'date' || lowerType == 'datum') {
+      entry['type'] = 'date';
+    } else if (lowerType == 'multiline' || lowerType == 'bemerkung') {
+      entry['type'] = 'multiline';
     } else if (lowerType == 'dropdown' ||
         lowerType == 'select' ||
         lowerType == 'option') {
       entry['type'] = 'dropdown';
       final legacy = parseGewerkeOptionsList(legacyOptionsStr);
       if (legacy.isNotEmpty) entry['options'] = legacy;
-    } else if (trimmedType.isNotEmpty) {
-      entry['type'] = lowerType;
     } else {
+      // Unbekannte TYPE-Zellen (z. B. versehentlich eingetragene Werte) → Freitext
       entry['type'] = 'text';
     }
 
@@ -760,7 +867,7 @@ class CsvSettings {
     return groups;
   }
 
-  /// Gespeicherte Dreiergruppen passen zum Header (kein ATT/ATT_wert-Zweier-Mix).
+  /// Gespeicherte Dreiergruppen passen zum Header (Wertspalte ≠ TYPE/OPTIONS).
   static bool quadrupletsMatchHeader(
     List<AttributeTripletColumn> quadruplets,
     List<String> headers,
@@ -770,7 +877,13 @@ class CsvSettings {
       if (g.nameColumn < 0 || g.nameColumn >= headers.length) return false;
       if (g.typeColumn < 0 || g.typeColumn >= headers.length) return false;
       final typeToken = normalizeAttHeaderToken(headers[g.typeColumn]);
-      if (typeToken.contains('WERT') && !typeToken.contains('_TYPE')) {
+      if (!typeToken.contains('_TYPE')) return false;
+      // Wertspalte muss ART/WERT sein – nie TYPE (sonst landen Typdefinitionen als Werte).
+      if (g.artColumn < 0 || g.artColumn >= headers.length) return false;
+      if (g.artColumn == g.typeColumn) return false;
+      if (isGewerkeTypeDefinitionHeader(headers[g.artColumn])) return false;
+      final artToken = normalizeAttHeaderToken(headers[g.artColumn]);
+      if (!artToken.contains('_ART') && !artToken.contains('_WERT')) {
         return false;
       }
     }
@@ -782,6 +895,18 @@ class CsvSettings {
     required List<String> headerRow,
     required CsvSettings settings,
   }) {
+    // Manuelle Range (Erste Spalte + Anzahl) hat Vorrang vor Header-Erkennung,
+    // damit z. B. Fotonummern/QR als Name/Typ/Wert-Attribute mitimportiert werden.
+    if (settings.hasManualAttributeRange) {
+      final manual = settings.attributeTripletColumns.isNotEmpty
+          ? settings.attributeTripletColumns
+          : tripletsFromStartAndCount(
+              startColumn: settings.attributeStartColumn!,
+              count: settings.attributeCount!,
+            );
+      return ImportAttributeMapping(pairs: const [], quadruplets: manual);
+    }
+
     if (headerRow.isEmpty) {
       return ImportAttributeMapping(
         pairs: settings.attributeColumnPairs,
@@ -799,14 +924,16 @@ class CsvSettings {
 
     if (headerLooksLikeGewerkeQuadrupletFormat(headerRow)) {
       final detected = detectQuadrupletsFromHeader(headerRow);
+      // Frische Header-Erkennung hat Vorrang vor ggf. veralteten Settings
+      // (dort zeigte valueColumn fälschlich oft auf TYPE).
+      if (detected.isNotEmpty) {
+        return ImportAttributeMapping(pairs: const [], quadruplets: detected);
+      }
       if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
         return ImportAttributeMapping(
           pairs: const [],
           quadruplets: settings.attributeTripletColumns,
         );
-      }
-      if (detected.isNotEmpty) {
-        return ImportAttributeMapping(pairs: const [], quadruplets: detected);
       }
     } else if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
       return ImportAttributeMapping(
@@ -941,6 +1068,73 @@ class CsvSettings {
     return false;
   }
 
+  /// Dialog-Schema aus ATT-Namen in gespeicherten CSV-Zellen (auch ohne Wert).
+  static List<Map<String, dynamic>> schemaFieldsFromCsvAttRowCells(
+    Map<String, dynamic> params, {
+    required List<String> importHeaders,
+  }) {
+    if (importHeaders.isEmpty) return const [];
+    final raw = params[csvRowCellsParamKey];
+    if (raw is! Map) return const [];
+    final cells = <String, String>{};
+    for (final e in raw.entries) {
+      final k = e.key.toString().trim();
+      if (k.isEmpty) continue;
+      cells[k] = e.value?.toString() ?? '';
+    }
+    if (cells.isEmpty) return const [];
+
+    final triplets = detectQuadrupletsFromHeader(importHeaders);
+    if (triplets.isEmpty) {
+      // Zweier-Format: Name-Spalte enthält Feldlabel
+      final pairs = detectAnlagenAttributePairsFromHeader(importHeaders);
+      final fields = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      for (var i = 0; i < pairs.length; i++) {
+        final pair = pairs[i];
+        if (pair.nameColumn < 0 || pair.nameColumn >= importHeaders.length) {
+          continue;
+        }
+        final nameHeader = importHeaders[pair.nameColumn].trim();
+        final name = (cells[nameHeader] ?? '').trim();
+        if (name.isEmpty || isAnlagenCsvColumnParamKey(name)) continue;
+        if (looksLikeTypeOrOptionsDefinition(name)) continue;
+        if (seen.contains(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+        fields.add({
+          'key': name,
+          'label': normalizeFieldLabelForDisplay(name),
+          'type': 'text',
+          'attSlot': attSlotForPair(pair, i),
+        });
+      }
+      return fields;
+    }
+
+    final fields = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (var i = 0; i < triplets.length; i++) {
+      final t = triplets[i];
+      if (t.nameColumn < 0 || t.nameColumn >= importHeaders.length) continue;
+      final nameHeader = importHeaders[t.nameColumn].trim();
+      final name = (cells[nameHeader] ?? '').trim();
+      if (name.isEmpty || isAnlagenCsvColumnParamKey(name)) continue;
+      if (looksLikeTypeOrOptionsDefinition(name)) continue;
+      if (seen.contains(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+
+      var typeStr = '';
+      if (t.typeColumn >= 0 && t.typeColumn < importHeaders.length) {
+        typeStr = (cells[importHeaders[t.typeColumn].trim()] ?? '').trim();
+      }
+      final entry = schemaFieldFromGewerkeTypeCell(name, typeStr);
+      entry['attSlot'] = attNumberFromHeaderLabel(nameHeader) ?? (i + 1);
+      entry.remove('art');
+      fields.add(entry);
+    }
+    return fields;
+  }
+
   /// Dialog-Schema aus vorhandenen Parametern (Fallback ohne Gewerkevorlage).
   static List<Map<String, dynamic>> schemaFieldsFromParams(
     Map<String, dynamic> params, {
@@ -950,8 +1144,10 @@ class CsvSettings {
     for (final entry in params.entries) {
       final key = entry.key.toString();
       if (isReservedDialogParamKey(key, settings)) continue;
+      if (looksLikeTypeOrOptionsDefinition(key)) continue;
       final value = entry.value;
       if (value == null || value.toString().trim().isEmpty) continue;
+      if (looksLikeTypeOrOptionsDefinition(value.toString())) continue;
       fields.add({
         'key': key,
         'label': normalizeFieldLabelForDisplay(key),
@@ -961,7 +1157,7 @@ class CsvSettings {
     return fields;
   }
 
-  /// Nummer aus Param-Key ATT7, ATT7_wert, ATT_WERT7 (sonst null).
+  /// Nummer aus Param-Key ATT7, ATT7_wert, ATT_WERT7, ATT7_TYPE (sonst null).
   static int? anlagenColumnIndexFromParamKey(String key) {
     final raw = key.trim();
     if (raw.isEmpty) return null;
@@ -976,6 +1172,14 @@ class CsvSettings {
     if (a1 != null) return int.parse(a1.group(1)!);
     final a2 = RegExp(r'^ATT_ART(\d+)$').firstMatch(upper);
     if (a2 != null) return int.parse(a2.group(1)!);
+    final t1 = RegExp(r'^ATT(\d+)_TYPE$').firstMatch(upper);
+    if (t1 != null) return int.parse(t1.group(1)!);
+    final t2 = RegExp(r'^ATT_TYPE(\d+)$').firstMatch(upper);
+    if (t2 != null) return int.parse(t2.group(1)!);
+    final o1 = RegExp(r'^ATT(\d+)_OPTIONS$').firstMatch(upper);
+    if (o1 != null) return int.parse(o1.group(1)!);
+    final o2 = RegExp(r'^ATT_OPTIONS(\d+)$').firstMatch(upper);
+    if (o2 != null) return int.parse(o2.group(1)!);
     return null;
   }
 
@@ -987,11 +1191,47 @@ class CsvSettings {
         .where((f) {
           final key = (f['key'] ?? '').toString();
           final label = (f['label'] ?? '').toString();
-          return !isAnlagenCsvColumnParamKey(key) &&
-              !isAnlagenCsvColumnParamKey(label);
+          if (isAnlagenCsvColumnParamKey(key) ||
+              isAnlagenCsvColumnParamKey(label)) {
+            return false;
+          }
+          // Options-/TYPE-Strings nie als eigenes Eingabefeld (gehören in dropdown options).
+          if (looksLikeTypeOrOptionsDefinition(key) ||
+              looksLikeTypeOrOptionsDefinition(label)) {
+            return false;
+          }
+          return true;
         })
         .map((f) => Map<String, dynamic>.from(f))
         .toList();
+  }
+
+  /// true bei reinen Typ-Tokens oder Pipe-Optionslisten (ATT_TYPE-Inhalt).
+  static bool looksLikeTypeOrOptionsDefinition(String raw) {
+    final v = raw.trim();
+    if (v.isEmpty) return false;
+    final lower = v.toLowerCase();
+    const tokens = {
+      'text',
+      'freitext',
+      'number',
+      'int',
+      'date',
+      'datum',
+      'multiline',
+      'bemerkung',
+      'dropdown',
+      'select',
+      'option',
+    };
+    if (tokens.contains(lower)) return true;
+    if (!v.contains('|')) return false;
+    final parts = v
+        .split('|')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    return parts.length >= 2;
   }
 
   /// Verschiebt Werte von ATT/ATT_wert-Param-Keys auf Schema-Felder und löscht Spalten-Keys.
@@ -1016,6 +1256,10 @@ class CsvSettings {
       final v = entry.value?.toString().trim() ?? '';
       if (v.isEmpty) continue;
       final upper = k.toUpperCase();
+      // TYPE/OPTIONS sind Metadaten, niemals Feldwerte.
+      if (upper.contains('_TYPE') || upper.contains('_OPTIONS')) {
+        continue;
+      }
       if (upper.contains('_WERT') ||
           upper.contains('_ART') ||
           upper.startsWith('ATT_WERT') ||
@@ -1057,6 +1301,200 @@ class CsvSettings {
     for (final k in keysToRemove) {
       params.remove(k);
     }
+  }
+
+  /// Korrigiert bereits importierte Params, bei denen fälschlich ATT*_TYPE als Wert landete.
+  /// Nutzt gespeicherte Rohzellen (__csvRowCells), falls vorhanden.
+  static void repairParamsMistakenlyFilledFromTypeColumns({
+    required Map<String, dynamic> params,
+    required List<String> importHeaders,
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    if (importHeaders.isEmpty) return;
+    final rawCells = params[csvRowCellsParamKey];
+    if (rawCells is! Map) return;
+    final cells = <String, String>{};
+    for (final e in rawCells.entries) {
+      final k = e.key.toString().trim();
+      if (k.isEmpty) continue;
+      cells[k] = e.value?.toString() ?? '';
+    }
+    if (cells.isEmpty) return;
+
+    final triplets = detectQuadrupletsFromHeader(importHeaders);
+    if (triplets.isEmpty) return;
+
+    final nonGlobal =
+        schemaFields.where((f) => f['isGlobal'] != true).toList();
+
+    final typeValsInRow = <String>{};
+    for (final t in triplets) {
+      if (t.typeColumn < 0 || t.typeColumn >= importHeaders.length) continue;
+      final typeHeader = importHeaders[t.typeColumn].trim();
+      if (typeHeader.isEmpty) continue;
+      final typeVal = (cells[typeHeader] ?? '').trim();
+      if (typeVal.isNotEmpty) typeValsInRow.add(typeVal);
+    }
+
+    for (var i = 0; i < triplets.length; i++) {
+      final t = triplets[i];
+      if (t.typeColumn < 0 || t.typeColumn >= importHeaders.length) continue;
+      final typeHeader = importHeaders[t.typeColumn].trim();
+      if (typeHeader.isEmpty) continue;
+      final typeVal = (cells[typeHeader] ?? '').trim();
+
+      final artVal = (t.artColumn >= 0 && t.artColumn < importHeaders.length)
+          ? (cells[importHeaders[t.artColumn].trim()] ?? '').trim()
+          : '';
+
+      final nameHeader = t.nameColumn >= 0 && t.nameColumn < importHeaders.length
+          ? importHeaders[t.nameColumn].trim()
+          : '';
+      final attSlot = attNumberFromHeaderLabel(nameHeader) ?? (i + 1);
+      final nameCell =
+          (nameHeader.isNotEmpty ? cells[nameHeader] : null)?.trim() ?? '';
+
+      var schemaKey = '';
+      final field = schemaFieldAtAttSlot(attSlot, nonGlobal);
+      if (field != null) {
+        schemaKey = (field['key'] ?? '').toString().trim();
+      }
+      if (schemaKey.isEmpty) {
+        for (final candidate in [nameCell, nameHeader]) {
+          if (candidate.isEmpty) continue;
+          for (final f in nonGlobal) {
+            final key = (f['key'] ?? '').toString();
+            final label = (f['label'] ?? '').toString();
+            if (paramKeysMatch(key, candidate) ||
+                paramKeysMatch(label, candidate)) {
+              schemaKey = key;
+              break;
+            }
+          }
+          if (schemaKey.isNotEmpty) break;
+        }
+      }
+      if (schemaKey.isEmpty && nameCell.isNotEmpty) {
+        schemaKey = nameCell;
+      }
+      if (schemaKey.isEmpty) continue;
+
+      final current = params[schemaKey]?.toString().trim() ?? '';
+      if (current.isEmpty) {
+        if (artVal.isNotEmpty) params[schemaKey] = artVal;
+        continue;
+      }
+
+      // Wert entspricht der TYPE-Zelle dieses Slots → ART übernehmen oder leeren.
+      if (typeVal.isNotEmpty && current == typeVal) {
+        if (artVal.isNotEmpty) {
+          params[schemaKey] = artVal;
+        } else {
+          params.remove(schemaKey);
+        }
+        continue;
+      }
+
+      // Wert ist irgendeine TYPE-Zelle dieser Zeile, ART leer → Typdefinition entfernen.
+      if (artVal.isEmpty && typeValsInRow.contains(current)) {
+        params.remove(schemaKey);
+      }
+    }
+
+    // Übrig gebliebene ATT*_TYPE / ATT*_OPTIONS Keys entfernen.
+    final drop = params.keys
+        .where((k) => isAnlagenCsvColumnParamKey(k.toString()))
+        .map((k) => k.toString())
+        .toList();
+    for (final k in drop) {
+      params.remove(k);
+    }
+  }
+
+  /// Entfernt Param-Werte, die wie TYPE-Definitionen aussehen (text/NUMBER/Opt|Opt).
+  /// Greift auch ohne __csvRowCells – gegen „doppelte“ Felder mit Typ als Inhalt.
+  static void clearParamsThatLookLikeTypeDefinitions({
+    required Map<String, dynamic> params,
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    final nonGlobal =
+        schemaFields.where((f) => f['isGlobal'] != true).toList();
+
+    bool looksLikeBareTypeToken(String value) {
+      return looksLikeTypeOrOptionsDefinition(value);
+    }
+
+    final keys = params.keys.map((k) => k.toString()).toList();
+    for (final key in keys) {
+      if (key.startsWith('__') || isAttSlotParamKey(key)) continue;
+      if (isAnlagenCsvColumnParamKey(key)) {
+        params.remove(key);
+        continue;
+      }
+      // Options-Listen als Param-Key (falsch aus TYPE) entfernen.
+      if (looksLikeTypeOrOptionsDefinition(key)) {
+        params.remove(key);
+        continue;
+      }
+      final current = params[key]?.toString().trim() ?? '';
+      if (current.isEmpty) continue;
+
+      Map<String, dynamic>? field;
+      for (final f in nonGlobal) {
+        final fk = (f['key'] ?? '').toString();
+        final fl = (f['label'] ?? '').toString();
+        if (paramKeysMatch(fk, key) || paramKeysMatch(fl, key)) {
+          field = f;
+          break;
+        }
+      }
+
+      if (field != null) {
+        final typeCell = () {
+          final type = (field!['type'] ?? '').toString().trim().toLowerCase();
+          final options = field['options'];
+          if (options is List && options.isNotEmpty) {
+            return options
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .join('|');
+          }
+          if (type == 'dropdown' || type == 'select') return '';
+          if (type.isEmpty) return 'text';
+          return type;
+        }();
+        if (typeCell.isNotEmpty && current == typeCell) {
+          params.remove(key);
+          continue;
+        }
+      }
+
+      if (looksLikeBareTypeToken(current)) {
+        // Nur leeren, wenn kein sinnvoller Nutzerwert vermutet wird:
+        // reine Typ-Tokens / Options-Pipes ohne echten Freitext.
+        params.remove(key);
+      }
+    }
+  }
+
+  /// art nur als echte Gruppen-Kategorie – nicht Label/Typ-Definition.
+  static String? effectiveSchemaArtGroup(Map<String, dynamic> fieldDef) {
+    final art = normalizeFieldLabelForDisplay(
+      (fieldDef['art'] ?? '').toString(),
+    );
+    if (art.isEmpty) return null;
+    final label = normalizeFieldLabelForDisplay(
+      (fieldDef['label'] ?? fieldDef['key'] ?? '').toString(),
+    );
+    if (label.isNotEmpty && paramKeysMatch(art, label)) return null;
+    final lower = art.toLowerCase();
+    if (lower == 'text' ||
+        lower == 'number' ||
+        lower == 'freitext' ||
+        art.contains('|')) {
+      return null;
+    }
+    return art;
   }
 
   /// Schreibt ATT-Slot-Metadaten für Schema-Felder (Export-Zuordnung Schema-Key → Spalte).
@@ -1523,29 +1961,37 @@ class CsvSettings {
       'photoPaths',
       qrCodeNummerParamKey,
       '__etageName',
+      labelBauteil,
     };
     for (final h in importHeaderRow) {
-      if (isAnlagenCsvColumnParamKey(h)) keys.add(h.trim());
+      final trimmed = h.trim();
+      if (trimmed.isEmpty) continue;
+      if (isAnlagenCsvColumnParamKey(trimmed)) keys.add(trimmed);
+      if (isEbeneHierarchyHeader(trimmed)) keys.add(trimmed);
     }
     for (var level = 1; level <= 3; level++) {
       keys.addAll(allParamKeysForHierarchyLevel(level));
+      keys.addAll(configuredHierarchyParamKeys(level));
     }
     final schemaKey = resolveSchemaItemParamKey();
     if (schemaKey != null && schemaKey.isNotEmpty) keys.add(schemaKey);
     final leafKey = leafNameParamKey;
     if (leafKey != null && leafKey.isNotEmpty) keys.add(leafKey);
+    final leafLabel = resolveLeafLevelLabel().trim();
+    if (leafLabel.isNotEmpty) keys.add(leafLabel);
     final rfKey = resolveListGroupingParamKeyForLevel(1);
     if (rfKey != null && rfKey.isNotEmpty) keys.add(rfKey);
     return keys;
   }
 
   factory CsvSettings.defaults() {
+    // Erste drei Spalten = Ebene1 / Ebene2 / Ebene3 (Anlagen- & Vorlagen-CSV).
     return const CsvSettings(
-      level1: HierarchyLevelConfig(enabled: true, nameColumn: 2),
-      level2: HierarchyLevelConfig(enabled: false, nameColumn: 1),
+      level1: HierarchyLevelConfig(enabled: true, nameColumn: 0),
+      level2: HierarchyLevelConfig(enabled: true, nameColumn: 1),
       level3: HierarchyLevelConfig(
         enabled: true,
-        nameColumn: 1,
+        nameColumn: 2,
         useIdColumn: false,
       ),
       anlageBauteilSpalte: null,
@@ -1576,6 +2022,8 @@ class CsvSettings {
     String? labelBauteil,
     List<AttributeColumnPair>? attributeColumnPairs,
     List<AttributeTripletColumn>? attributeTripletColumns,
+    int? attributeStartColumn,
+    int? attributeCount,
     String? foto1SpalteLabel,
     String? foto2SpalteLabel,
     String? foto3SpalteLabel,
@@ -1589,6 +2037,7 @@ class CsvSettings {
     int? displayNameSpalte,
     bool clearAnlageBauteilSpalte = false,
     bool clearDisplayNameSpalte = false,
+    bool clearAttributeRange = false,
   }) {
     return CsvSettings(
       level1: level1 ?? this.level1,
@@ -1607,6 +2056,11 @@ class CsvSettings {
       attributeColumnPairs: attributeColumnPairs ?? this.attributeColumnPairs,
       attributeTripletColumns:
           attributeTripletColumns ?? this.attributeTripletColumns,
+      attributeStartColumn: clearAttributeRange
+          ? null
+          : (attributeStartColumn ?? this.attributeStartColumn),
+      attributeCount:
+          clearAttributeRange ? null : (attributeCount ?? this.attributeCount),
       foto1SpalteLabel: foto1SpalteLabel ?? this.foto1SpalteLabel,
       foto2SpalteLabel: foto2SpalteLabel ?? this.foto2SpalteLabel,
       foto3SpalteLabel: foto3SpalteLabel ?? this.foto3SpalteLabel,
@@ -1640,6 +2094,8 @@ class CsvSettings {
       'attributeColumnPairs': attributeColumnPairs.map((p) => p.toJson()).toList(),
       'attributeTripletColumns':
           attributeTripletColumns.map((t) => t.toJson()).toList(),
+      'attributeStartColumn': attributeStartColumn,
+      'attributeCount': attributeCount,
       'foto1SpalteLabel': foto1SpalteLabel,
       'foto2SpalteLabel': foto2SpalteLabel,
       'foto3SpalteLabel': foto3SpalteLabel,
@@ -1704,6 +2160,8 @@ class CsvSettings {
       labelBauteil: json['labelBauteil'] as String? ?? 'Bauteil',
       attributeColumnPairs: pairs,
       attributeTripletColumns: triplets,
+      attributeStartColumn: json['attributeStartColumn'] as int?,
+      attributeCount: json['attributeCount'] as int?,
       foto1SpalteLabel: json['foto1SpalteLabel'] as String?,
       foto2SpalteLabel: json['foto2SpalteLabel'] as String?,
       foto3SpalteLabel: json['foto3SpalteLabel'] as String?,

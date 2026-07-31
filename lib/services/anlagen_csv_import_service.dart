@@ -10,9 +10,9 @@ import 'template_service.dart';
 
 void _migrateAnlageParams(
   Map<String, dynamic> params,
-  Disziplin discipline,
-) {
-  if (hasCsvRowCellsForExport(params)) return;
+  Disziplin discipline, {
+  List<String> importHeaders = const [],
+}) {
   String? revisionsobjekt;
   for (final ro in discipline.revisionsobjektNames) {
     for (final entry in params.entries) {
@@ -26,7 +26,20 @@ void _migrateAnlageParams(
   final schemaFields = discipline.effectiveSchemaFor(
     revisionsobjekt: revisionsobjekt,
   );
-  CsvSettings.migrateParamsFromAnlagenColumnKeys(
+  if (!hasCsvRowCellsForExport(params)) {
+    CsvSettings.migrateParamsFromAnlagenColumnKeys(
+      params: params,
+      schemaFields: schemaFields,
+    );
+  }
+  if (importHeaders.isNotEmpty) {
+    CsvSettings.repairParamsMistakenlyFilledFromTypeColumns(
+      params: params,
+      importHeaders: importHeaders,
+      schemaFields: schemaFields,
+    );
+  }
+  CsvSettings.clearParamsThatLookLikeTypeDefinitions(
     params: params,
     schemaFields: schemaFields,
   );
@@ -64,6 +77,7 @@ class AnlagenCsvImportService {
     required DatabaseService dbService,
     required String buildingId,
     required List<Anlage> anlagen,
+    List<String> importHeaders = const [],
   }) async {
     int savedCount = 0;
     int skippedCount = 0;
@@ -94,7 +108,11 @@ class AnlagenCsvImportService {
           final cleanedParams = Map<String, dynamic>.from(anlage.params);
           cleanedParams.remove('__parentLfdNummer');
           cleanedParams.remove('__etageName');
-          _migrateAnlageParams(cleanedParams, anlage.discipline);
+          _migrateAnlageParams(
+            cleanedParams,
+            anlage.discipline,
+            importHeaders: importHeaders,
+          );
 
           pendingInserts.add(Anlage(
             id: anlage.id,
@@ -112,7 +130,11 @@ class AnlagenCsvImportService {
         } else {
           final cleanedParams = Map<String, dynamic>.from(anlage.params);
           cleanedParams.remove('__etageName');
-          _migrateAnlageParams(cleanedParams, anlage.discipline);
+          _migrateAnlageParams(
+            cleanedParams,
+            anlage.discipline,
+            importHeaders: importHeaders,
+          );
 
           pendingInserts.add(Anlage(
             id: anlage.id,
@@ -164,15 +186,22 @@ class AnlagenCsvImportService {
 
     final header = importResult.importHeaderRow;
     final detectedPairs = CsvSettings.detectAnlagenAttributePairsFromHeader(header);
+    final detectedTriplets = CsvSettings.detectQuadrupletsFromHeader(header);
+    final keepManual = csvSettings.hasManualAttributeRange;
     await saveSettings(
       csvSettings.copyWith(
         importHeaderRow: header,
         exportDelimiter: importResult.detectedDelimiter,
-        attributeColumnPairs: detectedPairs.isNotEmpty
-            ? detectedPairs
-            : csvSettings.attributeColumnPairs,
-        // Gewerke-Vierergruppen behalten – Import wählt Mapping je nach Header.
-        attributeTripletColumns: csvSettings.attributeTripletColumns,
+        attributeColumnPairs: keepManual
+            ? csvSettings.attributeColumnPairs
+            : (detectedPairs.isNotEmpty
+                ? detectedPairs
+                : csvSettings.attributeColumnPairs),
+        attributeTripletColumns: keepManual
+            ? csvSettings.attributeTripletColumns
+            : (detectedTriplets.isNotEmpty
+                ? detectedTriplets
+                : csvSettings.attributeTripletColumns),
       ),
     );
 
@@ -187,6 +216,7 @@ class AnlagenCsvImportService {
       dbService: dbService,
       buildingId: buildingId,
       anlagen: importResult.anlagen,
+      importHeaders: header,
     );
   }
 }

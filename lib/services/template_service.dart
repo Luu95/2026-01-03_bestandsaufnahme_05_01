@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import '../database/database.dart';
 import '../database/database_service.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
@@ -518,32 +519,88 @@ class TemplateService {
     );
   }
 
-  /// Legt fehlende Gewerke aus Gewerkevorlagen an und synchronisiert Revisionsobjekt-Schemata.
-  static Future<List<Disziplin>> ensureDisciplinesFromTemplates(
+  /// Einzigartige Gewerk-Namen aus Projekt-Vorlagen (sortiert).
+  static Future<List<String>> templateGewerkLabels(
     DatabaseService dbService,
-    String buildingId,
     String projectId,
   ) async {
-    final templateRows = await dbService.getTemplatesByProjectId(projectId);
-    if (templateRows.isEmpty) {
-      return dbService.getDisciplinesByBuildingId(buildingId);
+    final rows = await dbService.getTemplatesByProjectId(projectId);
+    final labels = <String>{};
+    for (final row in rows) {
+      final g = row.gewerk.trim();
+      if (g.isNotEmpty) labels.add(g);
+    }
+    final list = labels.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  /// Baut Disziplin-Objekte aus Vorlagen (nur Schema, ohne DB-Persistenz).
+  /// Für CSV-Einstellungen / Plus-Auswahl – nicht für die Technik-Liste.
+  static List<Disziplin> buildVirtualDisciplinesFromTemplateRows(
+    List<TemplateDb> templateRows,
+  ) {
+    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(templateRows);
+    final allGewerke = <String>{};
+    for (final row in templateRows) {
+      final gewerk = row.gewerk.trim();
+      if (gewerk.isNotEmpty) allGewerke.add(gewerk);
     }
 
-    final existing = await dbService.getDisciplinesByBuildingId(buildingId);
-    final byLabel = <String, Disziplin>{
-      for (final d in existing) d.label.trim(): d,
-    };
+    final sorted = allGewerke.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return sorted
+        .map(
+          (gewerk) => _mergeTemplateSchemasIntoDiscipline(
+            base: _defaultDisciplineForGewerk(gewerk),
+            gewerk: gewerk,
+            templateRows: templateRows,
+            schemaByGewerkAndTyp: schemaByGewerkAndTyp,
+          ),
+        )
+        .toList();
+  }
 
-    final schemaByGewerkAndTyp = <String, Map<String, List<Map<String, dynamic>>>>{};
-    final allGewerke = <String>{};
+  static Disziplin _mergeTemplateSchemasIntoDiscipline({
+    required Disziplin base,
+    required String gewerk,
+    required List<TemplateDb> templateRows,
+    required Map<String, Map<String, List<Map<String, dynamic>>>>
+        schemaByGewerkAndTyp,
+  }) {
+    final byTyp = schemaByGewerkAndTyp[gewerk] ?? {};
+    final mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
+      base.revisionsobjektSchemas,
+    );
+    for (final entry in byTyp.entries) {
+      mergedRoSchemas[entry.key] =
+          entry.value.map((f) => Map<String, dynamic>.from(f)).toList();
+    }
+    for (final row in templateRows) {
+      if (row.gewerk.trim() != gewerk) continue;
+      final typ = row.anlagentyp.trim();
+      if (typ.isNotEmpty) {
+        mergedRoSchemas.putIfAbsent(typ, () => []);
+      }
+    }
+    return Disziplin(
+      label: base.label,
+      icon: base.icon,
+      color: base.color,
+      schema: base.globalSchemaFields,
+      groupingKey: base.groupingKey,
+      revisionsobjektSchemas: mergedRoSchemas,
+    );
+  }
 
+  static Map<String, Map<String, List<Map<String, dynamic>>>>
+      _schemaByGewerkAndTypFromRows(List<TemplateDb> templateRows) {
+    final schemaByGewerkAndTyp =
+        <String, Map<String, List<Map<String, dynamic>>>>{};
     for (final row in templateRows) {
       final gewerk = row.gewerk.trim();
       final typ = row.anlagentyp.trim();
-      if (gewerk.isEmpty) continue;
-      allGewerke.add(gewerk);
-      if (typ.isEmpty) continue;
-
+      if (gewerk.isEmpty || typ.isEmpty) continue;
       schemaByGewerkAndTyp.putIfAbsent(gewerk, () => {});
       final schema = getSchemaFromTemplateParameter(row.parameter);
       if (schema.isEmpty) {
@@ -556,51 +613,115 @@ class TemplateService {
       );
       schemaByGewerkAndTyp[gewerk]![typ] = merged;
     }
+    return schemaByGewerkAndTyp;
+  }
 
-    Disziplin mergeDiscipline(String gewerk, Disziplin base) {
-      final byTyp = schemaByGewerkAndTyp[gewerk] ?? {};
-      final mergedRoSchemas = Map<String, List<Map<String, dynamic>>>.from(
-        base.revisionsobjektSchemas,
-      );
-      for (final entry in byTyp.entries) {
-        mergedRoSchemas[entry.key] =
-            entry.value.map((f) => Map<String, dynamic>.from(f)).toList();
-      }
-      for (final row in templateRows) {
-        if (row.gewerk.trim() != gewerk) continue;
-        final typ = row.anlagentyp.trim();
-        if (typ.isNotEmpty) {
-          mergedRoSchemas.putIfAbsent(typ, () => []);
-        }
-      }
-      return Disziplin(
-        label: base.label,
-        icon: base.icon,
-        color: base.color,
-        schema: base.globalSchemaFields,
-        groupingKey: base.groupingKey,
-        revisionsobjektSchemas: mergedRoSchemas,
-      );
+  /// Synchronisiert Schemata aus Vorlagen in **bereits vorhandene** Disziplinen.
+  /// Legt keine leeren Gewerk-Shells mehr an (Vorlagen ≠ Listen-Einträge).
+  static Future<List<Disziplin>> ensureDisciplinesFromTemplates(
+    DatabaseService dbService,
+    String buildingId,
+    String projectId, {
+    bool createMissingGewerke = false,
+  }) async {
+    final templateRows = await dbService.getTemplatesByProjectId(projectId);
+    final existing = await dbService.getDisciplinesByBuildingId(buildingId);
+    if (templateRows.isEmpty) {
+      return existing;
     }
+
+    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(templateRows);
+    final byLabel = <String, Disziplin>{
+      for (final d in existing) d.label.trim(): d,
+    };
 
     final result = <Disziplin>[];
     for (final d in existing) {
-      result.add(mergeDiscipline(d.label.trim(), d));
+      result.add(
+        _mergeTemplateSchemasIntoDiscipline(
+          base: d,
+          gewerk: d.label.trim(),
+          templateRows: templateRows,
+          schemaByGewerkAndTyp: schemaByGewerkAndTyp,
+        ),
+      );
     }
 
-    final sortedNewGewerke = allGewerke.toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    for (final gewerk in sortedNewGewerke) {
-      if (byLabel.containsKey(gewerk)) continue;
-      final base = _defaultDisciplineForGewerk(gewerk);
-      result.add(mergeDiscipline(gewerk, base));
+    if (createMissingGewerke) {
+      final allGewerke = <String>{};
+      for (final row in templateRows) {
+        final g = row.gewerk.trim();
+        if (g.isNotEmpty) allGewerke.add(g);
+      }
+      final sortedNewGewerke = allGewerke.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      for (final gewerk in sortedNewGewerke) {
+        if (byLabel.containsKey(gewerk)) continue;
+        final base = _defaultDisciplineForGewerk(gewerk);
+        result.add(
+          _mergeTemplateSchemasIntoDiscipline(
+            base: base,
+            gewerk: gewerk,
+            templateRows: templateRows,
+            schemaByGewerkAndTyp: schemaByGewerkAndTyp,
+          ),
+        );
+      }
     }
 
     await dbService.replaceDisciplines(buildingId, result);
     appLog(
-      'Disziplinen aus Vorlagen: ${result.length} Gewerke für Gebäude $buildingId',
+      'Disziplinen-Schemata aus Vorlagen: ${result.length} Gewerke '
+      '(createMissing=$createMissingGewerke) für Gebäude $buildingId',
     );
     return result;
+  }
+
+  /// Legt bei Bedarf ein einzelnes Gewerk aus Vorlagen an (Plus-Button).
+  static Future<Disziplin> materializeDisciplineFromTemplates({
+    required DatabaseService dbService,
+    required String buildingId,
+    required String projectId,
+    required String gewerk,
+  }) async {
+    final label = gewerk.trim();
+    if (label.isEmpty) {
+      throw ArgumentError('Gewerk darf nicht leer sein');
+    }
+    final existing = await dbService.getDisciplinesByBuildingId(buildingId);
+    Disziplin? match;
+    for (final d in existing) {
+      if (d.label.trim().toLowerCase() == label.toLowerCase()) {
+        match = d;
+        break;
+      }
+    }
+    if (match != null) {
+      final synced = await ensureDisciplinesFromTemplates(
+        dbService,
+        buildingId,
+        projectId,
+      );
+      for (final d in synced) {
+        if (d.label.trim().toLowerCase() == label.toLowerCase()) {
+          return d;
+        }
+      }
+      return match;
+    }
+
+    final templateRows = await dbService.getTemplatesByProjectId(projectId);
+    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(templateRows);
+    final created = _mergeTemplateSchemasIntoDiscipline(
+      base: _defaultDisciplineForGewerk(label),
+      gewerk: label,
+      templateRows: templateRows,
+      schemaByGewerkAndTyp: schemaByGewerkAndTyp,
+    );
+    final next = [...existing, created];
+    await dbService.replaceDisciplines(buildingId, next);
+    appLog('Gewerk aus Vorlage materialisiert: $label');
+    return created;
   }
 
   /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (pro Revisionsobjekt).

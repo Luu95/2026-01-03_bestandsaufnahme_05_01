@@ -49,6 +49,11 @@ class TechnikMainTab extends StatefulWidget {
   /// Param-Key für Anzeigenamen einzelner Anlagen.
   final String? systemsDisplayNameParamKey;
 
+  /// Freie Listen-Gruppierung (null = Hierarchie-Standard).
+  final String? listViewGroupingKey;
+  final List<String> listViewParamKeys;
+  final ValueChanged<String?>? onListViewGroupingChanged;
+
   /// Anzeige-Labels aus CSV-Einstellungen (Gewerk / Blatt-Ebene).
   final String labelGewerk;
   final String labelLeafLevel;
@@ -81,6 +86,9 @@ class TechnikMainTab extends StatefulWidget {
     this.systemsGroupingKey,
     this.systemsSubGroupingKey,
     this.systemsDisplayNameParamKey,
+    this.listViewGroupingKey,
+    this.listViewParamKeys = const [],
+    this.onListViewGroupingChanged,
     this.labelGewerk = 'Gewerk',
     this.labelLeafLevel = 'Anlage',
     this.labelGewerkPlural = 'Gewerke',
@@ -208,140 +216,172 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
       );
     }
 
-    // Bei genau einem Gewerk: Anlagen direkt anzeigen, ohne aufklappbaren Reiter
-    if (disziplinen.length == 1) {
-      final discipline = disziplinen.first;
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 88),
-        child: SystemsPage(
-          key: widget.systemsPageKeys[discipline],
-          building: widget.building,
-          floor: FloorPlan(id: 'global', name: 'Global'),
-          discipline: discipline,
-          groupingKey: widget.systemsGroupingKey,
-          subGroupingKey: widget.systemsSubGroupingKey,
-          displayNameParamKey: widget.systemsDisplayNameParamKey,
-          usePrimaryScroll: true,
-          onSelectionChanged: (isActive, count) {
-            widget.onSelectionChanged?.call(isActive, count, discipline);
-          },
-          isAnySelectionActive: widget.isAnySelectionActive,
-          onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
-          onAnlageCreated: widget.onAnlageCreated,
-          onBauteilCreated: widget.onBauteilCreated,
-          onAnlagenMoved: widget.onAnlagenMoved,
-          onGroupLongPress: widget.onGroupLongPress,
-        ),
-      );
-    }
+    // Ebene 1 immer als Knoten zeigen (auch bei nur einem Gewerk),
+    // damit gemeinsame Ebene-1-Werte (z. B. gleiches Revisionsfeld) sichtbar sind.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.listViewParamKeys.isNotEmpty &&
+            widget.onListViewGroupingChanged != null)
+          _buildListViewGroupingBar(context),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.only(bottom: 88, top: 4),
+            itemCount: disziplinen.length,
+            itemBuilder: (context, index) {
+              final discipline = disziplinen[index];
+              final isOnlyDiscipline = disziplinen.length == 1;
+              final isExpanded = isOnlyDiscipline ||
+                  _expandedDisciplines.contains(discipline.label);
 
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 88, top: 4),
-      itemCount: disziplinen.length,
-      itemBuilder: (context, index) {
-        final discipline = disziplinen[index];
-        final isExpanded = _expandedDisciplines.contains(discipline.label);
+              final isSelected =
+                  widget.selectedDisciplineLabels.contains(discipline.label);
 
-        final isSelected = widget.selectedDisciplineLabels.contains(discipline.label);
-
-        final headerDecoration = SystemsListTileStyles.groupContainer(
-          isExpanded: isExpanded || isSelected,
-          level: SystemsOverviewLevel.discipline,
-        );
-
-        return GestureDetector(
-          behavior: widget.disciplineSelectionMode
-              ? HitTestBehavior.opaque
-              : HitTestBehavior.deferToChild,
-          onTap: widget.disciplineSelectionMode
-              ? () => widget.onDisciplineSelectionToggle?.call(discipline)
-              : null,
-          onLongPress: widget.disciplineSelectionMode
-              ? null
-              : () => widget.onDisciplineLongPress?.call(discipline),
-          child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: widget.disciplineSelectionMode && isSelected
-              ? headerDecoration.copyWith(
-                  border: Border.all(
-                    color: SystemsOverviewPalette.borderExpanded,
-                    width: 1.5,
-                  ),
-                )
-              : headerDecoration,
-          child: Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              key: ValueKey('discipline_${discipline.label}'),
-              enabled: !widget.disciplineSelectionMode,
-              tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-              childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-              leading: SystemsListTileStyles.disciplineLeading(
-                discipline,
-                expanded: isExpanded,
-              ),
-              title: Text(
-                _capitalize(discipline.label),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: isExpanded
-                      ? SystemsOverviewPalette.primaryDark
-                      : SystemsOverviewPalette.textPrimary,
-                ),
-              ),
-              trailing: widget.disciplineSelectionMode
-                  ? Icon(
-                      isSelected ? Icons.check_circle : Icons.circle_outlined,
-                      color: isSelected
-                          ? SystemsOverviewPalette.primary
-                          : SystemsOverviewPalette.iconMuted,
-                      size: 24,
-                    )
-                  : SystemsListTileStyles.expandIcon(
-                      isExpanded: isExpanded,
-                      level: SystemsOverviewLevel.discipline,
+              return GestureDetector(
+                behavior: widget.disciplineSelectionMode
+                    ? HitTestBehavior.opaque
+                    : HitTestBehavior.deferToChild,
+                onTap: widget.disciplineSelectionMode
+                    ? () =>
+                        widget.onDisciplineSelectionToggle?.call(discipline)
+                    : null,
+                onLongPress: widget.disciplineSelectionMode
+                    ? null
+                    : () => widget.onDisciplineLongPress?.call(discipline),
+                child: SystemsListTileStyles.groupShell(
+                  context: context,
+                  isExpanded: isExpanded || isSelected,
+                  level: SystemsOverviewLevel.discipline,
+                  margin: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 4),
+                  borderSide: widget.disciplineSelectionMode && isSelected
+                      ? const BorderSide(
+                          color: SystemsOverviewPalette.borderExpanded,
+                          width: 1.5,
+                        )
+                      : null,
+                  child: ExpansionTile(
+                    key: ValueKey('discipline_${discipline.label}'),
+                    enabled: !widget.disciplineSelectionMode,
+                    tilePadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 2),
+                    childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    leading: SystemsListTileStyles.disciplineLeading(
+                      discipline,
+                      expanded: isExpanded,
                     ),
-              onExpansionChanged: widget.disciplineSelectionMode
-                  ? null
-                  : (expanded) {
-                      setState(() {
-                        if (expanded) {
-                          _expandedDisciplines.add(discipline.label);
-                          widget.onDisciplineExpanded?.call(discipline);
-                        } else {
-                          _expandedDisciplines.remove(discipline.label);
-                          widget.onDisciplineExpanded?.call(null);
-                        }
-                      });
-                      _saveExpandedState();
-                    },
-              initiallyExpanded: isExpanded,
-              children: [
-                SystemsPage(
-                  key: widget.systemsPageKeys[discipline],
-                  building: widget.building,
-                  floor: FloorPlan(id: 'global', name: 'Global'),
-                  discipline: discipline,
-                  groupingKey: widget.systemsGroupingKey,
-                  subGroupingKey: widget.systemsSubGroupingKey,
-                  displayNameParamKey: widget.systemsDisplayNameParamKey,
-                  onSelectionChanged: (isActive, count) {
-                    widget.onSelectionChanged?.call(isActive, count, discipline);
-                  },
-                  isAnySelectionActive: widget.isAnySelectionActive,
-                  onExitDisciplineSelectionMode: widget.onExitDisciplineSelectionMode,
-                  onAnlageCreated: widget.onAnlageCreated,
-                  onBauteilCreated: widget.onBauteilCreated,
-                  onAnlagenMoved: widget.onAnlagenMoved,
-                  onGroupLongPress: widget.onGroupLongPress,
+                    title: Text(
+                      _capitalize(discipline.label),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isExpanded
+                            ? SystemsOverviewPalette.primaryDark
+                            : SystemsOverviewPalette.textPrimary,
+                      ),
+                    ),
+                    trailing: widget.disciplineSelectionMode
+                        ? Icon(
+                            isSelected
+                                ? Icons.check_circle
+                                : Icons.circle_outlined,
+                            color: isSelected
+                                ? SystemsOverviewPalette.primary
+                                : SystemsOverviewPalette.iconMuted,
+                            size: 24,
+                          )
+                        : SystemsListTileStyles.expandIcon(
+                            isExpanded: isExpanded,
+                            level: SystemsOverviewLevel.discipline,
+                          ),
+                    onExpansionChanged: widget.disciplineSelectionMode
+                        ? null
+                        : (expanded) {
+                            setState(() {
+                              if (expanded) {
+                                _expandedDisciplines.add(discipline.label);
+                                widget.onDisciplineExpanded?.call(discipline);
+                              } else {
+                                _expandedDisciplines.remove(discipline.label);
+                                widget.onDisciplineExpanded?.call(null);
+                              }
+                            });
+                            _saveExpandedState();
+                          },
+                    initiallyExpanded: isExpanded,
+                    children: [
+                      SystemsPage(
+                        key: widget.systemsPageKeys[discipline],
+                        building: widget.building,
+                        floor: FloorPlan(id: 'global', name: 'Global'),
+                        discipline: discipline,
+                        groupingKey: widget.systemsGroupingKey,
+                        subGroupingKey: widget.systemsSubGroupingKey,
+                        displayNameParamKey:
+                            widget.systemsDisplayNameParamKey,
+                        onSelectionChanged: (isActive, count) {
+                          widget.onSelectionChanged
+                              ?.call(isActive, count, discipline);
+                        },
+                        isAnySelectionActive: widget.isAnySelectionActive,
+                        onExitDisciplineSelectionMode:
+                            widget.onExitDisciplineSelectionMode,
+                        onAnlageCreated: widget.onAnlageCreated,
+                        onBauteilCreated: widget.onBauteilCreated,
+                        onAnlagenMoved: widget.onAnlagenMoved,
+                        onGroupLongPress: widget.onGroupLongPress,
+                      ),
+                    ],
+                  ),
                 ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildListViewGroupingBar(BuildContext context) {
+    final current = widget.listViewGroupingKey;
+    return Material(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: InputDecorator(
+          decoration: InputDecoration(
+            labelText: 'Auflisten nach',
+            isDense: true,
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String?>(
+              isExpanded: true,
+              isDense: true,
+              value: current != null &&
+                      widget.listViewParamKeys.contains(current)
+                  ? current
+                  : null,
+              hint: const Text('Standard (Hierarchie)'),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('Standard (Hierarchie)'),
+                ),
+                for (final key in widget.listViewParamKeys)
+                  DropdownMenuItem<String?>(
+                    value: key,
+                    child: Text(key),
+                  ),
               ],
+              onChanged: widget.onListViewGroupingChanged,
             ),
           ),
         ),
-        );
-      },
+      ),
     );
   }
 

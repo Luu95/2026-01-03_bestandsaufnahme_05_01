@@ -463,14 +463,11 @@ class SystemsAnlageList extends StatelessWidget {
               onGroupLongPress!(subKey, subGroupKey, additional);
             }
           : null,
-      child: Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      decoration: SystemsListTileStyles.groupContainer(
+      child: SystemsListTileStyles.groupShell(
+        context: context,
         isExpanded: isSubExpanded,
         level: SystemsOverviewLevel.subGroup,
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        margin: const EdgeInsets.only(bottom: 4),
         child: ExpansionTile(
           key: ValueKey('subgroup_$compositeKey'),
           tilePadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
@@ -515,7 +512,6 @@ class SystemsAnlageList extends StatelessWidget {
           ],
         ),
       ),
-    ),
     );
   }
 
@@ -539,58 +535,54 @@ class SystemsAnlageList extends StatelessWidget {
               onGroupLongPress!(effectiveGroupingKey, groupKey, additional);
             }
           : null,
-      child: Container(
+      child: SystemsListTileStyles.groupShell(
+        context: context,
+        isExpanded: isGroupExpanded,
+        level: SystemsOverviewLevel.group,
         margin: const EdgeInsets.only(bottom: 6),
-        decoration: SystemsListTileStyles.groupContainer(
-          isExpanded: isGroupExpanded,
-          level: SystemsOverviewLevel.group,
-        ),
-        child: Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            key: ValueKey('group_$groupKey'),
-            tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-            childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            leading: const Icon(
-              Icons.folder_outlined,
-              color: SystemsOverviewPalette.icon,
-              size: 22,
+        child: ExpansionTile(
+          key: ValueKey('group_$groupKey'),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          leading: const Icon(
+            Icons.folder_outlined,
+            color: SystemsOverviewPalette.icon,
+            size: 22,
+          ),
+          title: Text(
+            groupDisplayName,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: isGroupExpanded
+                  ? SystemsOverviewPalette.primaryDark
+                  : SystemsOverviewPalette.textPrimary,
             ),
-            title: Text(
-              groupDisplayName,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: isGroupExpanded
-                    ? SystemsOverviewPalette.primaryDark
-                    : SystemsOverviewPalette.textPrimary,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SystemsListTileStyles.countBadge(
+                groupAnlagen.length,
+                SystemsOverviewLevel.group,
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SystemsListTileStyles.countBadge(
-                  groupAnlagen.length,
-                  SystemsOverviewLevel.group,
-                ),
-                const SizedBox(width: 4),
-                SystemsListTileStyles.expandIcon(
-                  isExpanded: isGroupExpanded,
-                  level: SystemsOverviewLevel.group,
-                ),
-              ],
-            ),
-            initiallyExpanded: isGroupExpanded,
-            onExpansionChanged: (expanded) =>
-                onGroupExpansionChanged(groupKey, expanded),
-            children: _buildGroupChildren(
-              context,
-              groupKey,
-              groupAnlagen,
-              parentGroupingKey: effectiveGroupingKey,
-            ),
+              const SizedBox(width: 4),
+              SystemsListTileStyles.expandIcon(
+                isExpanded: isGroupExpanded,
+                level: SystemsOverviewLevel.group,
+              ),
+            ],
+          ),
+          initiallyExpanded: isGroupExpanded,
+          onExpansionChanged: (expanded) =>
+              onGroupExpansionChanged(groupKey, expanded),
+          children: _buildGroupChildren(
+            context,
+            groupKey,
+            groupAnlagen,
+            parentGroupingKey: effectiveGroupingKey,
           ),
         ),
       ),

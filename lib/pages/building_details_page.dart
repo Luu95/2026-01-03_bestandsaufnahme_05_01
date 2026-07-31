@@ -28,6 +28,7 @@ import '../utils/app_log.dart';
 import '../providers/projects_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/csv_settings_provider.dart';
+import '../utils/csv_column_layout.dart';
 import '../navigation/route_observer.dart';
 import '../theme/app_theme.dart';
 import 'widgets/generic_anlage_dialog.dart';
@@ -105,6 +106,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
 
   /// Gewerkevorlagen im aktuellen Projekt importiert.
   bool _hasProjectTemplates = false;
+
+  /// Listen-Ansicht: null = Hierarchie laut CSV-Settings, sonst Param-Key.
+  String? _listViewGroupingKey;
+  List<String> _listViewParamKeys = [];
 
   void _showProviderError(Object e) {
     if (!mounted) return;
@@ -272,14 +277,19 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     });
   }
 
-  /// Ebene 2 (Revisionsfeld) – Ebene 1 ist das Gewerk-Tab, Ebene 3 die Untergruppierung.
+  /// Ebene 1 = Gewerk/Disziplin-Tab; Listen-Gruppierung darunter über Ebene 2.
   String? _resolveSystemsGroupingParamKey() {
+    final override = _listViewGroupingKey?.trim();
+    if (override != null && override.isNotEmpty) return override;
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
     return settings.resolveRevisionsfeldListGroupingParamKey();
   }
 
   String? _resolveSystemsSubGroupingParamKey() {
+    // Freie Spalten-Ansicht ersetzt die Hierarchie-Untergruppierung.
+    final override = _listViewGroupingKey?.trim();
+    if (override != null && override.isNotEmpty) return null;
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
     return settings.resolveRevisionsobjektGroupingParamKey();
@@ -289,6 +299,77 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
     return settings.resolveDisplayNameParamKey();
+  }
+
+  Future<void> _refreshListViewParamKeys() async {
+    final dbService = ref.read(databaseServiceProvider);
+    final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
+    final keys = <String>{};
+
+    bool isUsableListViewKey(String raw) {
+      final k = raw.trim();
+      if (k.isEmpty) return false;
+      if (isInternalExportParamKey(k)) return false;
+      if (CsvSettings.isAnlagenCsvColumnParamKey(k)) return false;
+      if (CsvSettings.isAttSlotParamKey(k)) return false;
+      if (k.startsWith('_')) return false;
+      if (k == 'lfdNummer' || k == 'photoPaths') return false;
+      if (k == CsvSettings.qrCodeNummerParamKey) return false;
+      // Options-/Typ-Listen als Key (z. B. "ausgebaut| außer Betrieb|") ausblenden.
+      if (k.contains('|')) return false;
+      return true;
+    }
+
+    if (_currentProject.id.isNotEmpty) {
+      final csv = ref.read(csvSettingsProvider(_currentProject.id));
+      for (var level = 1; level <= 3; level++) {
+        if (!csv.hierarchyLevelConfigAlways(level).enabled) continue;
+        final k = csv.resolveHierarchyLevelParamKey(level)?.trim() ?? '';
+        if (isUsableListViewKey(k)) keys.add(k);
+        final header = csv.hierarchyLevelHeaderLabel(level).trim();
+        if (isUsableListViewKey(header)) keys.add(header);
+      }
+      for (final h in csv.importHeaderRow) {
+        if (isUsableListViewKey(h)) keys.add(h.trim());
+      }
+    }
+
+    for (final d in _disciplines) {
+      for (final field in d.schema) {
+        final label = (field['label'] ?? field['key'] ?? '').toString().trim();
+        if (isUsableListViewKey(label)) keys.add(label);
+      }
+      for (final fields in d.revisionsobjektSchemas.values) {
+        for (final field in fields) {
+          final label =
+              (field['label'] ?? field['key'] ?? '').toString().trim();
+          if (isUsableListViewKey(label)) keys.add(label);
+        }
+      }
+    }
+
+    for (final a in anlagen) {
+      if (a.params['__syntheticParent'] == true) continue;
+      for (final entry in a.params.entries) {
+        final k = entry.key.trim();
+        if (!isUsableListViewKey(k)) continue;
+        final v = entry.value?.toString().trim() ?? '';
+        if (v.isEmpty) continue;
+        keys.add(k);
+      }
+    }
+
+    final sorted = keys.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (!mounted) return;
+    setState(() {
+      _listViewParamKeys = sorted;
+      // Ungültige Auswahl zurücksetzen (z. B. alter _att_slot_-Key).
+      if (_listViewGroupingKey != null &&
+          !sorted.contains(_listViewGroupingKey)) {
+        _listViewGroupingKey = null;
+      }
+    });
   }
 
   @override
@@ -340,7 +421,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       final templates =
           await dbService.getTemplatesByProjectId(_currentProject.id);
       hasTemplates = templates.isNotEmpty;
-      if (hasTemplates && disciplines.isEmpty) {
+      // Vorlagen erzeugen keine leeren Gewerk-Shells mehr – nur Schema-Merge
+      // auf bereits vorhandene Disziplinen (aus Anlagen-Import / Plus).
+      if (hasTemplates && disciplines.isNotEmpty) {
         disciplines = await TemplateService.ensureDisciplinesFromTemplates(
           dbService,
           _building.id,
@@ -370,6 +453,29 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     
     // Prüfe, ob sich die Anzahl der Disziplinen geändert hat
     final previousCount = _disciplines.length;
+    // Technik-Liste: keine leeren Vorlagen-Gewerke (nur Anlagen oder manuell).
+    if (_currentProject.id.isNotEmpty) {
+      try {
+        final anlagen = await dbService.getAnlagenByBuildingId(_building.id);
+        final withAnlagen = {
+          for (final a in anlagen) a.discipline.label.trim().toLowerCase(),
+        };
+        final templateGewerke = {
+          for (final t
+              in await dbService.getTemplatesByProjectId(_currentProject.id))
+            if (t.gewerk.trim().isNotEmpty) t.gewerk.trim().toLowerCase(),
+        };
+        disciplines = disciplines.where((d) {
+          final key = d.label.trim().toLowerCase();
+          if (withAnlagen.contains(key)) return true;
+          // Manuell angelegte Gewerke ohne Vorlage behalten.
+          if (!templateGewerke.contains(key)) return true;
+          return false;
+        }).toList();
+      } catch (e) {
+        appLog('Filter leerer Vorlagen-Gewerke: $e');
+      }
+    }
     final newCount = disciplines.length;
     final disciplinesChanged = previousCount != newCount || 
         !_disciplines.every((d) => disciplines.any((nd) => nd.label == d.label));
@@ -379,6 +485,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       _hasProjectTemplates = hasTemplates;
     });
     _reinitTechnikTabController();
+    await _refreshListViewParamKeys();
     
     // Wenn sich Disziplinen geändert haben, TechnikTab neu erstellen
     if (disciplinesChanged) {
@@ -1240,12 +1347,60 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final templates =
         await dbService.getTemplatesByProjectId(_currentProject.id);
     if (templates.isEmpty) return;
+    // Nur Schemata in bestehende Disziplinen mergen – keine leeren Shells.
+    final existing = await dbService.getDisciplinesByBuildingId(_building.id);
+    if (existing.isEmpty) return;
     await TemplateService.ensureDisciplinesFromTemplates(
       dbService,
       _building.id,
       _currentProject.id,
     );
     await _loadDisciplines(refreshSystemsPages: true);
+  }
+
+  /// Plus: Disziplin wählen/materialisieren (Vorlagen nur als Schema-Quelle).
+  Future<Disziplin?> _resolveDisciplineForAddOrMaterialize() async {
+    if (_disciplines.isNotEmpty) {
+      return _resolveDisciplineForAdd();
+    }
+    if (_currentProject.id.isEmpty || !_hasProjectTemplates) {
+      return null;
+    }
+    final dbService = ref.read(databaseServiceProvider);
+    final gewerke = await TemplateService.templateGewerkLabels(
+      dbService,
+      _currentProject.id,
+    );
+    if (gewerke.isEmpty || !mounted) return null;
+
+    String? selected;
+    if (gewerke.length == 1) {
+      selected = gewerke.first;
+    } else {
+      selected = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Gewerk wählen'),
+          children: [
+            for (final g in gewerke)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, g),
+                child: Text(g),
+              ),
+          ],
+        ),
+      );
+    }
+    if (selected == null || selected.isEmpty || !mounted) return null;
+
+    final discipline = await TemplateService.materializeDisciplineFromTemplates(
+      dbService: dbService,
+      buildingId: _building.id,
+      projectId: _currentProject.id,
+      gewerk: selected,
+    );
+    await _loadDisciplines(refreshSystemsPages: true);
+    return discipline;
   }
 
   Future<void> _openAnlageErfassungAfterPlacement({
@@ -2079,8 +2234,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             onImportCsv: _importCsv,
             onAddAnlage: () async {
               await _ensureDisciplinesFromTemplatesIfNeeded();
-              if (!mounted || _disciplines.isEmpty) return;
-              await _openAddAnlageWithPlacement(_resolveDisciplineForAdd());
+              if (!mounted) return;
+              final discipline = await _resolveDisciplineForAddOrMaterialize();
+              if (discipline == null || !mounted) return;
+              await _openAddAnlageWithPlacement(discipline);
             },
             hasImportedTemplates: _hasProjectTemplates,
             isAnySelectionActive: () =>
@@ -2088,6 +2245,14 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             systemsGroupingKey: _resolveSystemsGroupingParamKey(),
             systemsSubGroupingKey: _resolveSystemsSubGroupingParamKey(),
             systemsDisplayNameParamKey: _resolveSystemsDisplayNameParamKey(),
+            listViewGroupingKey: _listViewGroupingKey,
+            listViewParamKeys: _listViewParamKeys,
+            onListViewGroupingChanged: (key) {
+              setState(() {
+                _listViewGroupingKey = key;
+                _technikTabKey = UniqueKey();
+              });
+            },
             labelGewerk: _currentProject.id.isNotEmpty
                 ? ref.read(csvSettingsProvider(_currentProject.id)).labelGewerk
                 : 'Gewerk',
@@ -2200,18 +2365,21 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         onPressed: () async {
           await _ensureDisciplinesFromTemplatesIfNeeded();
           if (!mounted) return;
-          if (_disciplines.isEmpty) {
+          final discipline = await _resolveDisciplineForAddOrMaterialize();
+          if (discipline == null) {
+            if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Bitte zuerst Gewerkevorlagen unter CSV-Import importieren '
-                  'oder $leafLabel per CSV importieren.',
+                  _hasProjectTemplates
+                      ? 'Bitte ein Gewerk aus den Vorlagen wählen oder $leafLabel per CSV importieren.'
+                      : 'Bitte zuerst Gewerkevorlagen unter CSV-Import importieren '
+                          'oder $leafLabel per CSV importieren.',
                 ),
               ),
             );
             return;
           }
-          final discipline = _resolveDisciplineForAdd();
           await _openAddAnlageWithPlacement(discipline);
         },
         tooltip: '$leafLabel hinzufügen',

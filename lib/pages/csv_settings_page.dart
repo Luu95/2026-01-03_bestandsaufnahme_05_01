@@ -33,12 +33,14 @@ class CsvSettingsPage extends ConsumerStatefulWidget {
 }
 
 class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
-  // Hierarchie-Ebenen (1 = oberste, 3 = Blatt)
-  HierarchyLevelConfig _level1 = const HierarchyLevelConfig(enabled: true, nameColumn: 2);
-  HierarchyLevelConfig _level2 = const HierarchyLevelConfig(enabled: false, nameColumn: 1);
+  // Hierarchie-Ebenen (1 = oberste, 3 = Blatt) – Spalten 0/1/2
+  HierarchyLevelConfig _level1 =
+      const HierarchyLevelConfig(enabled: true, nameColumn: 0);
+  HierarchyLevelConfig _level2 =
+      const HierarchyLevelConfig(enabled: true, nameColumn: 1);
   HierarchyLevelConfig _level3 = const HierarchyLevelConfig(
     enabled: true,
-    nameColumn: 1,
+    nameColumn: 2,
     useIdColumn: false,
   );
   int? _anlageBauteilSpalte;
@@ -56,6 +58,9 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
   /// Attribut-Zweierpaare: ATTn + ATTn_wert (Anlagen-CSV).
   List<AttributeColumnPair> _attributeColumnPairs = [];
+  /// Manuelle Attribut-Range (0-basiert / Anzahl Dreiergruppen).
+  int? _attributeStartColumn;
+  int? _attributeCount;
 
   /// Spalten-Labels für Fotonummern beim CSV-Export (1–4). Leer = Spalte nicht verwendet.
   String? _foto1SpalteLabel;
@@ -79,8 +84,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _foto3SpalteLabelCtrl;
   late final TextEditingController _foto4SpalteLabelCtrl;
   late final TextEditingController _qrCodeNummerSpalteLabelCtrl;
-  late final TextEditingController _attrPairGenStartCtrl;
-  late final TextEditingController _attrPairGenEndCtrl;
   late final TextEditingController _attrQuadGenStartCtrl;
   late final TextEditingController _attrQuadGenEndCtrl;
 
@@ -123,8 +126,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
     _foto4SpalteLabelCtrl = TextEditingController(text: _foto4SpalteLabel ?? '');
     _qrCodeNummerSpalteLabelCtrl = TextEditingController(text: _qrCodeNummerSpalteLabel ?? '');
-    _attrPairGenStartCtrl = TextEditingController(text: '4');
-    _attrPairGenEndCtrl = TextEditingController(text: '17');
     _attrQuadGenStartCtrl = TextEditingController(text: '4');
     _attrQuadGenEndCtrl = TextEditingController(text: '63');
     _loadAllData();
@@ -146,8 +147,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _foto3SpalteLabelCtrl.dispose();
     _foto4SpalteLabelCtrl.dispose();
     _qrCodeNummerSpalteLabelCtrl.dispose();
-    _attrPairGenStartCtrl.dispose();
-    _attrPairGenEndCtrl.dispose();
     _attrQuadGenStartCtrl.dispose();
     _attrQuadGenEndCtrl.dispose();
     super.dispose();
@@ -233,6 +232,34 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     if (_qrCodeNummerSpalteLabelCtrl.text != qr) {
       _qrCodeNummerSpalteLabelCtrl.value = TextEditingValue(text: qr, selection: TextSelection.collapsed(offset: qr.length));
     }
+    _syncAttributeRangeControllersFromState();
+  }
+
+  void _syncAttributeRangeControllersFromState() {
+    int? start0 = _attributeStartColumn;
+    int? count = _attributeCount;
+    if (start0 == null && _attributeQuadrupletColumns.isNotEmpty) {
+      start0 = _attributeQuadrupletColumns.first.nameColumn;
+      count ??= _attributeQuadrupletColumns.length;
+    }
+    if (start0 != null) {
+      final startText = '${start0 + 1}';
+      if (_attrQuadGenStartCtrl.text != startText) {
+        _attrQuadGenStartCtrl.value = TextEditingValue(
+          text: startText,
+          selection: TextSelection.collapsed(offset: startText.length),
+        );
+      }
+    }
+    if (start0 != null && count != null && count > 0) {
+      final endText = '${start0 + count * 3}';
+      if (_attrQuadGenEndCtrl.text != endText) {
+        _attrQuadGenEndCtrl.value = TextEditingValue(
+          text: endText,
+          selection: TextSelection.collapsed(offset: endText.length),
+        );
+      }
+    }
   }
 
   Future<void> _loadAllData() async {
@@ -286,6 +313,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _labelBauteil = settings.labelBauteil;
         _attributeQuadrupletColumns = _loadAttributeQuadrupletColumnsFromSettings(settings);
         _attributeColumnPairs = List<AttributeColumnPair>.from(settings.attributeColumnPairs);
+        _attributeStartColumn = settings.attributeStartColumn;
+        _attributeCount = settings.attributeCount;
         _foto1SpalteLabel = settings.foto1SpalteLabel;
         _foto2SpalteLabel = settings.foto2SpalteLabel;
         _foto3SpalteLabel = settings.foto3SpalteLabel;
@@ -304,7 +333,11 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       if (_mappingCsvHeaders != null) {
         _syncGroupingGewerkKeyFromColumn();
         _syncGroupingAnlageKeyFromColumn();
-        _syncAttributeMappingFromHeaders(_mappingCsvHeaders!);
+        if (_attributeStartColumn == null ||
+            _attributeCount == null ||
+            _attributeCount! <= 0) {
+          _syncAttributeMappingFromHeaders(_mappingCsvHeaders!);
+        }
       }
 
       final prefs = await SharedPreferences.getInstance();
@@ -329,12 +362,31 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     try {
       final dbService = ref.read(databaseServiceProvider);
       var loaded = await dbService.getDisciplinesByBuildingId(widget.buildingId);
-      if (loaded.isEmpty) {
+      // Schemata in vorhandene Disziplinen mergen (keine neuen leeren Shells).
+      if (loaded.isNotEmpty) {
         loaded = await TemplateService.ensureDisciplinesFromTemplates(
           dbService,
           widget.buildingId,
           widget.projectId,
         );
+      }
+      // Schema-Editor: fehlende Gewerke nur virtuell aus Vorlagen anzeigen.
+      final templateRows =
+          await dbService.getTemplatesByProjectId(widget.projectId);
+      if (templateRows.isNotEmpty) {
+        final virtual =
+            TemplateService.buildVirtualDisciplinesFromTemplateRows(
+                templateRows);
+        final byLabel = {
+          for (final d in loaded) d.label.trim().toLowerCase(): d,
+        };
+        for (final v in virtual) {
+          final key = v.label.trim().toLowerCase();
+          if (!byLabel.containsKey(key)) {
+            loaded = [...loaded, v];
+            byLabel[key] = v;
+          }
+        }
       }
       if (mounted) {
         setState(() {
@@ -344,6 +396,44 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     } catch (e) {
       appLog('Fehler beim Laden der Disziplinen: $e');
     }
+  }
+
+  Future<void> _saveDisciplines() async {
+    if (!mounted) return;
+    final dbService = ref.read(databaseServiceProvider);
+    // Nur Disziplinen persistieren, die bereits Anlagen haben oder in der DB
+    // lagen – reine Vorlagen-Shells nicht in die Technik-Liste schreiben.
+    final existing =
+        await dbService.getDisciplinesByBuildingId(widget.buildingId);
+    final existingLabels = {
+      for (final d in existing) d.label.trim().toLowerCase(),
+    };
+    final anlagen =
+        await dbService.getAnlagenByBuildingId(widget.buildingId);
+    final labelsWithAnlagen = {
+      for (final a in anlagen) a.discipline.label.trim().toLowerCase(),
+    };
+    final toSave = <Disziplin>[];
+    final savedKeys = <String>{};
+    for (final d in _disciplines) {
+      final key = d.label.trim().toLowerCase();
+      if (existingLabels.contains(key) ||
+          labelsWithAnlagen.contains(key) ||
+          _editingDisciplineIndex != null &&
+              _disciplines[_editingDisciplineIndex!].label.trim().toLowerCase() ==
+                  key) {
+        if (savedKeys.add(key)) toSave.add(d);
+      }
+    }
+    // Beim aktiven Schema-Edit: dieses Gewerk immer materialisieren.
+    if (_editingDisciplineIndex != null &&
+        _editingDisciplineIndex! >= 0 &&
+        _editingDisciplineIndex! < _disciplines.length) {
+      final d = _disciplines[_editingDisciplineIndex!];
+      final key = d.label.trim().toLowerCase();
+      if (savedKeys.add(key)) toSave.add(d);
+    }
+    await dbService.replaceDisciplines(widget.buildingId, toSave);
   }
 
   Future<void> _loadProjectTemplates() async {
@@ -416,6 +506,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         attributeColumnPairs: List<AttributeColumnPair>.from(_attributeColumnPairs),
         attributeTripletColumns:
             List<AttributeTripletColumn>.from(_attributeQuadrupletColumns),
+        attributeStartColumn: _attributeStartColumn,
+        attributeCount: _attributeCount,
         foto1SpalteLabel: _foto1SpalteLabel,
         foto2SpalteLabel: _foto2SpalteLabel,
         foto3SpalteLabel: _foto3SpalteLabel,
@@ -472,12 +564,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       if (!mounted) return;
       _saveAllSettings();
     });
-  }
-
-  Future<void> _saveDisciplines() async {
-    if (!mounted) return;
-    final dbService = ref.read(databaseServiceProvider);
-    await dbService.replaceDisciplines(widget.buildingId, _disciplines);
   }
 
   @override
@@ -547,7 +633,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         children: [
           _buildInfoCard(
             'Laden Sie eine Vorlage herunter, befüllen Sie sie und importieren Sie die Datei. '
-            'Attribut-Spalten (ATT…) werden automatisch aus dem CSV-Header erkannt.',
+            'Attribute: Erste und letzte Spalte angeben (Dreiergruppen werden automatisch berechnet) '
+            'oder aus ATT…-Headern erkennen.',
           ),
           const SizedBox(height: 12),
           _buildCsvImportSection(),
@@ -600,6 +687,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
             },
           ),
           const SizedBox(height: 16),
+          _buildCollapsibleAttributeQuadrupletsSection(),
+          const SizedBox(height: 12),
           _buildCollapsibleQrCodeSpalteSection(),
           const SizedBox(height: 12),
           _buildCollapsibleFotoSpaltenSection(),
@@ -802,7 +891,20 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
               ),
             )
           else if (_disciplines.isEmpty)
-            const Center(child: CircularProgressIndicator())
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  'Importieren Sie im Tab „CSV-Import“ Gewerkevorlagen, '
+                  'damit $_labelGewerk und $_schemaItemLevelLabel hier erscheinen.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _mutedTextColor(context),
+                  ),
+                ),
+              ),
+            )
           else
             ...List.generate(_disciplines.length, (index) {
               final d = _disciplines[index];
@@ -1386,20 +1488,19 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
 
   Widget _buildCollapsibleAttributeQuadrupletsSection() {
     const color = AppPalette.primary;
-    final groupCount = _attributeQuadrupletColumns.length;
-    final pairCount = _attributeColumnPairs.length;
-    final subtitle = pairCount > 0
-        ? '$pairCount Zweierpaar${pairCount == 1 ? '' : 'e'} (Anlagen-CSV)'
-        : groupCount == 0
-            ? 'Keine Dreiergruppen – zum Konfigurieren aufklappen'
-            : '$groupCount Dreiergruppe${groupCount == 1 ? '' : 'n'} konfiguriert';
+    final manual = _attributeStartColumn != null &&
+        _attributeCount != null &&
+        _attributeCount! > 0;
+    final subtitle = manual
+        ? '$_attributeCount Attribute (Spalte ${_attributeStartColumn! + 1}–${_attributeStartColumn! + _attributeCount! * 3})'
+        : 'Erste und letzte Spalte eingeben – zum Konfigurieren aufklappen';
 
     return Container(
       decoration: _themedSurfaceCardDecoration(context, borderColor: AppPalette.borderMuted),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          initiallyExpanded: false,
+          initiallyExpanded: manual,
           tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           leading: Container(
@@ -1417,330 +1518,56 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           subtitle: Text(subtitle, style: TextStyle(fontSize: 12, color: _mutedTextColor(context))),
           children: [
             Text(
-              'Gewerkevorlagen: drei Spalten pro Attribut (ATT1, ATT1_TYPE, ATT1_WERT). '
-              'TYPE: Freitext, number oder Möglichkeit1|Möglichkeit2 (Dropdown). '
-              'Anlagen-Export: nur Bezeichnung + Wert-Spalten (ohne TYPE). '
-              'Anlagen-Import: Zweier-Format (ATT1 + ATT1_wert) wird automatisch erkannt.',
+              'Nur erste und letzte Spalte angeben. '
+              'Im Hintergrund entstehen automatisch Dreiergruppen (Name, Typ, Wert/Art). '
+              'Ohne Angabe: automatische Erkennung aus ATT…-Headern.',
               style: TextStyle(fontSize: 12, color: _mutedTextColor(context)),
             ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              decoration: BoxDecoration(
-                color: AppPalette.surface,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppPalette.borderMuted),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Zweierpaare aus Spaltenbereich erzeugen (Anlagen-CSV)',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppPalette.primaryDark,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Reihenfolge: ATTn, ATTn_wert (z. B. Spalten 4–17). '
-                    'Die Spaltenanzahl muss gerade sein.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _attrPairGenStartCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Erste Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const Text('…'),
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _attrPairGenEndCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Letzte Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Zweierpaare generieren'),
-                        onPressed: () {
-                          final start = int.tryParse(_attrPairGenStartCtrl.text.trim());
-                          final end = int.tryParse(_attrPairGenEndCtrl.text.trim());
-                          if (start == null || end == null || start >= end) {
-                            _showAttrGenError(
-                              'Ungültiger Spaltenbereich (Erste < Letzte).',
-                            );
-                            return;
-                          }
-                          final count = end - start + 1;
-                          if (count % 2 != 0) {
-                            _showAttrGenError(
-                              'Anzahl Spalten ($count) muss gerade sein (ATT + ATT_wert).',
-                            );
-                            return;
-                          }
-                          final startIndex = start - 1;
-                          final endIndex = end - 1;
-                          final pairs = <AttributeColumnPair>[];
-                          for (var i = startIndex; i <= endIndex; i += 2) {
-                            pairs.add(AttributeColumnPair(
-                              nameColumn: i,
-                              valueColumn: i + 1,
-                            ));
-                          }
-                          setState(() => _attributeColumnPairs = pairs);
-                          _scheduleAutoSave();
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                '${pairs.length} Zweierpaar${pairs.length == 1 ? '' : 'e'} erzeugt',
-                              ),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: color.withValues(alpha: 0.2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Dreiergruppen aus Spaltenbereich erzeugen',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppPalette.primaryDark,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Reihenfolge: Name, Typ, Wert/Art (z. B. 3–62 → ATT1/ATT1_TYPE/ATT1_WERT, …). '
-                    'Die Spaltenanzahl im Bereich muss durch 3 teilbar sein.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _attrQuadGenStartCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Erste Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const Text('…'),
-                      SizedBox(
-                        width: 90,
-                        child: TextField(
-                          controller: _attrQuadGenEndCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Letzte Spalte',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.auto_fix_high, size: 18),
-                        label: const Text('Dreiergruppen generieren'),
-                        onPressed: () {
-                          final start = int.tryParse(_attrQuadGenStartCtrl.text.trim());
-                          final end = int.tryParse(_attrQuadGenEndCtrl.text.trim());
-                          if (start == null || end == null || start >= end) {
-                            _showAttrGenError(
-                              'Ungültiger Spaltenbereich (Erste < Letzte).',
-                            );
-                            return;
-                          }
-                          final count = end - start + 1;
-                          if (count % 3 != 0) {
-                            _showAttrGenError(
-                              'Anzahl Spalten ($count) muss durch 3 teilbar sein.',
-                            );
-                            return;
-                          }
-                          final startIndex = start - 1;
-                          final endIndex = end - 1;
-                          final groups = <AttributeTripletColumn>[];
-                          for (var i = startIndex; i <= endIndex; i += 3) {
-                            groups.add(AttributeTripletColumn(
-                              nameColumn: i,
-                              typeColumn: i + 1,
-                              artColumn: i + 2,
-                            ));
-                          }
-                          setState(() => _attributeQuadrupletColumns = groups);
-                          _scheduleAutoSave();
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                '${groups.length} Dreiergruppe${groups.length == 1 ? '' : 'n'} erzeugt',
-                              ),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            ...List.generate(_attributeQuadrupletColumns.length, (idx) {
-              final group = _attributeQuadrupletColumns[idx];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Attribut ${idx + 1}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _mutedTextColor(context),
-                      ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    controller: _attrQuadGenStartCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Erste Spalte',
+                      isDense: true,
+                      border: OutlineInputBorder(),
                     ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildColumnSelector(
-                            label: 'Name',
-                            value: group.nameColumn,
-                            onChanged: (v) => _updateQuadrupletColumn(
-                              idx,
-                              AttributeTripletColumn(
-                                nameColumn: v,
-                                typeColumn: group.typeColumn,
-                                optionsColumn: group.optionsColumn,
-                                artColumn: group.artColumn,
-                              ),
-                            ),
-                            csvHeaders: _mappingCsvHeaders,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildColumnSelector(
-                            label: 'Typ',
-                            value: group.typeColumn,
-                            onChanged: (v) => _updateQuadrupletColumn(
-                              idx,
-                              AttributeTripletColumn(
-                                nameColumn: group.nameColumn,
-                                typeColumn: v,
-                                optionsColumn: group.optionsColumn,
-                                artColumn: group.artColumn,
-                              ),
-                            ),
-                            csvHeaders: _mappingCsvHeaders,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildColumnSelector(
-                            label: 'Wert/Art',
-                            value: group.artColumn,
-                            onChanged: (v) => _updateQuadrupletColumn(
-                              idx,
-                              AttributeTripletColumn(
-                                nameColumn: group.nameColumn,
-                                typeColumn: group.typeColumn,
-                                optionsColumn: group.optionsColumn,
-                                artColumn: v,
-                              ),
-                            ),
-                            csvHeaders: _mappingCsvHeaders,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, color: AppPalette.error),
-                          onPressed: () {
-                            setState(() {
-                              _attributeQuadrupletColumns =
-                                  List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)
-                                    ..removeAt(idx);
-                            });
-                            _scheduleAutoSave();
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
+                    onChanged: (_) => _tryApplyAttributeRangeFromFields(silent: true),
+                    onSubmitted: (_) => _applyAttributeTripletRange(),
+                  ),
                 ),
-              );
-            }),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text('Dreiergruppe hinzufügen'),
-              onPressed: () {
-                final maxCol = (_mappingCsvHeaders?.length ?? 20) - 1;
-                final used = _allReservedColumnIndices().toSet();
-                for (final g in _attributeQuadrupletColumns) {
-                  used.addAll(g.columnIndices);
-                }
-                var n = 0;
-                while (used.contains(n) && n <= maxCol) n++;
-                var t = n + 1;
-                while (used.contains(t) && t <= maxCol) t++;
-                var v = t + 1;
-                while (used.contains(v) && v <= maxCol) v++;
-                setState(() {
-                  _attributeQuadrupletColumns =
-                      List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)
-                        ..add(AttributeTripletColumn(
-                          nameColumn: n,
-                          typeColumn: t,
-                          artColumn: v,
-                        ));
-                });
-                _scheduleAutoSave();
-              },
+                const Text('…'),
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    controller: _attrQuadGenEndCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Letzte Spalte',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => _tryApplyAttributeRangeFromFields(silent: true),
+                    onSubmitted: (_) => _applyAttributeTripletRange(),
+                  ),
+                ),
+                FilledButton(
+                  onPressed: _applyAttributeTripletRange,
+                  child: const Text('Übernehmen'),
+                ),
+                if (manual)
+                  TextButton(
+                    onPressed: _clearManualAttributeRange,
+                    child: const Text('Zurücksetzen'),
+                  ),
+              ],
             ),
           ],
         ),
@@ -1748,10 +1575,71 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     );
   }
 
-  void _updateQuadrupletColumn(int idx, AttributeTripletColumn updated) {
+  /// Wendet Erste/Letzte Spalte an, wenn der Bereich gültig (durch 3 teilbar) ist.
+  void _tryApplyAttributeRangeFromFields({bool silent = false}) {
+    final start = int.tryParse(_attrQuadGenStartCtrl.text.trim());
+    final end = int.tryParse(_attrQuadGenEndCtrl.text.trim());
+    if (start == null || end == null || start < 1 || end < start) {
+      if (!silent) {
+        _showAttrGenError('Bitte Erste und Letzte Spalte angeben (Erste ≤ Letzte).');
+      }
+      return;
+    }
+    final columnCount = end - start + 1;
+    if (columnCount % 3 != 0) {
+      if (!silent) {
+        _showAttrGenError(
+          'Anzahl Spalten ($columnCount) muss durch 3 teilbar sein.',
+        );
+      }
+      return;
+    }
+    final count = columnCount ~/ 3;
+    final groups = CsvSettings.tripletsFromStartAndCount(
+      startColumn: start - 1,
+      count: count,
+    );
     setState(() {
-      _attributeQuadrupletColumns =
-          List<AttributeTripletColumn>.from(_attributeQuadrupletColumns)..[idx] = updated;
+      _attributeStartColumn = start - 1;
+      _attributeCount = count;
+      _attributeQuadrupletColumns = groups;
+      _attributeColumnPairs = const [];
+    });
+    _scheduleAutoSave();
+  }
+
+  void _applyAttributeTripletRange() {
+    final start = int.tryParse(_attrQuadGenStartCtrl.text.trim());
+    final end = int.tryParse(_attrQuadGenEndCtrl.text.trim());
+    if (start == null || end == null || start < 1 || end < start) {
+      _showAttrGenError('Bitte Erste und Letzte Spalte angeben (Erste ≤ Letzte).');
+      return;
+    }
+    final columnCount = end - start + 1;
+    if (columnCount % 3 != 0) {
+      _showAttrGenError(
+        'Anzahl Spalten ($columnCount) muss durch 3 teilbar sein.',
+      );
+      return;
+    }
+    final count = columnCount ~/ 3;
+    _tryApplyAttributeRangeFromFields();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$count Attribut${count == 1 ? '' : 'e'} (Spalten $start–$end) übernommen',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _clearManualAttributeRange() {
+    setState(() {
+      _attributeStartColumn = null;
+      _attributeCount = null;
+      _attributeQuadrupletColumns = [];
     });
     _scheduleAutoSave();
   }
@@ -1793,19 +1681,6 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     addLevel(2, _level2);
     addLevel(3, _level3);
     if (_anlageBauteilSpalte != null) used.add(_anlageBauteilSpalte!);
-    return used;
-  }
-
-  /// Alle reservierten Spalten inkl. Attribut-Mappings (für freie Spalte suchen).
-  List<int> _allReservedColumnIndices() {
-    final used = _mappingColumnIndices();
-    for (final p in _attributeColumnPairs) {
-      used.add(p.nameColumn);
-      used.add(p.valueColumn);
-    }
-    for (final g in _attributeQuadrupletColumns) {
-      used.addAll(g.columnIndices);
-    }
     return used;
   }
 
