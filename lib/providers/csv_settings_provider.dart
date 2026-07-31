@@ -895,37 +895,41 @@ class CsvSettings {
     required List<String> headerRow,
     required CsvSettings settings,
   }) {
-    // Manuelle Range (Erste Spalte + Anzahl) hat Vorrang vor Header-Erkennung,
-    // damit z. B. Fotonummern/QR als Name/Typ/Wert-Attribute mitimportiert werden.
-    if (settings.hasManualAttributeRange) {
-      final manual = settings.attributeTripletColumns.isNotEmpty
-          ? settings.attributeTripletColumns
-          : tripletsFromStartAndCount(
-              startColumn: settings.attributeStartColumn!,
-              count: settings.attributeCount!,
-            );
-      return ImportAttributeMapping(pairs: const [], quadruplets: manual);
-    }
-
-    if (headerRow.isEmpty) {
+    ImportAttributeMapping manualOrSettings() {
+      if (settings.hasManualAttributeRange) {
+        final manual = settings.attributeTripletColumns.isNotEmpty
+            ? settings.attributeTripletColumns
+            : tripletsFromStartAndCount(
+                startColumn: settings.attributeStartColumn!,
+                count: settings.attributeCount!,
+              );
+        return ImportAttributeMapping(pairs: const [], quadruplets: manual);
+      }
       return ImportAttributeMapping(
         pairs: settings.attributeColumnPairs,
         quadruplets: settings.attributeTripletColumns,
       );
     }
 
+    if (headerRow.isEmpty) {
+      return manualOrSettings();
+    }
+
+    // Bekannte ATT-Formate: Header-Erkennung hat Vorrang vor manueller Range
+    // (sonst bleibt _schema bei Gewerkevorlagen leer und Neuaufnahme ohne Felder).
     if (headerLooksLikeAnlagenWertFormat(headerRow)) {
       final detected = detectAnlagenAttributePairsFromHeader(headerRow);
-      return ImportAttributeMapping(
-        pairs: detected.isNotEmpty ? detected : settings.attributeColumnPairs,
-        quadruplets: const [],
-      );
+      if (detected.isNotEmpty) {
+        return ImportAttributeMapping(
+          pairs: detected,
+          quadruplets: const [],
+        );
+      }
+      return manualOrSettings();
     }
 
     if (headerLooksLikeGewerkeQuadrupletFormat(headerRow)) {
       final detected = detectQuadrupletsFromHeader(headerRow);
-      // Frische Header-Erkennung hat Vorrang vor ggf. veralteten Settings
-      // (dort zeigte valueColumn fälschlich oft auf TYPE).
       if (detected.isNotEmpty) {
         return ImportAttributeMapping(pairs: const [], quadruplets: detected);
       }
@@ -935,17 +939,18 @@ class CsvSettings {
           quadruplets: settings.attributeTripletColumns,
         );
       }
-    } else if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
+      return manualOrSettings();
+    }
+
+    if (quadrupletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
       return ImportAttributeMapping(
         pairs: const [],
         quadruplets: settings.attributeTripletColumns,
       );
     }
 
-    return ImportAttributeMapping(
-      pairs: settings.attributeColumnPairs,
-      quadruplets: settings.attributeTripletColumns,
-    );
+    // Kein ATT-Header: manuelle Range nutzen (z. B. freie Spalten als Dreiergruppen).
+    return manualOrSettings();
   }
 
   /// Erkennt ATT/ATT_wert-Spaltenpaare aus der Import-Headerzeile (0-basierte Indizes).

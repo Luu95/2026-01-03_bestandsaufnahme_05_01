@@ -1358,7 +1358,8 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     await _loadDisciplines(refreshSystemsPages: true);
   }
 
-  /// Plus: Disziplin wählen/materialisieren (Vorlagen nur als Schema-Quelle).
+  /// Plus: Start-Disziplin für den Platzierungsdialog (Gewerk + Ebene 2).
+  /// Kein separater „Gewerk wählen“-Dialog – Auswahl erfolgt dort.
   Future<Disziplin?> _resolveDisciplineForAddOrMaterialize() async {
     if (_disciplines.isNotEmpty) {
       return _resolveDisciplineForAdd();
@@ -1367,40 +1368,15 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       return null;
     }
     final dbService = ref.read(databaseServiceProvider);
-    final gewerke = await TemplateService.templateGewerkLabels(
-      dbService,
-      _currentProject.id,
-    );
-    if (gewerke.isEmpty || !mounted) return null;
+    final templateRows =
+        await dbService.getTemplatesByProjectId(_currentProject.id);
+    if (templateRows.isEmpty || !mounted) return null;
 
-    String? selected;
-    if (gewerke.length == 1) {
-      selected = gewerke.first;
-    } else {
-      selected = await showDialog<String>(
-        context: context,
-        builder: (ctx) => SimpleDialog(
-          title: const Text('Gewerk wählen'),
-          children: [
-            for (final g in gewerke)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(ctx, g),
-                child: Text(g),
-              ),
-          ],
-        ),
-      );
-    }
-    if (selected == null || selected.isEmpty || !mounted) return null;
-
-    final discipline = await TemplateService.materializeDisciplineFromTemplates(
-      dbService: dbService,
-      buildingId: _building.id,
-      projectId: _currentProject.id,
-      gewerk: selected,
-    );
-    await _loadDisciplines(refreshSystemsPages: true);
-    return discipline;
+    final virtual =
+        TemplateService.buildVirtualDisciplinesFromTemplateRows(templateRows);
+    if (virtual.isEmpty) return null;
+    // Platzhalter: echte Wahl im MoveAnlagenDialog (inkl. Vorlagen-Gewerke).
+    return virtual.first;
   }
 
   Future<void> _openAnlageErfassungAfterPlacement({
@@ -1441,15 +1417,27 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         .trim();
 
     final dbService = ref.read(databaseServiceProvider);
-    final gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+    var gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
       dbService,
       _currentProject.id,
       gewerk: discipline.label,
     );
 
-    final matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
+    var matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
         ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, ro)
         : null;
+    if (ro.isNotEmpty && matched == null) {
+      final allTemplates = await TemplateService.loadTemplatesFromDatabase(
+        dbService,
+        _currentProject.id,
+      );
+      matched = TemplateService.findTemplateForRevisionsobjekt(allTemplates, ro);
+      if (matched != null) {
+        gewerkTemplates = [matched, ...gewerkTemplates];
+      } else if (gewerkTemplates.isEmpty) {
+        gewerkTemplates = allTemplates;
+      }
+    }
     final schemaRo = ro.isNotEmpty
         ? (TemplateService.resolveRevisionsobjektKeyForValue(
               discipline,
@@ -1471,7 +1459,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     final childTemplates = schemaRo.isNotEmpty
         ? gewerkTemplates
             .where((t) =>
-                t.gewerk.trim() == discipline.label.trim() &&
                 t.anlagentyp.trim() == schemaRo &&
                 t.anlageBauteil == 'b')
             .toList()
@@ -1509,6 +1496,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     );
     if (placement == null || !mounted) return;
 
+    // Nach Materialisierung im Platzierungsdialog Technik-Liste aktualisieren
+    await _loadDisciplines(refreshSystemsPages: true);
+    if (!mounted) return;
+
     await _openAnlageErfassungAfterPlacement(
       discipline: placement.discipline,
       placementParams: placement.initialParams,
@@ -1536,6 +1527,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       discipline: discipline,
       revisionsobjekt: selectedAnlagentyp.trim(),
       template: parentTemplate,
+      importHeaders: csvSettings.importHeaderRow,
     );
     final initialName = csvSettings.displayNameValueFromParams(params) ?? '';
     const uuid = Uuid();

@@ -316,23 +316,44 @@ class TemplateService {
     return json.encode(decoded);
   }
 
-  /// Lädt Vorlagen aus der Datenbank (projektbezogen)
+  /// Lädt Vorlagen aus der Datenbank (projektbezogen).
+  /// [gewerk]: optionaler Filter – exakt, sonst case-insensitive / Teilstring.
   static Future<List<Template>> loadTemplatesFromDatabase(
     DatabaseService dbService,
     String projectId, {
     String? gewerk,
   }) async {
-    final templateRows = gewerk != null
-        ? await dbService.getTemplatesByProjectIdAndGewerk(projectId, gewerk)
-        : await dbService.getTemplatesByProjectId(projectId);
+    final allRows = await dbService.getTemplatesByProjectId(projectId);
+    final gewerkFilter = gewerk?.trim() ?? '';
+    final templateRows = gewerkFilter.isEmpty
+        ? allRows
+        : () {
+            final exact = allRows
+                .where((r) => r.gewerk.trim() == gewerkFilter)
+                .toList();
+            if (exact.isNotEmpty) return exact;
+            final lower = gewerkFilter.toLowerCase();
+            final ci = allRows
+                .where((r) => r.gewerk.trim().toLowerCase() == lower)
+                .toList();
+            if (ci.isNotEmpty) return ci;
+            // Teilstring: „ITC 08 Klass.…“ ↔ kürzerer Gewerk-Name in der Vorlage
+            return allRows.where((r) {
+              final g = r.gewerk.trim().toLowerCase();
+              if (g.isEmpty) return false;
+              return g.contains(lower) || lower.contains(g);
+            }).toList();
+          }();
 
-    return templateRows.map((row) => Template(
-      gewerk: row.gewerk,
-      anlageBauteil: row.anlageBauteil,
-      anlagentyp: row.anlagentyp,
-      bezeichnung: row.bezeichnung,
-      parameter: row.parameter,
-    )).toList();
+    return templateRows
+        .map((row) => Template(
+              gewerk: row.gewerk,
+              anlageBauteil: row.anlageBauteil,
+              anlagentyp: row.anlagentyp,
+              bezeichnung: row.bezeichnung,
+              parameter: row.parameter,
+            ))
+        .toList();
   }
 
   /// Importiert Vorlagen aus einer CSV-Datei und speichert sie in der Datenbank
@@ -594,7 +615,10 @@ class TemplateService {
   }
 
   static Map<String, Map<String, List<Map<String, dynamic>>>>
-      _schemaByGewerkAndTypFromRows(List<TemplateDb> templateRows) {
+      _schemaByGewerkAndTypFromRows(
+    List<TemplateDb> templateRows, {
+    List<String> importHeaders = const [],
+  }) {
     final schemaByGewerkAndTyp =
         <String, Map<String, List<Map<String, dynamic>>>>{};
     for (final row in templateRows) {
@@ -602,7 +626,10 @@ class TemplateService {
       final typ = row.anlagentyp.trim();
       if (gewerk.isEmpty || typ.isEmpty) continue;
       schemaByGewerkAndTyp.putIfAbsent(gewerk, () => {});
-      final schema = getSchemaFromTemplateParameter(row.parameter);
+      final schema = getSchemaFromTemplateParameter(
+        row.parameter,
+        importHeaders: importHeaders,
+      );
       if (schema.isEmpty) {
         schemaByGewerkAndTyp[gewerk]!.putIfAbsent(typ, () => []);
         continue;
@@ -630,7 +657,11 @@ class TemplateService {
       return existing;
     }
 
-    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(templateRows);
+    final csvSettings = await CsvSettings.loadForProject(projectId);
+    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(
+      templateRows,
+      importHeaders: csvSettings.importHeaderRow,
+    );
     final byLabel = <String, Disziplin>{
       for (final d in existing) d.label.trim(): d,
     };
@@ -711,7 +742,11 @@ class TemplateService {
     }
 
     final templateRows = await dbService.getTemplatesByProjectId(projectId);
-    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(templateRows);
+    final csvSettings = await CsvSettings.loadForProject(projectId);
+    final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(
+      templateRows,
+      importHeaders: csvSettings.importHeaderRow,
+    );
     final created = _mergeTemplateSchemasIntoDiscipline(
       base: _defaultDisciplineForGewerk(label),
       gewerk: label,
@@ -887,42 +922,92 @@ class TemplateService {
   }
 
   /// Erstellt eine Parameter-Map aus dem gespeicherten Template-Parameter-String.
-  /// Der String ist JSON (Attributname → Attributwert), wie beim Anlagen-Import in Einzelspalten.
+  /// Behält `__csvRowCells` für Schema-Rekonstruktion bei Neuaufnahme.
   static Map<String, dynamic> buildEmptyParamsFromTemplate(String? parameterString) {
-    return _paramsMapFromParameterJson(parameterString);
-  }
-
-  static Map<String, dynamic> _paramsMapFromParameterJson(String? parameterString) {
     if (parameterString == null || parameterString.trim().isEmpty) return {};
     try {
       final decoded = json.decode(parameterString);
       if (decoded is! Map) return {};
-      return decoded.entries
-          .where((e) =>
-              e.key != '_schema' &&
-              e.key != CsvSettings.csvRowCellsParamKey &&
-              e.key != CsvSettings.csvRowIndexParamKey)
-          .map((e) => MapEntry(e.key.toString(), e.value))
-          .fold<Map<String, dynamic>>({}, (m, e) => m..[e.key] = e.value);
+      final result = <String, dynamic>{};
+      for (final e in decoded.entries) {
+        final key = e.key.toString();
+        if (key == '_schema' || key == CsvSettings.csvRowIndexParamKey) {
+          continue;
+        }
+        // __csvRowCells behalten – daraus werden Eingabefelder rekonstruiert,
+        // wenn _schema leer ist (z. B. nach manueller Attribut-Range).
+        result[key] = e.value;
+      }
+      // Leere Platzhalter für bekannte Schema-Felder (ohne Werte aus der Vorlage).
+      final schema = getSchemaFromTemplateParameter(parameterString);
+      for (final field in schema) {
+        final key = (field['key'] ?? '').toString().trim();
+        if (key.isEmpty) continue;
+        if (CsvSettings.isAnlagenCsvColumnParamKey(key)) continue;
+        if (CsvSettings.isReservedDialogParamKey(key, null)) continue;
+        result.putIfAbsent(key, () => '');
+      }
+      return result;
     } catch (e) {
       appLog('Template-Parameter JSON ungültig', error: e);
       return {};
     }
   }
 
+  static Map<String, dynamic> _paramsMapFromParameterJson(String? parameterString) {
+    return buildEmptyParamsFromTemplate(parameterString);
+  }
+
   /// Liest das in template.parameter gespeicherte _schema (Attribut-Definitionen) aus.
-  static List<Map<String, dynamic>> getSchemaFromTemplateParameter(String? parameterString) {
+  /// Wenn `_schema` fehlt/leer/ungeeignet ist, Rekonstruktion aus `__csvRowCells`.
+  static List<Map<String, dynamic>> getSchemaFromTemplateParameter(
+    String? parameterString, {
+    List<String> importHeaders = const [],
+  }) {
     if (parameterString == null || parameterString.trim().isEmpty) return [];
     try {
       final decoded = json.decode(parameterString);
       if (decoded is! Map) return [];
       final raw = decoded['_schema'];
-      if (raw is! List) return [];
-      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      if (raw is List && raw.isNotEmpty) {
+        final fromSchema = raw
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        final usable = CsvSettings.filterSchemaFieldsForDialog(fromSchema);
+        if (usable.isNotEmpty) return fromSchema;
+      }
+
+      final cellsRaw = decoded[CsvSettings.csvRowCellsParamKey];
+      if (cellsRaw is! Map || cellsRaw.isEmpty) return [];
+
+      final cellHeaders = cellsRaw.keys.map((k) => k.toString()).toList();
+      // Zuerst Header der Zellen selbst (Vorlagen-CSV), dann optional Projekt-Import-Header.
+      // Falsche Anlagen-Import-Header dürfen die Gewerke-Rekonstruktion nicht leeren.
+      var fields = CsvSettings.schemaFieldsFromCsvAttRowCells(
+        {CsvSettings.csvRowCellsParamKey: cellsRaw},
+        importHeaders: cellHeaders,
+      );
+      if (fields.isEmpty &&
+          importHeaders.isNotEmpty &&
+          !_sameHeaderList(importHeaders, cellHeaders)) {
+        fields = CsvSettings.schemaFieldsFromCsvAttRowCells(
+          {CsvSettings.csvRowCellsParamKey: cellsRaw},
+          importHeaders: importHeaders,
+        );
+      }
+      return fields;
     } catch (e) {
       appLog('Template-_schema JSON ungültig', error: e);
       return [];
     }
+  }
+
+  static bool _sameHeaderList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Vereinigt zwei Feldlisten (nach [key], spätere Einträge überschreiben).
@@ -1032,6 +1117,7 @@ class TemplateService {
   }
 
   /// Sucht eine Gewerkevorlage (Anlage) zum Revisionsobjekt-Wert.
+  /// Bevorzugt Vorlagen mit nutzbarem Schema und Anlage (`a`) vor Bauteil (`b`).
   static Template? findTemplateForRevisionsobjekt(
     List<Template> templates,
     String revisionsobjektValue,
@@ -1039,19 +1125,40 @@ class TemplateService {
     final v = revisionsobjektValue.trim().toLowerCase();
     if (v.isEmpty) return null;
 
-    Template? partial;
+    final exact = <Template>[];
+    final partial = <Template>[];
     for (final t in templates) {
       final typ = t.anlagentyp.trim();
       final bez = t.bezeichnung.trim();
-      if (typ.toLowerCase() == v || bez.toLowerCase() == v) return t;
-      if (partial == null &&
-          (typ.toLowerCase().contains(v) ||
-              v.contains(typ.toLowerCase()) ||
-              bez.toLowerCase().contains(v))) {
-        partial = t;
+      if (typ.toLowerCase() == v || bez.toLowerCase() == v) {
+        exact.add(t);
+      } else if (typ.toLowerCase().contains(v) ||
+          v.contains(typ.toLowerCase()) ||
+          bez.toLowerCase().contains(v)) {
+        partial.add(t);
       }
     }
-    return partial;
+
+    Template? bestOf(List<Template> list) {
+      if (list.isEmpty) return null;
+      Template? best;
+      var bestScore = -1;
+      for (final t in list) {
+        final schema = getSchemaFromTemplateParameter(t.parameter);
+        var score = 0;
+        if (schema.isNotEmpty) score += 100 + schema.length;
+        final ab = t.anlageBauteil.trim().toLowerCase();
+        if (ab == 'a' || ab.isEmpty) score += 10;
+        if (ab == 'b') score += 1;
+        if (score > bestScore) {
+          bestScore = score;
+          best = t;
+        }
+      }
+      return best;
+    }
+
+    return bestOf(exact) ?? bestOf(partial);
   }
 
   /// Disziplin mit effektivem Schema für ein Revisionsobjekt (DB + Vorlage + Einstellungen).
@@ -1060,6 +1167,7 @@ class TemplateService {
     required String revisionsobjekt,
     Template? template,
     List<Template>? templatesForLookup,
+    List<String> importHeaders = const [],
   }) {
     final roRaw = revisionsobjekt.trim();
     if (roRaw.isEmpty) return discipline;
@@ -1079,7 +1187,10 @@ class TemplateService {
             ? findTemplateForRevisionsobjekt(templatesForLookup, roRaw)
             : null);
     if (templateToUse != null) {
-      final fromTemplate = getSchemaFromTemplateParameter(templateToUse.parameter);
+      final fromTemplate = getSchemaFromTemplateParameter(
+        templateToUse.parameter,
+        importHeaders: importHeaders,
+      );
       if (fromTemplate.isNotEmpty) {
         roFields = mergeSchemaFieldLists(roFields, fromTemplate);
       }

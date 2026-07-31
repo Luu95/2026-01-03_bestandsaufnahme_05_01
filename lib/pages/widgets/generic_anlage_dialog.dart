@@ -10,6 +10,7 @@ import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/csv_settings_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../database/database_service.dart';
 import '../../services/anlage_validation_service.dart';
 import '../../services/ocr_service.dart';
 import '../../services/qr_scan_service.dart';
@@ -305,6 +306,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         effectiveDiscipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
           discipline: baseForRo,
           revisionsobjekt: ro,
+          importHeaders: _csvSettings?.importHeaderRow ?? const [],
         );
       } else {
         effectiveDiscipline = Disziplin(
@@ -778,6 +780,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       revisionsobjekt: ro,
       template: matched,
       templatesForLookup: _gewerkTemplates.isNotEmpty ? _gewerkTemplates : null,
+      importHeaders: _csvSettings?.importHeaderRow ?? const [],
     );
   }
 
@@ -897,6 +900,48 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         gewerk: _currentDiscipline.label,
       );
 
+      // Nach Laden der Vorlagen Schema für festes RO neu anwenden
+      // (in _initData waren Templates/Header oft noch nicht verfügbar).
+      final roInitAfterLoad = widget.initialRevisionsobjekt?.trim();
+      if (roInitAfterLoad != null && roInitAfterLoad.isNotEmpty) {
+        // Wenn Gewerk-Filter keine passende Vorlage liefert: projektweit nach RO suchen
+        if (TemplateService.findTemplateForRevisionsobjekt(
+              _gewerkTemplates,
+              roInitAfterLoad,
+            ) ==
+            null) {
+          final allTemplates = await TemplateService.loadTemplatesFromDatabase(
+            dbService,
+            projectId,
+          );
+          final matched = TemplateService.findTemplateForRevisionsobjekt(
+            allTemplates,
+            roInitAfterLoad,
+          );
+          if (matched != null) {
+            _gewerkTemplates = [
+              matched,
+              ..._gewerkTemplates.where(
+                (t) =>
+                    t.anlagentyp.trim().toLowerCase() !=
+                        matched.anlagentyp.trim().toLowerCase() ||
+                    t.gewerk.trim().toLowerCase() !=
+                        matched.gewerk.trim().toLowerCase(),
+              ),
+            ];
+          } else if (allTemplates.isNotEmpty && _gewerkTemplates.isEmpty) {
+            _gewerkTemplates = allTemplates;
+          }
+        }
+
+        _applyEffectiveSchemaFromParams(revisionsobjekt: roInitAfterLoad);
+        await _ensureSchemaFromTemplateOrSiblings(
+          dbService: dbService,
+          revisionsobjekt: roInitAfterLoad,
+          importHeaders: csvSettings.importHeaderRow,
+        );
+      }
+
       if (mounted) setState(() {});
 
       // Vorbefüllung nur bei Neuanlage ohne festes Revisionsobjekt
@@ -919,6 +964,169 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     } catch (e) {
       appLog('Fehler beim Laden der Einstellungen in GenericAnlageDialog: $e');
     }
+  }
+
+  /// Stellt sicher, dass Eingabefelder aus Gewerkevorlage oder Geschwister-Anlagen kommen.
+  Future<void> _ensureSchemaFromTemplateOrSiblings({
+    required DatabaseService dbService,
+    required String revisionsobjekt,
+    required List<String> importHeaders,
+  }) async {
+    final ro = revisionsobjekt.trim();
+    if (ro.isEmpty) return;
+
+    var fromTemplate = TemplateService.getSchemaFromTemplateParameter(
+      TemplateService.findTemplateForRevisionsobjekt(
+        _gewerkTemplates,
+        ro,
+      )?.parameter,
+      importHeaders: importHeaders,
+    );
+
+    // Gebäude-Disziplin aus DB (RO-Schema vom Anlagen-Import)
+    if (fromTemplate.isEmpty) {
+      try {
+        final disciplines =
+            await dbService.getDisciplinesByBuildingId(widget.buildingId);
+        Disziplin? buildingDisc;
+        for (final d in disciplines) {
+          if (d.label.trim().toLowerCase() ==
+              _currentDiscipline.label.trim().toLowerCase()) {
+            buildingDisc = d;
+            break;
+          }
+        }
+        if (buildingDisc != null) {
+          final resolved = buildingDisc.resolveRevisionsobjektKey(ro) ?? ro;
+          final roFields = buildingDisc.revisionsobjektSchemas[resolved];
+          if (roFields != null && roFields.isNotEmpty) {
+            fromTemplate =
+                roFields.map((f) => Map<String, dynamic>.from(f)).toList();
+          }
+        }
+      } catch (e) {
+        appLog('Gebäude-Disziplin-Schema nicht ladbar: $e');
+      }
+    }
+
+    // Vorlage-Parameter (inkl. __csvRowCells) in Params übernehmen – für Neuaufnahme
+    if (widget.existingAnlage == null) {
+      final matched = TemplateService.findTemplateForRevisionsobjekt(
+        _gewerkTemplates,
+        ro,
+      );
+      if (matched?.parameter != null && matched!.parameter!.trim().isNotEmpty) {
+        final fromTplParams =
+            TemplateService.buildEmptyParamsFromTemplate(matched.parameter);
+        for (final e in fromTplParams.entries) {
+          _params.putIfAbsent(e.key, () => e.value);
+        }
+        if (fromTemplate.isEmpty) {
+          fromTemplate = TemplateService.getSchemaFromTemplateParameter(
+            matched.parameter,
+            importHeaders: importHeaders,
+          );
+        }
+      }
+    }
+
+    // Fallback: Schema aus importierten Geschwister-Anlagen gleichen Typs
+    if (fromTemplate.isEmpty) {
+      try {
+        final siblings = await dbService.getAnlagenByBuildingIdAndDiscipline(
+          widget.buildingId,
+          _currentDiscipline.label,
+        );
+        final csv = _csvSettings;
+        for (final sibling in siblings) {
+          final siblingRo =
+              csv?.schemaItemValueFromParams(sibling.params)?.trim() ??
+                  csv?.revisionsobjektValueFromParams(sibling.params)?.trim() ??
+                  '';
+          if (siblingRo.isEmpty ||
+              siblingRo.toLowerCase() != ro.toLowerCase()) {
+            continue;
+          }
+          final cells = sibling.params[CsvSettings.csvRowCellsParamKey];
+          if (cells is Map && cells.isNotEmpty) {
+            final cellHeaders =
+                cells.keys.map((k) => k.toString()).toList(growable: false);
+            fromTemplate = CsvSettings.schemaFieldsFromCsvAttRowCells(
+              {
+                CsvSettings.csvRowCellsParamKey: cells,
+              },
+              importHeaders: cellHeaders,
+            );
+            if (fromTemplate.isEmpty && importHeaders.isNotEmpty) {
+              fromTemplate = CsvSettings.schemaFieldsFromCsvAttRowCells(
+                {
+                  CsvSettings.csvRowCellsParamKey: cells,
+                },
+                importHeaders: importHeaders,
+              );
+            }
+            if (fromTemplate.isNotEmpty) break;
+          }
+
+          List<Map<String, dynamic>>? siblingRoFields =
+              sibling.discipline.revisionsobjektSchemas[ro];
+          if (siblingRoFields == null || siblingRoFields.isEmpty) {
+            for (final entry
+                in sibling.discipline.revisionsobjektSchemas.entries) {
+              if (entry.key.toLowerCase() == ro.toLowerCase() &&
+                  entry.value.isNotEmpty) {
+                siblingRoFields = entry.value;
+                break;
+              }
+            }
+          }
+          if (siblingRoFields != null && siblingRoFields.isNotEmpty) {
+            fromTemplate = siblingRoFields
+                .map((f) => Map<String, dynamic>.from(f))
+                .toList();
+            break;
+          }
+          final legacy = sibling.discipline.legacyIndividualSchemaFields;
+          if (legacy.isNotEmpty) {
+            fromTemplate =
+                legacy.map((f) => Map<String, dynamic>.from(f)).toList();
+            break;
+          }
+        }
+      } catch (e) {
+        appLog('Schema aus Geschwister-Anlagen nicht ladbar: $e');
+      }
+    }
+
+    if (fromTemplate.isEmpty) return;
+
+    final resolvedKey = TemplateService.resolveRevisionsobjektKeyForValue(
+          _currentDiscipline,
+          ro,
+          templates: _gewerkTemplates,
+        ) ??
+        ro;
+    final mergedRo = Map<String, List<Map<String, dynamic>>>.from(
+      _currentDiscipline.revisionsobjektSchemas,
+    );
+    mergedRo[resolvedKey] = TemplateService.mergeSchemaFieldLists(
+      mergedRo[resolvedKey] ?? const [],
+      fromTemplate,
+    );
+    final flat = TemplateService.mergeSchemaFieldLists(
+      _currentDiscipline.globalSchemaFields,
+      fromTemplate,
+    );
+    _currentDiscipline = Disziplin(
+      label: _currentDiscipline.label,
+      icon: _currentDiscipline.icon,
+      color: _currentDiscipline.color,
+      schema: CsvSettings.filterSchemaFieldsForDialog(flat),
+      groupingKey: _currentDiscipline.groupingKey,
+      revisionsobjektSchemas: mergedRo.map(
+        (k, v) => MapEntry(k, CsvSettings.filterSchemaFieldsForDialog(v)),
+      ),
+    );
   }
 
   @override
@@ -1989,15 +2197,30 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
       return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
     }).toList();
 
-    // ATT-Namen aus Import-CSV ergänzen (auch leere ART-Werte),
-    // sonst fehlen Felder, wenn nur befüllte Params im Schema landeten.
-    final fromCsvCells = (_csvSettings != null &&
-            _csvSettings!.importHeaderRow.isNotEmpty)
-        ? CsvSettings.schemaFieldsFromCsvAttRowCells(
-            _params,
-            importHeaders: _csvSettings!.importHeaderRow,
-          )
-        : const <Map<String, dynamic>>[];
+    // ATT-Namen aus Import-CSV / Vorlagen-Zellen ergänzen (auch leere ART-Werte).
+    var fromCsvCells = const <Map<String, dynamic>>[];
+    final cellsRaw = _params[CsvSettings.csvRowCellsParamKey];
+    if (cellsRaw is Map && cellsRaw.isNotEmpty) {
+      final cellHeaders = cellsRaw.keys.map((k) => k.toString()).toList();
+      fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
+        _params,
+        importHeaders: cellHeaders,
+      );
+      if (fromCsvCells.isEmpty &&
+          _csvSettings != null &&
+          _csvSettings!.importHeaderRow.isNotEmpty) {
+        fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
+          _params,
+          importHeaders: _csvSettings!.importHeaderRow,
+        );
+      }
+    } else if (_csvSettings != null &&
+        _csvSettings!.importHeaderRow.isNotEmpty) {
+      fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
+        _params,
+        importHeaders: _csvSettings!.importHeaderRow,
+      );
+    }
     if (fromCsvCells.isNotEmpty) {
       // CSV zuerst, bestehendes Schema überschreibt Metadaten gleicher Keys.
       fields = TemplateService.mergeSchemaFieldLists(fromCsvCells, fields);
@@ -2011,6 +2234,33 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
     final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
     if (nonGlobal.isEmpty) {
+      // Vorlage als Feldquelle (nicht nur Enrichment) – auch wenn _schema leer war
+      // und nur __csvRowCells in der Vorlage stehen.
+      final template = roTrimmed.isNotEmpty
+          ? TemplateService.findTemplateForRevisionsobjekt(
+              _gewerkTemplates,
+              roTrimmed,
+            )
+          : null;
+      final fromTemplate = TemplateService.getSchemaFromTemplateParameter(
+        template?.parameter,
+        importHeaders: _csvSettings?.importHeaderRow ?? const [],
+      );
+      if (fromTemplate.isNotEmpty) {
+        var recovered = CsvSettings.filterSchemaFieldsForDialog(fromTemplate);
+        recovered = recovered.where((f) {
+          final key = (f['key'] ?? '').toString();
+          if (key.isEmpty) return true;
+          return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
+        }).toList();
+        if (recovered.where((f) => f['isGlobal'] != true).isNotEmpty) {
+          return [
+            ...discipline.globalSchemaFields,
+            ...recovered.where((f) => f['isGlobal'] != true),
+          ];
+        }
+      }
+
       final fromParams = CsvSettings.schemaFieldsFromParams(
         _params,
         settings: _csvSettings,
@@ -2023,15 +2273,7 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
         final masterSchema = roTrimmed.isNotEmpty
             ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
             : discipline.schema;
-        final templateMaster = roTrimmed.isNotEmpty
-            ? TemplateService.getSchemaFromTemplateParameter(
-                TemplateService.findTemplateForRevisionsobjekt(
-                      _gewerkTemplates,
-                      roTrimmed,
-                    )
-                    ?.parameter,
-              )
-            : const <Map<String, dynamic>>[];
+        final templateMaster = fromTemplate;
         final mergedMaster = TemplateService.mergeSchemaFieldLists(
           masterSchema,
           templateMaster,

@@ -732,15 +732,27 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         .trim();
 
     final dbService = ref.read(databaseServiceProvider);
-    final gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
+    var gewerkTemplates = await TemplateService.loadTemplatesFromDatabase(
       dbService,
       projectId,
       gewerk: discipline.label,
     );
 
-    final matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
+    var matched = ro.isNotEmpty && gewerkTemplates.isNotEmpty
         ? TemplateService.findTemplateForRevisionsobjekt(gewerkTemplates, ro)
         : null;
+    if (ro.isNotEmpty && matched == null) {
+      final allTemplates = await TemplateService.loadTemplatesFromDatabase(
+        dbService,
+        projectId,
+      );
+      matched = TemplateService.findTemplateForRevisionsobjekt(allTemplates, ro);
+      if (matched != null) {
+        gewerkTemplates = [matched, ...gewerkTemplates];
+      } else if (gewerkTemplates.isEmpty) {
+        gewerkTemplates = allTemplates;
+      }
+    }
     final schemaRo = ro.isNotEmpty
         ? (TemplateService.resolveRevisionsobjektKeyForValue(
               discipline,
@@ -765,6 +777,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
             revisionsobjekt: schemaRo,
             template: parentTemplate,
             templatesForLookup: gewerkTemplates,
+            importHeaders: csvSettings.importHeaderRow,
           )
         : discipline;
 
@@ -870,6 +883,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           revisionsobjekt: schemaRo,
           template: matched,
           templatesForLookup: gewerkTemplates,
+          importHeaders: csvSettings.importHeaderRow,
         );
       }
     }

@@ -156,16 +156,51 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     final disciplines = await db.getDisciplinesByBuildingId(widget.currentBuildingId);
 
+    // Vorlagen-Gewerke ergänzen (ohne vorherigen „Gewerk wählen“-Dialog)
+    var available = List<Disziplin>.from(disciplines);
+    if (projectId != null && projectId.isNotEmpty) {
+      final templateRows = await db.getTemplatesByProjectId(projectId);
+      if (templateRows.isNotEmpty) {
+        final virtual =
+            TemplateService.buildVirtualDisciplinesFromTemplateRows(templateRows);
+        final existingLabels = {
+          for (final d in available) d.label.trim().toLowerCase(),
+        };
+        for (final v in virtual) {
+          final key = v.label.trim().toLowerCase();
+          if (key.isEmpty || existingLabels.contains(key)) continue;
+          available.add(v);
+          existingLabels.add(key);
+        }
+        available.sort(
+          (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()),
+        );
+      }
+    }
+
+    // Start-Gewerk: übergebenes, sonst erstes verfügbares
+    if (available.isNotEmpty) {
+      final currentLabel = widget.currentDiscipline.label.trim().toLowerCase();
+      Disziplin? match;
+      for (final d in available) {
+        if (d.label.trim().toLowerCase() == currentLabel) {
+          match = d;
+          break;
+        }
+      }
+      _selectedDiscipline = match ?? available.first;
+    }
+
     if (_hasHierarchyMove) {
       await _loadHierarchyTargets(
         db,
-        disciplines: disciplines,
+        disciplines: available,
       );
     }
 
     if (mounted) {
       setState(() {
-        _availableDisciplines = disciplines;
+        _availableDisciplines = available;
         _isLoading = false;
       });
     }
@@ -372,11 +407,44 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     setState(() => _isMoving = true);
 
     try {
+      // Virtuelles Vorlagen-Gewerk bei Bedarf in die Gebäude-DB schreiben
+      var discipline = _disciplineForMove();
+      var projectId = widget.projectId;
+      final db = ref.read(databaseServiceProvider);
+      if (projectId == null || projectId.isEmpty) {
+        projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
+      }
+      if (projectId != null && projectId.isNotEmpty) {
+        final existing =
+            await db.getDisciplinesByBuildingId(widget.currentBuildingId);
+        final exists = existing.any(
+          (d) =>
+              d.label.trim().toLowerCase() ==
+              discipline.label.trim().toLowerCase(),
+        );
+        if (!exists) {
+          discipline = await TemplateService.materializeDisciplineFromTemplates(
+            dbService: db,
+            buildingId: widget.currentBuildingId,
+            projectId: projectId,
+            gewerk: discipline.label,
+          );
+          final ro = _effectiveRevisionsobjekt?.trim();
+          if (_hasHierarchyMove && ro != null && ro.isNotEmpty) {
+            discipline = TemplateService.disciplineWithSchemaForRevisionsobjekt(
+              discipline: discipline,
+              revisionsobjekt: ro,
+            );
+          }
+          _selectedDiscipline = discipline;
+        }
+      }
+
       final params = await _buildHierarchyParamsForSelection();
       if (!mounted) return;
       Navigator.of(context).pop(
         AnlagePlacementResult(
-          discipline: _disciplineForMove(),
+          discipline: discipline,
           initialParams: params,
         ),
       );
@@ -590,6 +658,14 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
               child: Padding(
                 padding: EdgeInsets.all(32),
                 child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_availableDisciplines.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Keine Gewerke verfügbar. Bitte zuerst Gewerkevorlagen importieren.',
+                textAlign: TextAlign.center,
               ),
             )
           else ...[
