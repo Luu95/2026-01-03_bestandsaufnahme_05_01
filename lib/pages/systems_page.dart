@@ -11,6 +11,7 @@ import '../models/floor_plan.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/database_provider.dart';
 import '../providers/csv_settings_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/anlage_validation_service.dart';
 import '../services/template_service.dart';
 
@@ -527,6 +528,16 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final dbService = ref.read(databaseServiceProvider);
     final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
 
+    String? rfKey = widget.groupingKey;
+    String? roKey = widget.subGroupingKey;
+    if (projectId != null && projectId.isNotEmpty) {
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      if (!mounted) return;
+      final csv = ref.read(csvSettingsProvider(projectId));
+      rfKey = csv.resolveRevisionsfeldListGroupingParamKey() ?? rfKey;
+      roKey = csv.resolveRevisionsobjektGroupingParamKey() ?? roKey;
+    }
+
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -539,8 +550,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         currentFloorId: widget.floor.id,
         currentDiscipline: widget.discipline,
         projectId: projectId,
-        revisionsfeldGroupingKey: widget.groupingKey,
-        revisionsobjektGroupingKey: widget.subGroupingKey,
+        revisionsfeldGroupingKey: rfKey,
+        revisionsobjektGroupingKey: roKey,
       ),
     );
 
@@ -667,12 +678,30 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   Future<AnlagePlacementResult?> _pickPlacementForNewAnlage() async {
-    final subKey = widget.subGroupingKey?.trim();
-    if (subKey == null || subKey.isEmpty) return null;
-
     final dbService = ref.read(databaseServiceProvider);
     final projectId = await dbService.getProjectIdByBuildingId(widget.building.id);
     if (!mounted) return null;
+
+    String? rfKey = widget.groupingKey?.trim();
+    String? roKey = widget.subGroupingKey?.trim();
+
+    // Listen-Gruppierung (z. B. Baujahr) ≠ Hierarchie: für Platzierung immer
+    // Revisionsfeld/Revisionsobjekt aus CSV-Einstellungen verwenden.
+    if (projectId != null && projectId.isNotEmpty) {
+      await ref.read(csvSettingsProvider(projectId).notifier).load();
+      if (!mounted) return null;
+      final csv = ref.read(csvSettingsProvider(projectId));
+      final hierarchyRf = csv.resolveRevisionsfeldListGroupingParamKey()?.trim();
+      final hierarchyRo = csv.resolveRevisionsobjektGroupingParamKey()?.trim();
+      if (hierarchyRo != null && hierarchyRo.isNotEmpty) {
+        roKey = hierarchyRo;
+      }
+      if (hierarchyRf != null && hierarchyRf.isNotEmpty) {
+        rfKey = hierarchyRf;
+      }
+    }
+
+    if (roKey == null || roKey.isEmpty) return null;
 
     return showModalBottomSheet<AnlagePlacementResult>(
       context: context,
@@ -685,8 +714,8 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         buildingId: widget.building.id,
         floorId: widget.floor.id,
         projectId: projectId,
-        revisionsfeldGroupingKey: widget.groupingKey,
-        revisionsobjektGroupingKey: widget.subGroupingKey,
+        revisionsfeldGroupingKey: rfKey,
+        revisionsobjektGroupingKey: roKey,
       ),
     );
   }
@@ -821,10 +850,17 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     if (!mounted) return;
 
     final placement = await _pickPlacementForNewAnlage();
-    if (widget.subGroupingKey != null &&
-        widget.subGroupingKey!.trim().isNotEmpty &&
-        placement == null) {
-      return;
+    // Abbruch im Platzierungsdialog (null) → nicht mit leerem Schema weitermachen,
+    // sofern eine Hierarchie-Unterebene konfiguriert ist.
+    if (placement == null) {
+      final csv = projectId != null && projectId.isNotEmpty
+          ? ref.read(csvSettingsProvider(projectId))
+          : null;
+      final needsPlacement =
+          (csv?.resolveRevisionsobjektGroupingParamKey()?.trim().isNotEmpty ??
+              false) ||
+          (widget.subGroupingKey?.trim().isNotEmpty ?? false);
+      if (needsPlacement) return;
     }
 
     await _openAnlageErfassungAfterPlacement(
@@ -1068,10 +1104,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }) {
     final isSelected = _selectedAnlagenIds.contains(a.id);
     final isValidated = _validationByAnlageId[a.id] ?? false;
-    final isLastOpened = _lastOpenedAnlageId == a.id;
+    final wasLastOpened = _lastOpenedAnlageId == a.id;
+    final isLastOpened = wasLastOpened &&
+        ref.watch(settingsProvider).highlightLastOpenedAnlage;
 
     Key? itemKey;
-    if (isLastOpened) {
+    if (wasLastOpened) {
       _anlageKeys.putIfAbsent(a.id, () => GlobalKey());
       itemKey = _anlageKeys[a.id]!;
     }

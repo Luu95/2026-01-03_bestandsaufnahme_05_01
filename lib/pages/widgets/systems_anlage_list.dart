@@ -306,17 +306,21 @@ class SystemsAnlageList extends StatelessWidget {
               hasChildren ? () => onToggleAnlageExpanded(parent.id) : null,
         ),
         if (hasChildren && isExpanded)
-          for (final child in children)
-            Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: itemBuilder(
-                _withDisplayName(child, _listDisplayName(child)),
-                disc,
-                isChild: true,
-                hasChildren: false,
-                isExpanded: false,
-              ),
+          SystemsListTileStyles.nestedContent(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final child in children)
+                  itemBuilder(
+                    _withDisplayName(child, _listDisplayName(child)),
+                    disc,
+                    isChild: true,
+                    hasChildren: false,
+                    isExpanded: false,
+                  ),
+              ],
             ),
+          ),
       ],
     );
   }
@@ -467,48 +471,40 @@ class SystemsAnlageList extends StatelessWidget {
         context: context,
         isExpanded: isSubExpanded,
         level: SystemsOverviewLevel.subGroup,
-        margin: const EdgeInsets.only(bottom: 4),
         child: ExpansionTile(
           key: ValueKey('subgroup_$compositeKey'),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-          leading: const Icon(
-            Icons.subdirectory_arrow_right,
-            color: SystemsOverviewPalette.iconMuted,
-            size: 20,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          leading: SystemsListTileStyles.leadingIcon(
+            icon: Icons.folder_outlined,
+            level: SystemsOverviewLevel.subGroup,
           ),
           title: Text(
             subGroupKey,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+            style: SystemsListTileStyles.titleStyle,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SystemsListTileStyles.countBadge(
-                subGroupAnlagen.length,
-                SystemsOverviewLevel.subGroup,
-              ),
-              const SizedBox(width: 4),
-              SystemsListTileStyles.expandIcon(
-                isExpanded: isSubExpanded,
-                level: SystemsOverviewLevel.subGroup,
-              ),
-            ],
+          trailing: SystemsListTileStyles.expandIcon(
+            isExpanded: isSubExpanded,
+            level: SystemsOverviewLevel.subGroup,
           ),
           initiallyExpanded: isSubExpanded,
           onExpansionChanged: (expanded) =>
               onGroupExpansionChanged(compositeKey, expanded),
           children: [
-            for (final anlage in subGroupAnlagen)
-              _buildParentWithChildren(
-                anlage,
-                displayNameOverride: _listDisplayName(anlage),
+            SystemsListTileStyles.nestedContent(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final anlage in subGroupAnlagen)
+                    _buildParentWithChildren(
+                      anlage,
+                      displayNameOverride: _listDisplayName(anlage),
+                    ),
+                ],
               ),
+            ),
           ],
         ),
       ),
@@ -539,21 +535,19 @@ class SystemsAnlageList extends StatelessWidget {
         context: context,
         isExpanded: isGroupExpanded,
         level: SystemsOverviewLevel.group,
-        margin: const EdgeInsets.only(bottom: 6),
+        margin: const EdgeInsets.only(bottom: 8),
         child: ExpansionTile(
           key: ValueKey('group_$groupKey'),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-          leading: const Icon(
-            Icons.folder_outlined,
-            color: SystemsOverviewPalette.icon,
-            size: 22,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          leading: SystemsListTileStyles.leadingIcon(
+            icon: Icons.folder_outlined,
+            level: SystemsOverviewLevel.group,
+            emphasized: isGroupExpanded,
           ),
           title: Text(
             groupDisplayName,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
+            style: SystemsListTileStyles.titleStyleEmphasized.copyWith(
               color: isGroupExpanded
                   ? SystemsOverviewPalette.primaryDark
                   : SystemsOverviewPalette.textPrimary,
@@ -561,29 +555,27 @@ class SystemsAnlageList extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SystemsListTileStyles.countBadge(
-                groupAnlagen.length,
-                SystemsOverviewLevel.group,
-              ),
-              const SizedBox(width: 4),
-              SystemsListTileStyles.expandIcon(
-                isExpanded: isGroupExpanded,
-                level: SystemsOverviewLevel.group,
-              ),
-            ],
+          trailing: SystemsListTileStyles.expandIcon(
+            isExpanded: isGroupExpanded,
+            level: SystemsOverviewLevel.group,
           ),
           initiallyExpanded: isGroupExpanded,
           onExpansionChanged: (expanded) =>
               onGroupExpansionChanged(groupKey, expanded),
-          children: _buildGroupChildren(
-            context,
-            groupKey,
-            groupAnlagen,
-            parentGroupingKey: effectiveGroupingKey,
-          ),
+          children: [
+            const Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9)),
+            SystemsListTileStyles.nestedContent(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: _buildGroupChildren(
+                  context,
+                  groupKey,
+                  groupAnlagen,
+                  parentGroupingKey: effectiveGroupingKey,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

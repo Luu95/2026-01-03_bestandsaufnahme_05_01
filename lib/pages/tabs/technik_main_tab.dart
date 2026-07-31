@@ -263,18 +263,15 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
                   child: ExpansionTile(
                     key: ValueKey('discipline_${discipline.label}'),
                     enabled: !widget.disciplineSelectionMode,
-                    tilePadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 2),
-                    childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
                     leading: SystemsListTileStyles.disciplineLeading(
                       discipline,
                       expanded: isExpanded,
                     ),
                     title: Text(
                       _capitalize(discipline.label),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                      style: SystemsListTileStyles.titleStyleEmphasized.copyWith(
                         color: isExpanded
                             ? SystemsOverviewPalette.primaryDark
                             : SystemsOverviewPalette.textPrimary,
@@ -288,7 +285,7 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
                             color: isSelected
                                 ? SystemsOverviewPalette.primary
                                 : SystemsOverviewPalette.iconMuted,
-                            size: 24,
+                            size: SystemsListTileStyles.chevronSize,
                           )
                         : SystemsListTileStyles.expandIcon(
                             isExpanded: isExpanded,

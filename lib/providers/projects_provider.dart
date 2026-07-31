@@ -1,5 +1,7 @@
 // lib/providers/projects_provider.dart
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/project.dart';
 import '../models/building.dart';
@@ -75,7 +77,13 @@ class ProjectsNotifier extends StateNotifier<ProjectsState> {
   Future<void> loadProjects() async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final projects = await _dbService.getAllProjects();
+      final projects = await _dbService.getAllProjects().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => throw TimeoutException(
+          'Datenbank-Start hat zu lange gedauert '
+          '(Web: sqlite3.wasm / drift_worker.js prüfen).',
+        ),
+      );
       int? selectedProjectIndex;
       int? selectedBuildingIndex;
 

@@ -68,19 +68,9 @@ class AnlageHierarchicalItem extends StatelessWidget {
       return SystemsOverviewPalette.primary.withOpacity(0.1);
     }
     if (isLastOpened && !isChild) {
-      return SystemsOverviewPalette.primary.withOpacity(0.08);
+      return SystemsOverviewPalette.primary.withOpacity(0.06);
     }
-    return SystemsListTileStyles.backgroundForLevel(_level);
-  }
-
-  Color _borderColor() {
-    if (isSelected) {
-      return SystemsOverviewPalette.borderExpanded;
-    }
-    if (isLastOpened && !isChild) {
-      return SystemsOverviewPalette.primary;
-    }
-    return SystemsOverviewPalette.borderMuted;
+    return Colors.transparent;
   }
 
   @override
@@ -94,39 +84,41 @@ class AnlageHierarchicalItem extends StatelessWidget {
         color: isSelected
             ? SystemsOverviewPalette.primary
             : SystemsOverviewPalette.iconMuted,
-        size: 24,
+        size: SystemsListTileStyles.chevronSize,
       );
     } else if (!isChild && hasChildren) {
-      trailing = IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-        onPressed: onToggleExpanded,
-        icon: Icon(
-          isExpanded ? Icons.expand_more : Icons.chevron_right,
-          color: isExpanded
-              ? SystemsOverviewPalette.primary
-              : SystemsOverviewPalette.iconMuted,
+      trailing = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onToggleExpanded,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: SystemsListTileStyles.expandIcon(
+            isExpanded: isExpanded,
+            level: _level,
+          ),
         ),
+      );
+    } else if (isLastOpened && !isChild) {
+      trailing = const Icon(
+        Icons.history,
+        size: 16,
+        color: SystemsOverviewPalette.iconMuted,
       );
     }
 
-    return Container(
+    return Padding(
       key: scrollKey,
-      margin: EdgeInsets.only(bottom: 6, left: isChild ? 4 : 0),
+      padding: const EdgeInsets.only(bottom: 1),
       child: Material(
         color: _backgroundColor(),
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: _borderColor()),
-        ),
+        borderRadius: BorderRadius.circular(7),
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(7),
           onTap: onTap,
           onLongPress: onLongPress,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: SystemsListTileStyles.rowPadding,
             child: Row(
               children: [
                 _LeadingIcon(
@@ -135,47 +127,30 @@ class AnlageHierarchicalItem extends StatelessWidget {
                   isSelected: isSelected,
                   isValidated: isValidated,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: SystemsListTileStyles.leadingGap),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              anlage.name,
-                              style: TextStyle(
-                                fontWeight: isChild
-                                    ? FontWeight.w500
-                                    : FontWeight.w600,
-                                fontSize: isChild ? 14 : 15,
-                                color: isSelected
-                                    ? SystemsOverviewPalette.primaryDark
-                                    : SystemsOverviewPalette.textPrimary,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (isLastOpened && !isChild) ...[
-                            const SizedBox(width: 6),
-                            const Icon(
-                              Icons.history,
-                              size: 16,
-                              color: SystemsOverviewPalette.primary,
-                            ),
-                          ],
-                        ],
+                      Text(
+                        anlage.name,
+                        style: SystemsListTileStyles.titleStyle.copyWith(
+                          color: isSelected
+                              ? SystemsOverviewPalette.primaryDark
+                              : SystemsOverviewPalette.textPrimary,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       if (subtitle != null) ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 1),
                         Text(
                           subtitle,
                           style: const TextStyle(
                             color: SystemsOverviewPalette.textSecondary,
                             fontSize: 12,
+                            height: 1.2,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -184,7 +159,10 @@ class AnlageHierarchicalItem extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (trailing != null) trailing,
+                if (trailing != null) ...[
+                  const SizedBox(width: 6),
+                  trailing,
+                ],
               ],
             ),
           ),
@@ -209,41 +187,31 @@ class _LeadingIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconColor = isChild
-        ? SystemsOverviewPalette.iconChild
-        : SystemsOverviewPalette.icon;
+    final level = isChild
+        ? SystemsOverviewLevel.bauteil
+        : SystemsOverviewLevel.anlage;
 
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isSelected
-                ? SystemsOverviewPalette.primary.withOpacity(0.18)
-                : SystemsOverviewPalette.primary.withOpacity(0.1),
-          ),
-          child: Icon(
-            isChild ? Icons.build_outlined : discipline.icon,
-            color: iconColor,
-            size: isChild ? 20 : 22,
-          ),
+        SystemsListTileStyles.leadingIcon(
+          icon: isChild ? Icons.build_outlined : Icons.folder_outlined,
+          level: level,
+          emphasized: isSelected,
         ),
         if (isValidated)
           Positioned(
             bottom: -2,
             right: -2,
             child: Container(
-              width: 18,
-              height: 18,
+              width: 14,
+              height: 14,
               decoration: BoxDecoration(
                 color: SystemsOverviewPalette.primaryDark,
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2),
+                border: Border.all(color: Colors.white, width: 1.5),
               ),
-              child: const Icon(Icons.check, color: Colors.white, size: 11),
+              child: const Icon(Icons.check, color: Colors.white, size: 9),
             ),
           ),
       ],

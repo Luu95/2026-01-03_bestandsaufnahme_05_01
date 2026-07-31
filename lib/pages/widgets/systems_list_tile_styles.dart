@@ -13,69 +13,73 @@ enum SystemsOverviewLevel {
   bauteil,
 }
 
-/// Gemeinsames Styling für aufklappbare Gruppen in der Anlagenübersicht.
+/// Gemeinsames Styling für die Anlagenübersicht.
+///
+/// Eine äußere Fläche, darunter flache Zeilen mit einheitlichem Raster:
+/// gleiche Icon-Box, gleicher Textstil, feste Einrückungsstufe.
 class SystemsListTileStyles {
   SystemsListTileStyles._();
 
+  static const BorderRadius groupRadius = BorderRadius.all(Radius.circular(10));
+
+  /// Einheitliches Zeilen-Raster für alle Ebenen.
+  static const double leadingBox = 28;
+  static const double rowIconSize = 16;
+  static const double leadingGap = 10;
+  static const double indentStep = 16;
+  static const double chevronSize = 20;
+  static const EdgeInsets rowPadding =
+      EdgeInsets.symmetric(horizontal: 10, vertical: 6);
+  static const TextStyle titleStyle = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.w500,
+    height: 1.25,
+    color: AppPalette.textPrimary,
+  );
+  static const TextStyle titleStyleEmphasized = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    height: 1.25,
+    color: AppPalette.textPrimary,
+  );
+
   static Color accentForLevel(SystemsOverviewLevel level) {
+    // Eine Farbe für alle Ebenen → ruhigere, ausgerichtete Optik.
     switch (level) {
       case SystemsOverviewLevel.discipline:
-        return AppPalette.primaryDark;
       case SystemsOverviewLevel.group:
         return AppPalette.primary;
       case SystemsOverviewLevel.subGroup:
-        return AppPalette.primaryLight;
       case SystemsOverviewLevel.anlage:
-        return AppPalette.icon;
       case SystemsOverviewLevel.bauteil:
-        return AppPalette.iconChild;
+        return AppPalette.iconMuted;
     }
   }
 
   static Color backgroundForLevel(SystemsOverviewLevel level) {
     switch (level) {
       case SystemsOverviewLevel.discipline:
-        return AppPalette.surface;
       case SystemsOverviewLevel.group:
-        return AppPalette.surface;
+        return Colors.white;
       case SystemsOverviewLevel.subGroup:
-        return AppPalette.surfaceNested;
       case SystemsOverviewLevel.anlage:
-        return AppPalette.surfaceCard;
       case SystemsOverviewLevel.bauteil:
-        return AppPalette.surfaceChild;
+        return Colors.transparent;
     }
   }
-
-  static const BorderRadius groupRadius = BorderRadius.all(Radius.circular(12));
 
   static BoxDecoration groupContainer({
     required bool isExpanded,
     required SystemsOverviewLevel level,
   }) {
-    final accent = accentForLevel(level);
     return BoxDecoration(
       color: backgroundForLevel(level),
       borderRadius: groupRadius,
-      border: Border.all(
-        color: isExpanded
-            ? AppPalette.borderExpanded
-            : AppPalette.borderMuted,
-        width: isExpanded ? 1.25 : 1,
-      ),
-      boxShadow: isExpanded
-          ? [
-              BoxShadow(
-                color: accent.withOpacity(0.08),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
-              ),
-            ]
-          : null,
+      border: Border.all(color: const Color(0xFFE2E8F0)),
     );
   }
 
-  /// Clipped shell so ExpansionTile/Material fills don't spill past rounded corners.
+  /// Äußere Hülle nur für Disziplin/Gruppe. Untergruppen bleiben flach.
   static Widget groupShell({
     required BuildContext context,
     required bool isExpanded,
@@ -84,67 +88,92 @@ class SystemsListTileStyles {
     BorderSide? borderSide,
     required Widget child,
   }) {
-    final accent = accentForLevel(level);
+    final isNested = level == SystemsOverviewLevel.subGroup;
+    final themed = Theme(
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+        listTileTheme: const ListTileThemeData(
+          horizontalTitleGap: leadingGap,
+          minLeadingWidth: leadingBox,
+          minVerticalPadding: 0,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+        ),
+        expansionTileTheme: const ExpansionTileThemeData(
+          backgroundColor: Colors.transparent,
+          collapsedBackgroundColor: Colors.transparent,
+          shape: Border(),
+          collapsedShape: Border(),
+          tilePadding: rowPadding,
+          childrenPadding: EdgeInsets.zero,
+          iconColor: AppPalette.iconMuted,
+          collapsedIconColor: AppPalette.iconMuted,
+        ),
+      ),
+      child: child,
+    );
+
+    if (isNested) {
+      return Padding(
+        padding: margin ?? EdgeInsets.zero,
+        child: themed,
+      );
+    }
+
     final side = borderSide ??
-        BorderSide(
-          color: isExpanded
-              ? AppPalette.borderExpanded
-              : AppPalette.borderMuted,
-          width: isExpanded ? 1.25 : 1,
-        );
+        const BorderSide(color: Color(0xFFE2E8F0), width: 1);
 
     return Container(
       margin: margin,
-      decoration: isExpanded
-          ? BoxDecoration(
-              borderRadius: groupRadius,
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withOpacity(0.08),
-                  blurRadius: 4,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            )
-          : null,
       child: Material(
-        color: backgroundForLevel(level),
+        color: Colors.white,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: groupRadius,
           side: side,
         ),
         clipBehavior: Clip.antiAlias,
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            dividerColor: Colors.transparent,
-            expansionTileTheme: const ExpansionTileThemeData(
-              backgroundColor: Colors.transparent,
-              collapsedBackgroundColor: Colors.transparent,
-              shape: Border(),
-              collapsedShape: Border(),
-            ),
-          ),
-          child: child,
-        ),
+        child: themed,
       ),
     );
   }
 
-  static Widget countBadge(int count, SystemsOverviewLevel level) {
+  /// Einheitliche Leading-Box für alle Ebenen.
+  static Widget leadingIcon({
+    required IconData icon,
+    required SystemsOverviewLevel level,
+    bool emphasized = false,
+  }) {
     final accent = accentForLevel(level);
+    return SizedBox(
+      width: leadingBox,
+      height: leadingBox,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: accent.withOpacity(emphasized ? 0.14 : 0.08),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Icon(icon, color: accent, size: rowIconSize),
+      ),
+    );
+  }
+
+  static Widget countBadge(int count, [SystemsOverviewLevel? level]) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      constraints: const BoxConstraints(minWidth: 22),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: accent.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         '$count',
-        style: TextStyle(
-          fontSize: 12,
+        style: const TextStyle(
+          fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: accent,
+          color: AppPalette.textSecondary,
+          height: 1.2,
         ),
       ),
     );
@@ -154,27 +183,65 @@ class SystemsListTileStyles {
     required bool isExpanded,
     SystemsOverviewLevel level = SystemsOverviewLevel.group,
   }) {
-    return Icon(
-      isExpanded ? Icons.expand_more : Icons.chevron_right,
-      color: isExpanded ? accentForLevel(level) : AppPalette.iconMuted,
-      size: 22,
+    return SizedBox(
+      width: chevronSize,
+      height: chevronSize,
+      child: AnimatedRotation(
+        turns: isExpanded ? 0.25 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: const Icon(
+          Icons.chevron_right,
+          color: AppPalette.iconMuted,
+          size: chevronSize,
+        ),
+      ),
+    );
+  }
+
+  /// Trailing: optional Badge + Chevron, feste Breite für Ausrichtung.
+  static Widget expandTrailing({
+    required bool isExpanded,
+    required SystemsOverviewLevel level,
+    int? count,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (count != null) ...[
+          countBadge(count, level),
+          const SizedBox(width: 6),
+        ],
+        expandIcon(isExpanded: isExpanded, level: level),
+      ],
+    );
+  }
+
+  /// Einrückung mit Führungslinie – feste Stufe, Icons bleiben im Raster.
+  static Widget nestedContent({
+    required Widget child,
+    int depth = 1,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(left: indentStep * depth),
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(
+            left: BorderSide(color: Color(0xFFE8EDF2), width: 1),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(left: indentStep - 1),
+          child: child,
+        ),
+      ),
     );
   }
 
   static Widget disciplineLeading(Disziplin discipline, {bool expanded = false}) {
-    return Container(
-      width: 40,
-      height: 40,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: AppPalette.primary.withOpacity(expanded ? 0.18 : 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Icon(
-        discipline.icon,
-        color: AppPalette.icon,
-        size: 22,
-      ),
+    return leadingIcon(
+      icon: discipline.icon,
+      level: SystemsOverviewLevel.discipline,
+      emphasized: expanded,
     );
   }
 }

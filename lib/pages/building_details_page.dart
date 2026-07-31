@@ -278,18 +278,28 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   }
 
   /// Ebene 1 = Gewerk/Disziplin-Tab; Listen-Gruppierung darunter über Ebene 2.
+  /// Bei „Auflisten nach“-Override: freie Spalte statt Hierarchie in der Liste.
   String? _resolveSystemsGroupingParamKey() {
     final override = _listViewGroupingKey?.trim();
     if (override != null && override.isNotEmpty) return override;
+    return _resolveHierarchyGroupingParamKey();
+  }
+
+  String? _resolveSystemsSubGroupingParamKey() {
+    // Freie Spalten-Ansicht ersetzt die Hierarchie-Untergruppierung in der Liste.
+    final override = _listViewGroupingKey?.trim();
+    if (override != null && override.isNotEmpty) return null;
+    return _resolveHierarchySubGroupingParamKey();
+  }
+
+  /// Hierarchie-Keys für Platzierung/Schema – unabhängig von „Auflisten nach“.
+  String? _resolveHierarchyGroupingParamKey() {
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
     return settings.resolveRevisionsfeldListGroupingParamKey();
   }
 
-  String? _resolveSystemsSubGroupingParamKey() {
-    // Freie Spalten-Ansicht ersetzt die Hierarchie-Untergruppierung.
-    final override = _listViewGroupingKey?.trim();
-    if (override != null && override.isNotEmpty) return null;
+  String? _resolveHierarchySubGroupingParamKey() {
     if (_currentProject.id.isEmpty) return null;
     final settings = ref.read(csvSettingsProvider(_currentProject.id));
     return settings.resolveRevisionsobjektGroupingParamKey();
@@ -1286,7 +1296,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     String? initialRevisionsobjekt,
     Map<String, dynamic>? mergeExtraParams,
   }) async {
-    final subKey = _resolveSystemsSubGroupingParamKey();
+    // Immer Hierarchie-Keys – nicht die Listen-Gruppierung (z. B. Baujahr),
+    // sonst entfällt die Revisionsobjekt-Wahl und das Eingabe-Schema bleibt leer.
+    final subKey = _resolveHierarchySubGroupingParamKey();
     if (subKey == null || subKey.isEmpty) {
       return AnlagePlacementResult(
         discipline: discipline,
@@ -1314,7 +1326,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
         buildingId: _building.id,
         floorId: 'global',
         projectId: _currentProject.id,
-        revisionsfeldGroupingKey: _resolveSystemsGroupingParamKey(),
+        revisionsfeldGroupingKey: _resolveHierarchyGroupingParamKey(),
         revisionsobjektGroupingKey: subKey,
         initialRevisionsfeld: initialRevisionsfeld,
         initialRevisionsobjekt: initialRevisionsobjekt,

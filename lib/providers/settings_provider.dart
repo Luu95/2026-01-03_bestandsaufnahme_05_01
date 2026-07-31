@@ -5,19 +5,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppSettings {
   final ThemeMode themeMode;
   final bool typenschildOcrEnabled;
+  /// Visuelle Markierung der zuletzt geöffneten Anlage in der Liste.
+  final bool highlightLastOpenedAnlage;
 
   const AppSettings({
     this.themeMode = ThemeMode.light,
     this.typenschildOcrEnabled = false,
+    this.highlightLastOpenedAnlage = true,
   });
 
   AppSettings copyWith({
     ThemeMode? themeMode,
     bool? typenschildOcrEnabled,
+    bool? highlightLastOpenedAnlage,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
       typenschildOcrEnabled: typenschildOcrEnabled ?? this.typenschildOcrEnabled,
+      highlightLastOpenedAnlage:
+          highlightLastOpenedAnlage ?? this.highlightLastOpenedAnlage,
     );
   }
 }
@@ -29,12 +35,16 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 
   static const _keyThemeMode = 'settings_theme_mode';
   static const _keyTypenschildOcrEnabled = 'settings_typenschild_ocr_beta';
+  static const _keyHighlightLastOpenedAnlage =
+      'settings_highlight_last_opened_anlage';
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     state = AppSettings(
       themeMode: _themeModeFromKey(prefs.getString(_keyThemeMode)),
       typenschildOcrEnabled: prefs.getBool(_keyTypenschildOcrEnabled) ?? false,
+      highlightLastOpenedAnlage:
+          prefs.getBool(_keyHighlightLastOpenedAnlage) ?? true,
     );
   }
 
@@ -71,6 +81,12 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     state = state.copyWith(typenschildOcrEnabled: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyTypenschildOcrEnabled, value);
+  }
+
+  Future<void> setHighlightLastOpenedAnlage(bool value) async {
+    state = state.copyWith(highlightLastOpenedAnlage: value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyHighlightLastOpenedAnlage, value);
   }
 }
 

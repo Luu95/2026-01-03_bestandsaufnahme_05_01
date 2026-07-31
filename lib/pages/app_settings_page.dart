@@ -78,6 +78,29 @@ class AppSettingsPage extends ConsumerWidget {
                 },
               ),
             ),
+            const SizedBox(height: 16),
+            SettingsCard(
+              color: AppPalette.primary,
+              borderColor: AppPalette.primary.withOpacity(0.25),
+              icon: Icons.history,
+              iconColor: AppPalette.primaryDark,
+              title: 'Anlagenliste',
+              description:
+                  'Steuert die Hervorhebung in der Übersicht der Anlagen.',
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Zuletzt geöffnete Anlage markieren'),
+                subtitle: const Text(
+                  'Hebt die zuletzt aufgerufene Anlage visuell hervor',
+                ),
+                value: settings.highlightLastOpenedAnlage,
+                onChanged: (value) {
+                  ref
+                      .read(settingsProvider.notifier)
+                      .setHighlightLastOpenedAnlage(value);
+                },
+              ),
+            ),
             const SizedBox(height: 24),
             Text(
               'Beta-Funktionen',
