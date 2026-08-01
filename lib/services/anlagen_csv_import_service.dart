@@ -5,6 +5,7 @@ import '../models/anlage.dart';
 import '../models/disziplin_schnittstelle.dart';
 import '../providers/csv_settings_provider.dart';
 import '../utils/csv_column_layout.dart';
+import 'anlage_validation_service.dart';
 import 'csv_service.dart';
 import 'template_service.dart';
 
@@ -113,6 +114,8 @@ class AnlagenCsvImportService {
             anlage.discipline,
             importHeaders: importHeaders,
           );
+          // Importierte Werte sind nicht bestätigt – keinen Listen-Haken setzen.
+          AnlageValidationService.stripFieldConfirmationMeta(cleanedParams);
 
           pendingInserts.add(Anlage(
             id: anlage.id,

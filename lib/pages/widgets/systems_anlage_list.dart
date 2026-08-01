@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/anlage.dart';
 import '../../models/disziplin_schnittstelle.dart';
 import '../../providers/csv_settings_provider.dart';
+import '../../utils/anlage_list_sort.dart';
 import 'systems_list_tile_styles.dart';
 
 typedef AnlageItemBuilder = Widget Function(
@@ -168,17 +169,13 @@ class SystemsAnlageList extends StatelessWidget {
       // Gruppiere Anlagen nach dem Wert des groupingKey Parameters
       final Map<String, List<Anlage>> grouped = {};
       for (final anlage in parents) {
-        final groupValue = anlage.params[effectiveGroupingKey]?.toString() ?? '';
+        final groupValue =
+            groupingValueFromParam(anlage.params[effectiveGroupingKey]);
         grouped.putIfAbsent(groupValue, () => []).add(anlage);
       }
 
       // Sortiere Gruppen nach Key (leerer String kommt zuletzt)
-      final sortedGroupKeys = grouped.keys.toList()
-        ..sort((a, b) {
-          if (a.isEmpty) return 1;
-          if (b.isEmpty) return -1;
-          return a.compareTo(b);
-        });
+      final sortedGroupKeys = orderGroupKeys(grouped.keys);
 
       // Eine Gruppe = Disziplin-Name → Ebene 1 ist schon das Gewerk-Tab, nicht nochmal gruppieren.
       if (sortedGroupKeys.length == 1) {
@@ -412,12 +409,7 @@ class SystemsAnlageList extends StatelessWidget {
       ...withChildren.map((a) => _buildParentWithChildren(a)),
     ];
 
-    final sortedSubKeys = subGroups.keys.toList()
-      ..sort((a, b) {
-        if (a.isEmpty) return 1;
-        if (b.isEmpty) return -1;
-        return a.compareTo(b);
-      });
+    final sortedSubKeys = orderGroupKeys(subGroups.keys);
 
     for (final sk in sortedSubKeys) {
       final items = subGroups[sk]!;

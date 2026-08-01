@@ -341,7 +341,10 @@ class SystemsPageState extends ConsumerState<SystemsPage>
       
       _validationByAnlageId.clear();
       for (final a in filtered) {
-        _validationByAnlageId[a.id] = AnlageValidationService.isAnlageValidated(a);
+        _validationByAnlageId[a.id] = AnlageValidationService.isAnlageValidated(
+          a,
+          csvSettings: csvSettings,
+        );
       }
 
       setState(() {
@@ -1103,7 +1106,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     VoidCallback? onToggleExpanded,
   }) {
     final isSelected = _selectedAnlagenIds.contains(a.id);
-    final isValidated = _validationByAnlageId[a.id] ?? false;
+    final csv = _liveCsvSettings();
+    final isValidated = AnlageValidationService.isAnlageValidated(
+      a,
+      csvSettings: csv,
+    );
+    _validationByAnlageId[a.id] = isValidated;
     final wasLastOpened = _lastOpenedAnlageId == a.id;
     final isLastOpened = wasLastOpened &&
         ref.watch(settingsProvider).highlightLastOpenedAnlage;

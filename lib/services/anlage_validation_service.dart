@@ -1,62 +1,203 @@
 // lib/services/anlage_validation_service.dart
 
 import '../models/anlage.dart';
+import '../providers/csv_settings_provider.dart';
 
 /// Service zur Validierung von Anlagen
 class AnlageValidationService {
   /// Prüft, ob eine Anlage vollständig ausgefüllt und validiert ist.
-  /// Eine Anlage ist validiert, wenn:
-  /// 1. Der Name nicht leer ist
-  /// 2. Alle Schema-Felder der Disziplin in params vorhanden und nicht leer sind
-  /// 3. Felder die als fehlend markiert sind, werden ignoriert
-  static bool isAnlageValidated(Anlage anlage) {
-    // Name muss vorhanden sein
+  ///
+  /// Entspricht dem Anlagendialog: jedes sichtbare Feld muss entweder
+  /// einen grünen Haken (`_field_*_validated`) oder den grauen „fehlt“-Status
+  /// (`_field_*_missing`) haben.
+  ///
+  /// Frisch importierte Anlagen ohne diese Meta-Flags gelten nie als fertig –
+  /// auch dann nicht, wenn Werte aus der CSV schon befüllt sind (grauer Haken
+  /// im Dialog = noch nicht bestätigt).
+  static bool isAnlageValidated(
+    Anlage anlage, {
+    CsvSettings? csvSettings,
+  }) {
     if (anlage.name.trim().isEmpty) {
       return false;
     }
 
-    final schema = anlage.discipline.schema;
-    
-    // Prüfe alle Schema-Felder
+    // Ohne jede Nutzer-Bestätigung kein Listen-Haken (Import-Fall).
+    if (!hasAnyFieldConfirmationMeta(anlage)) {
+      return false;
+    }
+
+    final schema = schemaFieldsForValidation(anlage, csvSettings: csvSettings);
+    if (schema.isEmpty) {
+      return false;
+    }
+
+    var examined = 0;
     for (final fieldDef in schema) {
-      final key = fieldDef['key'];
-      if (key == null) continue;
-      
-      // Überspringe Felder, die als fehlend markiert sind
+      final key = fieldDef['key']?.toString();
+      if (key == null || key.isEmpty) continue;
+      examined++;
+
       if (isFieldMarkedAsMissing(anlage, key)) {
         continue;
       }
-      
-      // Prüfe ob das Feld in params existiert
-      if (!anlage.params.containsKey(key)) {
-        return false;
-      }
-      
-      final value = anlage.params[key];
-      
-      // Prüfe ob der Wert nicht leer ist
-      if (value == null || 
+
+      final label = fieldDef['label']?.toString();
+      final value = _fieldValue(anlage, key, label, csvSettings);
+
+      if (value == null ||
           value.toString().trim().isEmpty ||
           value.toString().trim() == 'null') {
         return false;
       }
-      
-      // Wenn Feld befüllt ist, muss es auch als validiert markiert sein
+
+      // Grauer Haken im Dialog = Wert da, aber nicht bestätigt → nicht fertig
       if (!isFieldValidated(anlage, key)) {
         return false;
       }
     }
-    
-    return true;
+
+    // Schema-Einträge ohne Keys dürfen keinen Haken erzeugen
+    return examined > 0;
+  }
+
+  /// True, wenn mindestens ein Feld explizit bestätigt oder als fehlend markiert wurde.
+  static bool hasAnyFieldConfirmationMeta(Anlage anlage) {
+    for (final entry in anlage.params.entries) {
+      final k = entry.key.toString();
+      if (!k.startsWith('_field_')) continue;
+      if (!k.endsWith('_validated') && !k.endsWith('_missing')) continue;
+      if (entry.value == true) return true;
+    }
+    return false;
+  }
+
+  /// Entfernt alle Feld-Validierungs-/Missing-Flags (z. B. nach CSV-Import).
+  static void stripFieldConfirmationMeta(Map<String, dynamic> params) {
+    final keys = params.keys
+        .map((k) => k.toString())
+        .where(
+          (k) =>
+              k.startsWith('_field_') &&
+              (k.endsWith('_validated') || k.endsWith('_missing')),
+        )
+        .toList();
+    for (final k in keys) {
+      params.remove(k);
+    }
+    params.remove('_validated');
+    params.remove('_validatedAt');
+  }
+
+  /// Schema-Felder wie im Anlagendialog (RO-effektiv, gefiltert).
+  static List<Map<String, dynamic>> schemaFieldsForValidation(
+    Anlage anlage, {
+    CsvSettings? csvSettings,
+  }) {
+    final ro = _resolveRevisionsobjekt(anlage, csvSettings);
+    final discipline = anlage.discipline;
+
+    List<Map<String, dynamic>> fields;
+    if (ro != null && ro.isNotEmpty) {
+      fields = discipline.effectiveSchemaFor(revisionsobjekt: ro);
+      final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
+      if (nonGlobal.isEmpty) {
+        final legacy = discipline.legacyIndividualSchemaFields;
+        if (legacy.isNotEmpty) {
+          fields = [...discipline.globalSchemaFields, ...legacy];
+        }
+      }
+    } else {
+      fields = List<Map<String, dynamic>>.from(discipline.schema);
+    }
+
+    fields = CsvSettings.filterSchemaFieldsForDialog(fields);
+
+    if (csvSettings != null) {
+      fields = fields.where((f) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isEmpty) return true;
+        return !csvSettings.isHierarchyParamKey(key) &&
+            !csvSettings.isLeafNameParamKey(key);
+      }).toList();
+    }
+
+    // Import: Felder nur in Params, noch nicht im Disziplin-Schema
+    if (fields.where((f) => f['isGlobal'] != true).isEmpty) {
+      final fromParams = CsvSettings.schemaFieldsFromParams(
+        anlage.params,
+        settings: csvSettings,
+      );
+      if (fromParams.isNotEmpty) {
+        fields = CsvSettings.filterSchemaFieldsForDialog([
+          ...discipline.globalSchemaFields,
+          ...fromParams,
+        ]);
+        if (csvSettings != null) {
+          fields = fields.where((f) {
+            final key = (f['key'] ?? '').toString();
+            if (key.isEmpty) return true;
+            return !csvSettings.isHierarchyParamKey(key) &&
+                !csvSettings.isLeafNameParamKey(key);
+          }).toList();
+        }
+      }
+    }
+
+    return fields;
+  }
+
+  static String? _resolveRevisionsobjekt(
+    Anlage anlage,
+    CsvSettings? csvSettings,
+  ) {
+    if (csvSettings != null) {
+      final fromSettings =
+          csvSettings.schemaItemValueFromParams(anlage.params)?.trim() ??
+              csvSettings.revisionsobjektValueFromParams(anlage.params)?.trim();
+      if (fromSettings != null && fromSettings.isNotEmpty) {
+        return fromSettings;
+      }
+    }
+
+    for (final legacyKey in CsvSettings.legacySchemaItemParamKeys) {
+      final value = anlage.params[legacyKey]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    final roKeys = anlage.discipline.revisionsobjektSchemas.keys.toList();
+    if (roKeys.length == 1) return roKeys.first;
+
+    return null;
+  }
+
+  static dynamic _fieldValue(
+    Anlage anlage,
+    String key,
+    String? label,
+    CsvSettings? csvSettings,
+  ) {
+    if (csvSettings != null) {
+      final fromKey = csvSettings.paramValueForKey(anlage.params, key);
+      if (fromKey != null && fromKey.trim().isNotEmpty) return fromKey;
+      final labelTrim = label?.trim() ?? '';
+      if (labelTrim.isNotEmpty) {
+        final fromLabel =
+            csvSettings.paramValueForKey(anlage.params, labelTrim);
+        if (fromLabel != null && fromLabel.trim().isNotEmpty) return fromLabel;
+      }
+    }
+
+    if (anlage.params.containsKey(key)) {
+      return anlage.params[key];
+    }
+    return null;
   }
 
   /// Setzt den Validierungsstatus einer Anlage
   static Anlage setValidatedStatus(Anlage anlage, bool validated) {
     final updatedParams = Map<String, dynamic>.from(anlage.params);
-    // Historisch wurden hier Meta-Felder (_validated, _validatedAt) gesetzt.
-    // Diese werden nicht mehr verwendet und daher auch nicht mehr geschrieben.
-    // Existierende Meta-Felder in params bleiben unangetastet, werden aber ignoriert.
-    
+
     return Anlage(
       id: anlage.id,
       parentId: anlage.parentId,
@@ -72,42 +213,44 @@ class AnlageValidationService {
   }
 
   /// Liest den gespeicherten Validierungsstatus (prüft auch automatisch)
-  static bool getValidatedStatus(Anlage anlage) {
-    // Ignoriere ggf. vorhandene Meta-Felder (_validated, _validatedAt) und
-    // verwende ausschließlich die aktuelle Feld-Validierungslogik.
-    return isAnlageValidated(anlage);
+  static bool getValidatedStatus(
+    Anlage anlage, {
+    CsvSettings? csvSettings,
+  }) {
+    return isAnlageValidated(anlage, csvSettings: csvSettings);
   }
 
-  /// Zählt fehlende Felder für eine Anlage (ignoriert als fehlend markierte Felder)
-  static int getMissingFieldsCount(Anlage anlage) {
+  /// Zählt fehlende / unbestätigte Felder (ignoriert als fehlend markierte Felder)
+  static int getMissingFieldsCount(
+    Anlage anlage, {
+    CsvSettings? csvSettings,
+  }) {
+    final schema = schemaFieldsForValidation(anlage, csvSettings: csvSettings);
+
     if (anlage.name.trim().isEmpty) {
-      return anlage.discipline.schema.length + 1; // Name + alle Schema-Felder
+      return schema.length + 1;
     }
-    
+
     int missing = 0;
-    final schema = anlage.discipline.schema;
-    
     for (final fieldDef in schema) {
-      final key = fieldDef['key'];
-      if (key == null) continue;
-      
-      // Überspringe Felder, die als fehlend markiert sind
+      final key = fieldDef['key']?.toString();
+      if (key == null || key.isEmpty) continue;
+
       if (isFieldMarkedAsMissing(anlage, key)) {
         continue;
       }
-      
-      if (!anlage.params.containsKey(key)) {
+
+      final label = fieldDef['label']?.toString();
+      final value = _fieldValue(anlage, key, label, csvSettings);
+      if (value == null ||
+          value.toString().trim().isEmpty ||
+          value.toString().trim() == 'null') {
         missing++;
-      } else {
-        final value = anlage.params[key];
-        if (value == null || 
-            value.toString().trim().isEmpty ||
-            value.toString().trim() == 'null') {
-          missing++;
-        }
+      } else if (!isFieldValidated(anlage, key)) {
+        missing++;
       }
     }
-    
+
     return missing;
   }
 
@@ -126,10 +269,9 @@ class AnlageValidationService {
     final updatedParams = Map<String, dynamic>.from(anlage.params);
     updatedParams['_field_${fieldKey}_validated'] = validated;
     if (!validated) {
-      // Wenn Validierung entfernt wird, auch fehlend-Status entfernen
       updatedParams.remove('_field_${fieldKey}_missing');
     }
-    
+
     return Anlage(
       id: anlage.id,
       parentId: anlage.parentId,
@@ -149,10 +291,9 @@ class AnlageValidationService {
     final updatedParams = Map<String, dynamic>.from(anlage.params);
     updatedParams['_field_${fieldKey}_missing'] = missing;
     if (missing) {
-      // Wenn als fehlend markiert, Validierung entfernen
       updatedParams.remove('_field_${fieldKey}_validated');
     }
-    
+
     return Anlage(
       id: anlage.id,
       parentId: anlage.parentId,
@@ -168,11 +309,11 @@ class AnlageValidationService {
   }
 
   /// Prüft, ob eine Anlage fehlende Parameter hat (Felder die als fehlend markiert sind)
-  static bool hasMissingParameters(Anlage anlage) {
-    final schema = anlage.discipline.schema;
+  static bool hasMissingParameters(Anlage anlage, {CsvSettings? csvSettings}) {
+    final schema = schemaFieldsForValidation(anlage, csvSettings: csvSettings);
     for (final fieldDef in schema) {
-      final key = fieldDef['key'];
-      if (key == null) continue;
+      final key = fieldDef['key']?.toString();
+      if (key == null || key.isEmpty) continue;
       if (isFieldMarkedAsMissing(anlage, key)) {
         return true;
       }
@@ -181,12 +322,15 @@ class AnlageValidationService {
   }
 
   /// Zählt die Anzahl der als fehlend markierten Felder
-  static int getMissingParametersCount(Anlage anlage) {
+  static int getMissingParametersCount(
+    Anlage anlage, {
+    CsvSettings? csvSettings,
+  }) {
     int count = 0;
-    final schema = anlage.discipline.schema;
+    final schema = schemaFieldsForValidation(anlage, csvSettings: csvSettings);
     for (final fieldDef in schema) {
-      final key = fieldDef['key'];
-      if (key == null) continue;
+      final key = fieldDef['key']?.toString();
+      if (key == null || key.isEmpty) continue;
       if (isFieldMarkedAsMissing(anlage, key)) {
         count++;
       }
@@ -194,4 +338,3 @@ class AnlageValidationService {
     return count;
   }
 }
-
