@@ -111,6 +111,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
   String? _listViewGroupingKey;
   List<String> _listViewParamKeys = [];
 
+  /// Sentinel für PopupMenu: `value: null` wird von Flutter als Abbruch
+  /// gewertet und ruft `onSelected` nicht auf.
+  static const _listViewStandardGroupingValue = '__standard__';
+
   void _showProviderError(Object e) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1877,7 +1881,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Wenn du die Disziplin löschst, werden auch alle zugehörigen Anlagen unwiderruflich gelöscht.',
+                  'Wenn du die Disziplin löschst, werden die zugehörigen Anlagen in den Papierkorb verschoben. Die Disziplin selbst wird entfernt (kein Soft-Delete für Gewerke).',
                   style: TextStyle(
                     fontSize: 14,
                     color: Colors.grey[700],
@@ -1887,7 +1891,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Diese Aktion kann nicht rückgängig gemacht werden',
+                  'Anlagen können aus dem Papierkorb wiederhergestellt werden',
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey[600],
@@ -1935,7 +1939,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                           elevation: 0,
                         ),
                         child: const Text(
-                          'Alles löschen',
+                          'Löschen',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 15,
@@ -1952,10 +1956,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       );
       if (confirmed != true) return;
 
-      // Anlagen endgültig aus der Datenbank löschen
+      // Anlagen soft-deleten → Papierkorb (Disziplin-Zeile selbst hat kein Soft-Delete)
       for (final entry in anlagenPerLabel.entries) {
         for (final a in entry.value) {
-          await dbService.hardDeleteAnlage(a.id);
+          await dbService.deleteAnlage(a.id);
         }
       }
     } else {
@@ -2189,7 +2193,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           ),
           overflow: TextOverflow.ellipsis,
         ),
-        actions: const [],
+        actions: _buildAppBarActions(
+          inSelectionMode: inSelectionMode,
+          isTechnikTab: isTechnikTab,
+          onSurface: onSurface,
+        ),
       ),
       body: TabBarView(
         controller: _tabController,
@@ -2249,14 +2257,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
             systemsGroupingKey: _resolveSystemsGroupingParamKey(),
             systemsSubGroupingKey: _resolveSystemsSubGroupingParamKey(),
             systemsDisplayNameParamKey: _resolveSystemsDisplayNameParamKey(),
-            listViewGroupingKey: _listViewGroupingKey,
-            listViewParamKeys: _listViewParamKeys,
-            onListViewGroupingChanged: (key) {
-              setState(() {
-                _listViewGroupingKey = key;
-                _technikTabKey = UniqueKey();
-              });
-            },
             labelGewerk: _currentProject.id.isNotEmpty
                 ? ref.read(csvSettingsProvider(_currentProject.id)).labelGewerk
                 : 'Gewerk',
@@ -2337,6 +2337,52 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       ),
       ),
     );
+  }
+
+  /// Erstellt elegante Floating Action Buttons rechts unten basierend auf dem Selection-Mode
+  List<Widget> _buildAppBarActions({
+    required bool inSelectionMode,
+    required bool isTechnikTab,
+    required Color onSurface,
+  }) {
+    if (inSelectionMode) return const [];
+    if (!isTechnikTab || _listViewParamKeys.isEmpty) return const [];
+
+    final current = _listViewGroupingKey;
+    final isCustom =
+        current != null && _listViewParamKeys.contains(current);
+
+    return [
+      PopupMenuButton<String>(
+        tooltip: 'Auflisten nach',
+        offset: const Offset(0, 40),
+        icon: Icon(
+          Icons.sort,
+          color: isCustom ? AppPalette.primary : onSurface.withOpacity(0.75),
+        ),
+        onSelected: (key) {
+          setState(() {
+            _listViewGroupingKey =
+                key == _listViewStandardGroupingValue ? null : key;
+            _technikTabKey = UniqueKey();
+          });
+        },
+        itemBuilder: (context) => [
+          CheckedPopupMenuItem<String>(
+            value: _listViewStandardGroupingValue,
+            checked: !isCustom,
+            child: const Text('Standard (Hierarchie)'),
+          ),
+          const PopupMenuDivider(),
+          for (final key in _listViewParamKeys)
+            CheckedPopupMenuItem<String>(
+              value: key,
+              checked: current == key,
+              child: Text(key),
+            ),
+        ],
+      ),
+    ];
   }
 
   /// Erstellt elegante Floating Action Buttons rechts unten basierend auf dem Selection-Mode
@@ -2595,21 +2641,11 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               ),
               const SizedBox(height: 16),
               Text(
-                'Möchtest du diese wirklich löschen?',
+                'Die ausgewählten Anlagen werden in den Papierkorb verschoben und können von dort wiederhergestellt werden.',
                 style: TextStyle(
                   fontSize: 15,
                   color: Colors.grey[700],
                   height: 1.5,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Diese Aktion kann nicht rückgängig gemacht werden',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                  fontStyle: FontStyle.italic,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -2653,7 +2689,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
                         elevation: 0,
                       ),
                       child: const Text(
-                        'Löschen',
+                        'In Papierkorb',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 15,
@@ -2669,7 +2705,7 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
       ),
     );
     if (confirmed == true) {
-      // Lösche alle ausgewählten Anlagen aus allen aktiven Gewerken
+      // Soft-Delete: ausgewählte Anlagen aus allen aktiven Gewerken → Papierkorb
       final activeDisciplines = _activeSelections.keys.toList();
       for (final label in activeDisciplines) {
         try {

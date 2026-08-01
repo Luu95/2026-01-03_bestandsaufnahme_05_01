@@ -182,8 +182,9 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
       ) ?? false;
 
       if (confirmed) {
+        // Soft-Delete der Anlagen → Papierkorb
         for (final anlage in anlagen) {
-          await dbService.hardDeleteAnlage(anlage.id);
+          await dbService.deleteAnlage(anlage.id);
         }
       }
     } else {
@@ -192,6 +193,8 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
 
     if (!confirmed) return;
 
+    // Disziplin-Metadaten: bewusst Hard-Delete – es gibt keinen Papierkorb/Soft-Delete
+    // für Gewerke; zugehörige Anlagen wurden oben soft-gelöscht.
     setState(() {
       disziplinen.removeAt(idx);
       _selectedDisziplinLabels.remove(d.label);
@@ -205,10 +208,12 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Alle Anlagen löschen?'),
-        content: const Text('Diese Aktion kann nicht rückgängig gemacht werden.'),
+        content: const Text(
+          'Die Anlagen werden in den Papierkorb verschoben und können von dort wiederhergestellt werden.',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Abbrechen')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Alle löschen')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('In Papierkorb')),
         ],
       ),
     ) ?? false;
@@ -218,7 +223,7 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     for (final d in disziplinen) {
       final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(widget.buildingId, d.label);
       for (final anlage in anlagen) {
-        await dbService.hardDeleteAnlage(anlage.id);
+        await dbService.deleteAnlage(anlage.id);
       }
     }
   }
@@ -228,6 +233,9 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Ausgewählte löschen?'),
+        content: const Text(
+          'Zugehörige Anlagen werden in den Papierkorb verschoben. Die Gewerke selbst werden entfernt (kein Soft-Delete für Disziplinen).',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Abbrechen')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Löschen')),
@@ -241,8 +249,9 @@ class _DisziplinManagerWidgetState extends ConsumerState<DisziplinManagerWidget>
     final toDeleteLabels = _selectedDisziplinLabels.toList();
     for (final label in toDeleteLabels) {
       final anlagen = await dbService.getAnlagenByBuildingIdAndDiscipline(widget.buildingId, label);
+      // Soft-Delete Anlagen; Disziplin-Zeile folgt unten als Hard-Delete (kein Papierkorb für Gewerke).
       for (final anlage in anlagen) {
-        await dbService.hardDeleteAnlage(anlage.id);
+        await dbService.deleteAnlage(anlage.id);
       }
     }
 

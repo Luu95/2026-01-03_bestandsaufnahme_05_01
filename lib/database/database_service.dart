@@ -813,6 +813,10 @@ class DatabaseService {
 
   Future<void> restoreAnlage(String id) async {
     await _db.restoreAnlage(id);
+    final childrenRows = await _db.getAnlagenByParentIdIncludingDeleted(id);
+    for (final childRow in childrenRows) {
+      await restoreAnlage(childRow.id);
+    }
     final row = await _db.getAnlageByIdIncludingDeleted(id);
     if (row != null) _invalidateAnlagenListCache(row.buildingId);
   }
@@ -1075,6 +1079,36 @@ class DatabaseService {
       bezeichnung: bezeichnung,
       parameter: parameter != null ? Value(parameter) : const Value.absent(),
     ));
+  }
+
+  /// Ersetzt alle Vorlagen eines Projekts atomar (Delete + Inserts in einer Transaktion).
+  /// Bei Fehler bleibt der vorherige Bestand erhalten (Rollback).
+  Future<void> replaceTemplatesForProject(
+    String projectId,
+    List<
+            ({
+              String gewerk,
+              String anlageBauteil,
+              String anlagentyp,
+              String bezeichnung,
+              String? parameter,
+            })>
+        templates,
+  ) async {
+    await _db.transaction(() async {
+      await _db.deleteTemplatesByProjectId(projectId);
+      for (final t in templates) {
+        await _db.insertTemplate(TemplatesCompanion.insert(
+          projectId: projectId,
+          gewerk: t.gewerk,
+          anlageBauteil: t.anlageBauteil,
+          anlagentyp: t.anlagentyp,
+          bezeichnung: t.bezeichnung,
+          parameter:
+              t.parameter != null ? Value(t.parameter!) : const Value.absent(),
+        ));
+      }
+    });
   }
 
   /// Löscht alle Templates für ein Projekt

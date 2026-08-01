@@ -463,15 +463,19 @@ class TemplateService {
         csvData[0].map((cell) => cell.toString().trim()).toList();
     await CsvSettings.saveImportHeaderRowForProject(projectId, importHeaderRow);
 
-    // Lösche alle bestehenden Vorlagen für dieses Projekt
-    await dbService.deleteTemplatesByProjectId(projectId);
-
     // Sammle alle eindeutigen Gewerke aus den Vorlagen
     // (nicht nur "a", damit auch bei unvollständigen Vorlagen Disziplinen entstehen)
     final uniqueGewerke = <String>{};
-    
-    // Parse Datenzeilen und speichere direkt in DB
-    int count = 0;
+
+    // Zuerst vollständig parsen; DB-Schreiben erst danach atomar (kein leerer Zwischenstand)
+    final pendingTemplates = <
+        ({
+          String gewerk,
+          String anlageBauteil,
+          String anlagentyp,
+          String bezeichnung,
+          String? parameter,
+        })>[];
     int skipped = 0;
     var dataRowIndex = 0;
     for (var i = 1; i < csvData.length; i++) {
@@ -491,17 +495,14 @@ class TemplateService {
             headerRow: importHeaderRow,
             rowIndex: dataRowIndex,
           );
-          await dbService.insertTemplate(
-            projectId,
-            template.gewerk,
-            '',
-            template.anlagentyp,
-            template.bezeichnung,
-            parameterJson.isEmpty ? null : parameterJson,
-          );
-          
+          pendingTemplates.add((
+            gewerk: template.gewerk,
+            anlageBauteil: '',
+            anlagentyp: template.anlagentyp,
+            bezeichnung: template.bezeichnung,
+            parameter: parameterJson.isEmpty ? null : parameterJson,
+          ));
           uniqueGewerke.add(template.gewerk);
-          count++;
           dataRowIndex++;
         } else {
           skipped++;
@@ -511,6 +512,9 @@ class TemplateService {
         skipped++;
       }
     }
+
+    await dbService.replaceTemplatesForProject(projectId, pendingTemplates);
+    final count = pendingTemplates.length;
 
     appLog(
       'Vorlagen-Import abgeschlossen: projectId=$projectId, valid=$count, skipped=$skipped, delimiter=$delimiter, requiredMaxIndex=$requiredMaxIndex, uniqueGewerke=${uniqueGewerke.length}',

@@ -502,9 +502,9 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     final dbService = ref.read(databaseServiceProvider);
     final toDeleteIds = _selectedAnlagenIds.toList();
 
-    // Endgültig aus der DB (inkl. Kinder/Bauteile)
+    // Soft-Delete → Papierkorb (inkl. Kinder/Bauteile)
     for (final id in toDeleteIds) {
-      await dbService.hardDeleteAnlage(id);
+      await dbService.deleteAnlage(id);
     }
 
     setState(() {

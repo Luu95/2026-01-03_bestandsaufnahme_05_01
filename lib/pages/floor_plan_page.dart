@@ -886,7 +886,8 @@ class _FloorPlanFullScreenState extends State<FloorPlanFullScreen> {
             await _loadAllAnlagen();
           },
           onDelete: (Marker toDelete) async {
-            await widget.dbService.hardDeleteAnlage(a.id);
+            // Soft-Delete → Papierkorb (Hard-Delete nur im Papierkorb mit Namens-Confirm)
+            await widget.dbService.deleteAnlage(a.id);
             setState(() {
               _allAnlagen.removeWhere((e) => e.id == a.id);
             });

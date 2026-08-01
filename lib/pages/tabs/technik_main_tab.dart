@@ -49,11 +49,6 @@ class TechnikMainTab extends StatefulWidget {
   /// Param-Key für Anzeigenamen einzelner Anlagen.
   final String? systemsDisplayNameParamKey;
 
-  /// Freie Listen-Gruppierung (null = Hierarchie-Standard).
-  final String? listViewGroupingKey;
-  final List<String> listViewParamKeys;
-  final ValueChanged<String?>? onListViewGroupingChanged;
-
   /// Anzeige-Labels aus CSV-Einstellungen (Gewerk / Blatt-Ebene).
   final String labelGewerk;
   final String labelLeafLevel;
@@ -86,9 +81,6 @@ class TechnikMainTab extends StatefulWidget {
     this.systemsGroupingKey,
     this.systemsSubGroupingKey,
     this.systemsDisplayNameParamKey,
-    this.listViewGroupingKey,
-    this.listViewParamKeys = const [],
-    this.onListViewGroupingChanged,
     this.labelGewerk = 'Gewerk',
     this.labelLeafLevel = 'Anlage',
     this.labelGewerkPlural = 'Gewerke',
@@ -218,17 +210,10 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
 
     // Ebene 1 immer als Knoten zeigen (auch bei nur einem Gewerk),
     // damit gemeinsame Ebene-1-Werte (z. B. gleiches Revisionsfeld) sichtbar sind.
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (widget.listViewParamKeys.isNotEmpty &&
-            widget.onListViewGroupingChanged != null)
-          _buildListViewGroupingBar(context),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(bottom: 88, top: 4),
-            itemCount: disziplinen.length,
-            itemBuilder: (context, index) {
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 88, top: 4),
+      itemCount: disziplinen.length,
+      itemBuilder: (context, index) {
               final discipline = disziplinen[index];
               final isOnlyDiscipline = disziplinen.length == 1;
               final isExpanded = isOnlyDiscipline ||
@@ -333,52 +318,6 @@ class _TechnikMainTabState extends State<TechnikMainTab> {
                 ),
               );
             },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildListViewGroupingBar(BuildContext context) {
-    final current = widget.listViewGroupingKey;
-    return Material(
-      color: Theme.of(context).scaffoldBackgroundColor,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-        child: InputDecorator(
-          decoration: InputDecoration(
-            labelText: 'Auflisten nach',
-            isDense: true,
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String?>(
-              isExpanded: true,
-              isDense: true,
-              value: current != null &&
-                      widget.listViewParamKeys.contains(current)
-                  ? current
-                  : null,
-              hint: const Text('Standard (Hierarchie)'),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('Standard (Hierarchie)'),
-                ),
-                for (final key in widget.listViewParamKeys)
-                  DropdownMenuItem<String?>(
-                    value: key,
-                    child: Text(key),
-                  ),
-              ],
-              onChanged: widget.onListViewGroupingChanged,
-            ),
-          ),
-        ),
-      ),
     );
   }
 
