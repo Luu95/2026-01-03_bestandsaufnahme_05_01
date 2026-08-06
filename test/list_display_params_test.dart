@@ -79,4 +79,42 @@ void main() {
     };
     expect(csv.listTitleValueFromParams(params), 'T-55');
   });
+
+  test('clearPlaceholder löscht keinen RO-gleichen Nutzerwert', () {
+    final csv = _settings().copyWith(displayNameParamKey: 'Türnummer');
+    final params = <String, dynamic>{
+      'Türnummer': 'Brandschutztür',
+      'Revisionsobjekt': 'Brandschutztür',
+    };
+    csv.clearPlaceholderDisplayNameFromParams(params);
+    expect(params['Türnummer'], 'Brandschutztür');
+  });
+
+  test('clearPlaceholder löscht echtes Platzhalter-Label', () {
+    final csv = _settings().copyWith(displayNameParamKey: 'Türnummer');
+    final params = <String, dynamic>{'Türnummer': 'Eintrag'};
+    csv.clearPlaceholderDisplayNameFromParams(params);
+    expect(params['Türnummer'], '');
+  });
+
+  test('__listTitle wird in leeres Eingabefeld 1 zurückgeschrieben', () {
+    final csv = _settings(titleField: 1);
+    final params = <String, dynamic>{
+      CsvSettings.listTitleParamKey: 'T-99',
+      'Türnummer': '',
+      'Hersteller': 'Wilo',
+    };
+    csv.restoreListTitleIntoInputField(params, schemaFields: schema);
+    expect(params['Türnummer'], 'T-99');
+  });
+
+  test('restore überschreibt befülltes Feld nicht', () {
+    final csv = _settings(titleField: 1);
+    final params = <String, dynamic>{
+      CsvSettings.listTitleParamKey: 'Alt',
+      'Türnummer': 'Neu',
+    };
+    csv.restoreListTitleIntoInputField(params, schemaFields: schema);
+    expect(params['Türnummer'], 'Neu');
+  });
 }

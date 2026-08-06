@@ -374,11 +374,24 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     _applyRevisionsobjektPrefill();
     _applyEffectiveSchemaFromParams();
     _sanitizeAnlagenImportParamsAndSchema();
+    _restoreListTitleIntoTitleField();
     } finally {
       if (mounted) {
         setState(() => _isDataReady = true);
       }
     }
+  }
+
+  /// Wenn Eingabefeld N (Listen-Titel) leer ist, aber `__listTitle` einen Wert
+  /// hat (z. B. nach früherem Clear beim Speichern), Wert zurückschreiben –
+  /// bevor Controller in `_buildSchemaFields` erzeugt werden.
+  void _restoreListTitleIntoTitleField() {
+    final csv = _csvSettings;
+    if (csv == null) return;
+    csv.restoreListTitleIntoInputField(
+      _params,
+      schemaFields: _dialogSchemaFields(),
+    );
   }
 
   void _setParamAndController(String key, String value) {
@@ -2175,8 +2188,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     }
 
     // Nach Repair: sichtbare Controller an bereinigte Params anpassen
+    // (fuzzy Key-Match wie bei der Feldanzeige – nicht nur exakter Map-Key).
     for (final entry in _controllers.entries) {
-      final desired = _params[entry.key]?.toString() ?? '';
+      final key = entry.key;
+      var label = key;
+      for (final f in _currentDiscipline.schema) {
+        if ((f['key'] ?? '').toString() == key) {
+          label = (f['label'] ?? key).toString();
+          break;
+        }
+      }
+      final desired = _textForSchemaField(key, label);
       if (entry.value.text != desired) {
         entry.value.text = desired;
       }
@@ -2440,6 +2462,13 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
             : _textForSchemaField(key, label);
         if (_controllers[key]!.text != locked) {
           _controllers[key]!.text = locked;
+        }
+      } else if (_controllers[key]!.text.trim().isEmpty) {
+        // Nach asynchronem Prefill/Restore: leeren Controller einmalig befüllen,
+        // ohne laufende Nutzereingaben zu überschreiben.
+        final desired = _textForSchemaField(key, label);
+        if (desired.isNotEmpty) {
+          _controllers[key]!.text = desired;
         }
       }
       final controller = _controllers[key]!;

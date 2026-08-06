@@ -1862,17 +1862,69 @@ class CsvSettings {
     }
   }
 
-  /// Entfernt versehentlich gespeicherte Ebenen-/Schema-Platzhalter aus dem Titel-Param.
+  /// Entfernt nur echte Platzhalter-Labels (z. B. „Eintrag“, Ebenen-Label)
+  /// aus dem Legacy-Titel-Param – nicht Nutzerwerte, die zufällig dem
+  /// Revisionsobjekt gleichen (sonst wird Eingabefeld 1 beim Speichern geleert).
   void clearPlaceholderDisplayNameFromParams(Map<String, dynamic> params) {
     final key = resolveDisplayNameParamKey()?.trim();
     if (key == null || key.isEmpty) return;
     for (final entry in params.entries.toList()) {
       final paramKey = entry.key.toString();
       if (!paramKeysMatch(paramKey, key) && paramKey != key) continue;
-      if (isNonDistinctDisplayValue(entry.value?.toString(), params)) {
+      if (isPlaceholderDisplayValue(entry.value?.toString())) {
         params[paramKey] = '';
       }
     }
+  }
+
+  /// Schreibt [listTitleParamKey] zurück in Eingabefeld N, falls dieses leer ist.
+  /// Repariert Daten, bei denen der Listen-Titel gespeichert, das Feld aber geleert wurde.
+  void restoreListTitleIntoInputField(
+    Map<String, dynamic> params, {
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    final stored = params[listTitleParamKey]?.toString().trim() ?? '';
+    if (stored.isEmpty || stored == unknownAnlageListLabel) return;
+
+    final index =
+        listTitleInputFieldIndex < 1 ? 1 : listTitleInputFieldIndex;
+    final current = valueAtListInputFieldIndex(
+      params,
+      fieldIndex1Based: index,
+      schemaFields: schemaFields,
+    );
+    if (current != null && current.isNotEmpty) return;
+
+    String? targetKey;
+    final fields = listInputFieldsFromSchema(schemaFields);
+    if (fields.isNotEmpty) {
+      for (final field in fields) {
+        final slot = attSlotFromSchemaField(field);
+        if (slot != index) continue;
+        final key = (field['key'] ?? '').toString().trim();
+        if (key.isNotEmpty) {
+          targetKey = key;
+          break;
+        }
+      }
+      if ((targetKey == null || targetKey.isEmpty) &&
+          index <= fields.length) {
+        final key = (fields[index - 1]['key'] ?? '').toString().trim();
+        if (key.isNotEmpty) targetKey = key;
+      }
+    }
+    if (targetKey == null || targetKey.isEmpty) {
+      for (final entry in params.entries) {
+        final k = entry.key.toString();
+        if (!isAttSlotParamKey(k)) continue;
+        final slot = int.tryParse(entry.value?.toString() ?? '');
+        if (slot != index) continue;
+        targetKey = k.substring(attSlotParamKeyPrefix.length);
+        break;
+      }
+    }
+    if (targetKey == null || targetKey.isEmpty) return;
+    params[targetKey] = stored;
   }
 
   /// Param-Key der Ebene, deren Wert das Attribut-Schema bestimmt.
