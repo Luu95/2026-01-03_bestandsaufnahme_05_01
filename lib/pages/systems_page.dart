@@ -1043,8 +1043,30 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }
 
   String _resolveListDisplayName(Anlage anlage) {
-    return _resolveDisplayNameValue(anlage, anlage.discipline) ??
-        CsvSettings.unknownAnlageListLabel;
+    final csv = _liveCsvSettings();
+    // 1) Explizit beim Speichern gesetzter Titel
+    final stored =
+        anlage.params[CsvSettings.listTitleParamKey]?.toString().trim() ?? '';
+    if (stored.isNotEmpty) return stored;
+
+    // 2) Auflösung über Eingabefeld-Index / Schema
+    final resolved = _resolveDisplayNameValue(anlage, anlage.discipline);
+    if (resolved != null &&
+        resolved.isNotEmpty &&
+        resolved != CsvSettings.unknownAnlageListLabel) {
+      return resolved;
+    }
+
+    // 3) Gespeicherter Anlagenname (wenn kein Platzhalter)
+    final name = anlage.name.trim();
+    if (name.isNotEmpty &&
+        name != CsvSettings.unknownAnlageListLabel &&
+        name != 'Eintrag' &&
+        (csv == null || !csv.hasListNamePlaceholder(anlage.params))) {
+      return name;
+    }
+
+    return CsvSettings.unknownAnlageListLabel;
   }
 
   String? _resolvePreviewText(

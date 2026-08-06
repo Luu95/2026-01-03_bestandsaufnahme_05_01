@@ -570,37 +570,42 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     return CsvSettings.paramKeysMatch(key, leaf);
   }
 
-  /// Anzeigename der Anlage für [Anlage.name] = konfiguriertes Eingabefeld.
+  /// Anzeigename = Wert von Eingabefeld N (gleiche Reihenfolge wie im Dialog,
+  /// nur editierbare Felder – gesperrte Hierarchie zählt nicht mit).
   String _resolvePersistedName() {
     final csv = _csvSettings;
     if (csv == null) return '';
-    final ro = _resolveRevisionsobjektFromParams()?.trim() ??
-        widget.initialRevisionsobjekt?.trim() ??
-        '';
-    final schema = _currentDiscipline.effectiveSchemaFor(
-      revisionsobjekt: ro.isNotEmpty ? ro : null,
-    );
-    // Dialog-Filter analog zu sichtbaren Eingabefeldern
-    final inputFields = csv.listInputFieldsFromSchema(
-      schema.where((f) {
-        final key = (f['key'] ?? '').toString();
-        if (key.isEmpty) return true;
-        return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
-      }).toList(),
-    );
-    final index = csv.listTitleInputFieldIndex < 1 ? 1 : csv.listTitleInputFieldIndex;
-    if (inputFields.isEmpty || index > inputFields.length) {
-      // Fallback über generische Auflösung
-      final title = csv.listTitleValueFromParams(
-        _params,
-        schemaFields: schema,
-      );
-      return title == CsvSettings.unknownAnlageListLabel ? '' : title;
+    final fields = _dialogSchemaFields().where((f) {
+      final key = (f['key'] ?? '').toString();
+      if (key.isEmpty) return false;
+      if (_isLocationLocked(key) || _isLeafNameField(key)) return false;
+      if (_isHierarchyParamKey(key)) return false;
+      final editable = f['editable'];
+      if (editable == false) return false;
+      return true;
+    }).toList();
+
+    final index =
+        csv.listTitleInputFieldIndex < 1 ? 1 : csv.listTitleInputFieldIndex;
+    if (fields.isEmpty) {
+      return csv.valueAtListInputFieldIndex(
+            _params,
+            fieldIndex1Based: index,
+            schemaFields: const [],
+          ) ??
+          '';
     }
-    final key = (inputFields[index - 1]['key'] ?? '').toString();
-    final v = csv.paramValueForKey(_params, key)?.trim() ?? '';
-    if (v.isEmpty) return '';
-    return v;
+    for (final field in fields) {
+      final slot = CsvSettings.attSlotFromSchemaField(field);
+      if (slot != index) continue;
+      final key = (field['key'] ?? '').toString();
+      if (key.isEmpty) continue;
+      return csv.paramValueForKey(_params, key)?.trim() ?? '';
+    }
+    if (index > fields.length) return '';
+    final key = (fields[index - 1]['key'] ?? '').toString();
+    if (key.isEmpty) return '';
+    return csv.paramValueForKey(_params, key)?.trim() ?? '';
   }
 
   void _applyLockedLocationParams() {
@@ -3013,14 +3018,18 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
                         if (csv != null) {
                           csv.clearPlaceholderDisplayNameFromParams(_params);
                         }
-                        final hasRealName = name.isNotEmpty;
+                        final hasRealName = name.trim().isNotEmpty;
                         if (!hasRealName) {
                           name = CsvSettings.unknownAnlageListLabel;
                           _params[CsvSettings.listNamePlaceholderParamKey] =
                               true;
+                          _params[CsvSettings.listTitleParamKey] = '';
                         } else {
                           _params.remove(
                               CsvSettings.listNamePlaceholderParamKey);
+                          // Explizit speichern – Liste liest das zuverlässig,
+                          // unabhängig von Schema-Abweichungen beim Laden.
+                          _params[CsvSettings.listTitleParamKey] = name.trim();
                         }
                         _applyLockedLocationParams();
 

@@ -729,6 +729,9 @@ class CsvSettings {
   /// Markiert Anlagen, die ohne echten Titel gespeichert wurden.
   static const String listNamePlaceholderParamKey = '__listNamePlaceholder';
 
+  /// Beim Speichern gesetzter Listen-Titel (Wert von Eingabefeld N).
+  static const String listTitleParamKey = '__listTitle';
+
   bool hasListNamePlaceholder(Map<String, dynamic> params) {
     final v = params[listNamePlaceholderParamKey];
     return v == true || v?.toString() == 'true';
@@ -1702,6 +1705,9 @@ class CsvSettings {
   }
 
   /// Wert des n-ten Eingabefelds (1-basiert). Null wenn leer/fehlend.
+  ///
+  /// Reihenfolge: zuerst ATT-Slot == Index, sonst Positionsindex in [schemaFields]
+  /// (nach Filter wie im Anlagendialog).
   String? valueAtListInputFieldIndex(
     Map<String, dynamic> params, {
     required int fieldIndex1Based,
@@ -1709,44 +1715,77 @@ class CsvSettings {
   }) {
     if (fieldIndex1Based < 1) return null;
 
+    String? readKey(String key) {
+      final v = paramValueForKey(params, key)?.trim() ?? '';
+      return v.isEmpty ? null : v;
+    }
+
     final fields = listInputFieldsFromSchema(schemaFields);
     if (fields.isNotEmpty) {
-      if (fieldIndex1Based > fields.length) return null;
-      final key = (fields[fieldIndex1Based - 1]['key'] ?? '').toString();
-      final v = paramValueForKey(params, key)?.trim() ?? '';
-      if (v.isEmpty) return null;
-      return v;
+      // 1) Expliziter ATT-Slot (Eingabefeld 1 ≈ ATT1)
+      for (final field in fields) {
+        final slot = attSlotFromSchemaField(field);
+        if (slot != fieldIndex1Based) continue;
+        final key = (field['key'] ?? '').toString().trim();
+        if (key.isEmpty) continue;
+        final v = readKey(key);
+        if (v != null) return v;
+      }
+      // 2) Positionsindex wie im Dialog
+      if (fieldIndex1Based <= fields.length) {
+        final key = (fields[fieldIndex1Based - 1]['key'] ?? '').toString();
+        final v = readKey(key);
+        if (v != null) return v;
+      }
     }
 
-    // Ohne Schema: stabile Reihenfolge über nicht-reservierte Params.
-    final leaf = leafNameParamKey?.trim() ?? '';
-    final keys = <String>[];
+    // 3) Über _att_slot_* in Params
     for (final entry in params.entries) {
-      final key = entry.key.toString().trim();
-      if (key.isEmpty || key.startsWith('_')) continue;
-      if (matchesReservedDialogParamKey(key)) continue;
-      if (isAnlagenCsvColumnParamKey(key)) continue;
-      if (isEbeneHierarchyHeader(key)) continue;
-      if (isUpperHierarchyParamKey(key)) continue;
-      if (isHierarchyParamKey(key)) continue;
-      if (leaf.isNotEmpty && paramKeysMatch(key, leaf)) continue;
-      keys.add(key);
+      final k = entry.key.toString();
+      if (!isAttSlotParamKey(k)) continue;
+      final slot = int.tryParse(entry.value?.toString() ?? '');
+      if (slot != fieldIndex1Based) continue;
+      final paramKey = k.substring(attSlotParamKeyPrefix.length);
+      final v = readKey(paramKey);
+      if (v != null) return v;
     }
-    keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    if (fieldIndex1Based > keys.length) return null;
-    final v = params[keys[fieldIndex1Based - 1]]?.toString().trim() ?? '';
-    if (v.isEmpty) return null;
-    return v;
+
+    // 4) Ohne Schema: nicht-reservierte Params (Insertion-Order, nicht alphabetisch)
+    if (fields.isEmpty) {
+      final leaf = leafNameParamKey?.trim() ?? '';
+      final keys = <String>[];
+      for (final entry in params.entries) {
+        final key = entry.key.toString().trim();
+        if (key.isEmpty || key.startsWith('_')) continue;
+        if (matchesReservedDialogParamKey(key)) continue;
+        if (isAnlagenCsvColumnParamKey(key)) continue;
+        if (isEbeneHierarchyHeader(key)) continue;
+        if (isUpperHierarchyParamKey(key)) continue;
+        if (isHierarchyParamKey(key)) continue;
+        if (leaf.isNotEmpty && paramKeysMatch(key, leaf)) continue;
+        keys.add(key);
+      }
+      if (fieldIndex1Based <= keys.length) {
+        return readKey(keys[fieldIndex1Based - 1]);
+      }
+    }
+    return null;
   }
 
-  /// Listen-Titel aus dem konfigurierten Eingabefeld (sonst [unknownAnlageListLabel]).
+  /// Listen-Titel: gespeicherter Wert vom letzten Speichern, sonst Eingabefeld-Index.
   String listTitleValueFromParams(
     Map<String, dynamic> params, {
     List<Map<String, dynamic>> schemaFields = const [],
   }) {
+    final stored = params[listTitleParamKey]?.toString().trim() ?? '';
+    if (stored.isNotEmpty && stored != unknownAnlageListLabel) {
+      return stored;
+    }
+
     final v = valueAtListInputFieldIndex(
       params,
-      fieldIndex1Based: listTitleInputFieldIndex < 1 ? 1 : listTitleInputFieldIndex,
+      fieldIndex1Based:
+          listTitleInputFieldIndex < 1 ? 1 : listTitleInputFieldIndex,
       schemaFields: schemaFields,
     );
     if (v != null && v.isNotEmpty) return v;
@@ -2137,6 +2176,7 @@ class CsvSettings {
       qrCodeNummerParamKey,
       '__etageName',
       listNamePlaceholderParamKey,
+      listTitleParamKey,
       labelBauteil,
     };
     for (final h in importHeaderRow) {
