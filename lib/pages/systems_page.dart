@@ -1033,7 +1033,11 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         widget.displayNameParamKey?.trim() ?? csv.displayNameParamKey.trim();
     if (explicitKey.isNotEmpty) {
       final direct = csv.paramValueForKey(anlage.params, explicitKey);
-      if (direct != null && direct.isNotEmpty) return direct;
+      if (direct != null &&
+          direct.isNotEmpty &&
+          !csv.isNonDistinctDisplayValue(direct, anlage.params)) {
+        return direct;
+      }
       for (final field in disc.schema) {
         final fieldKey = (field['key'] ?? '').toString();
         final fieldLabel = (field['label'] ?? fieldKey).toString();
@@ -1043,7 +1047,11 @@ class SystemsPageState extends ConsumerState<SystemsPage>
           continue;
         }
         final fromField = csv.paramValueForKey(anlage.params, fieldKey);
-        if (fromField != null && fromField.isNotEmpty) return fromField;
+        if (fromField != null &&
+            fromField.isNotEmpty &&
+            !csv.isNonDistinctDisplayValue(fromField, anlage.params)) {
+          return fromField;
+        }
       }
     }
 
@@ -1073,16 +1081,30 @@ class SystemsPageState extends ConsumerState<SystemsPage>
     }
 
     final name = anlage.name.trim();
-    if (csv != null && _isHierarchyLevelLabel(name, csv)) {
-      for (final field in anlage.discipline.schema) {
-        final fieldKey = (field['key'] ?? '').toString();
-        if (fieldKey.isEmpty) continue;
-        if (csv.isUpperHierarchyParamKey(fieldKey)) continue;
-        final v = csv.paramValueForKey(anlage.params, fieldKey);
-        if (v != null && v.isNotEmpty && v.trim() != name) return v;
+    if (csv != null) {
+      // Leerspeichern / RO-Duplikat: nicht denselben Text wie die Gruppe zeigen.
+      if (csv.hasListNamePlaceholder(anlage.params) ||
+          csv.isNonDistinctDisplayValue(name, anlage.params)) {
+        for (final field in anlage.discipline.schema) {
+          final fieldKey = (field['key'] ?? '').toString();
+          if (fieldKey.isEmpty) continue;
+          if (csv.isUpperHierarchyParamKey(fieldKey)) continue;
+          if (csv.mustNotReceiveDisplayName(fieldKey)) continue;
+          final v = csv.paramValueForKey(anlage.params, fieldKey);
+          if (v != null &&
+              v.isNotEmpty &&
+              !csv.isNonDistinctDisplayValue(v, anlage.params)) {
+            return v;
+          }
+        }
+        return 'Eintrag';
+      }
+      if (csv.isPlaceholderDisplayValue(name) ||
+          _isHierarchyLevelLabel(name, csv)) {
+        return 'Eintrag';
       }
     }
-    return name;
+    return name.isNotEmpty ? name : 'Eintrag';
   }
 
   String? _resolvePreviewText(
@@ -1093,6 +1115,12 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   }) {
     if (!isChild && hasChildren) return null;
     return _resolveDisplayNameValue(anlage, disc);
+  }
+
+  String? _resolveListSubtitle(Anlage anlage) {
+    final csv = _liveCsvSettings();
+    if (csv == null) return null;
+    return csv.listSubtitleValueFromParams(anlage.params);
   }
 
   String? _resolveTypeHint(Anlage anlage) => null;
@@ -1136,6 +1164,7 @@ class SystemsPageState extends ConsumerState<SystemsPage>
         isChild: isChild,
         hasChildren: hasChildren,
       ),
+      subtitleText: _resolveListSubtitle(a),
       isChild: isChild,
       hasChildren: hasChildren,
       isExpanded: isExpanded,

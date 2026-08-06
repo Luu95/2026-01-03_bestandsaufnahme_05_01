@@ -44,6 +44,10 @@ void _migrateAnlageParams(
     params: params,
     schemaFields: schemaFields,
   );
+  CsvSettings.clearParamsThatAreSchemaArtGroups(
+    params: params,
+    schemaFields: schemaFields,
+  );
 }
 
 /// Ergebnis des Speicherns importierter Anlagen in die Datenbank.

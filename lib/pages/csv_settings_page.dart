@@ -53,6 +53,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _groupingAnlageParamKey = '';
   String _displayNameParamKey = 'Name';
   int? _displayNameSpalte;
+  String _listSubtitleParamKey = 'Hersteller';
 
   /// Attribut-Dreiergruppen: Name, Typ, Wert/Art (z. B. ATT1 … ATT1_WERT).
   List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
@@ -79,6 +80,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _groupingGewerkParamKeyCtrl;
   late final TextEditingController _groupingAnlageParamKeyCtrl;
   late final TextEditingController _displayNameParamKeyCtrl;
+  late final TextEditingController _listSubtitleParamKeyCtrl;
   late final TextEditingController _foto1SpalteLabelCtrl;
   late final TextEditingController _foto2SpalteLabelCtrl;
   late final TextEditingController _foto3SpalteLabelCtrl;
@@ -121,6 +123,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _groupingGewerkParamKeyCtrl = TextEditingController(text: _groupingGewerkParamKey);
     _groupingAnlageParamKeyCtrl = TextEditingController(text: _groupingAnlageParamKey);
     _displayNameParamKeyCtrl = TextEditingController(text: _displayNameParamKey);
+    _listSubtitleParamKeyCtrl =
+        TextEditingController(text: _listSubtitleParamKey);
     _foto1SpalteLabelCtrl = TextEditingController(text: _foto1SpalteLabel ?? '');
     _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
@@ -142,6 +146,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _groupingGewerkParamKeyCtrl.dispose();
     _groupingAnlageParamKeyCtrl.dispose();
     _displayNameParamKeyCtrl.dispose();
+    _listSubtitleParamKeyCtrl.dispose();
     _foto1SpalteLabelCtrl.dispose();
     _foto2SpalteLabelCtrl.dispose();
     _foto3SpalteLabelCtrl.dispose();
@@ -210,6 +215,13 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
       _displayNameParamKeyCtrl.value = TextEditingValue(
         text: _displayNameParamKey,
         selection: TextSelection.collapsed(offset: _displayNameParamKey.length),
+      );
+    }
+    if (_listSubtitleParamKeyCtrl.text != _listSubtitleParamKey) {
+      _listSubtitleParamKeyCtrl.value = TextEditingValue(
+        text: _listSubtitleParamKey,
+        selection:
+            TextSelection.collapsed(offset: _listSubtitleParamKey.length),
       );
     }
     final f1 = _foto1SpalteLabel ?? '';
@@ -324,6 +336,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
         _displayNameParamKey = settings.displayNameParamKey;
         _displayNameSpalte = settings.displayNameSpalte;
+        _listSubtitleParamKey = settings.listSubtitleParamKey;
         _mappingCsvHeaders = settings.importHeaderRow.isNotEmpty
             ? List<String>.from(settings.importHeaderRow)
             : null;
@@ -519,6 +532,7 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         groupingAnlageParamKey: _groupingAnlageParamKey,
         displayNameParamKey: _displayNameParamKey,
         displayNameSpalte: _displayNameSpalte,
+        listSubtitleParamKey: _listSubtitleParamKey,
       );
       await notifier.save(settings);
 
@@ -735,15 +749,22 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                   _scheduleAutoSave();
                 },
               ),
-              const SizedBox(height: 12),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ExpansionTile(
+            title: const Text('Anlagenliste – angezeigte Attribute'),
+            childrenPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            children: [
               TextField(
                 controller: _displayNameParamKeyCtrl,
                 decoration: _themedInputDecoration(
                   context,
-                  labelText: 'Parameter für Anzeige Ebene 3',
+                  labelText: 'Titel-Attribut',
                   helperText:
-                      'Key aus Gewerkevorlagen-Schema (z. B. Name, Anlagenbezeichnung). '
-                      'Wird bei Neuaufnahmen für die Beschriftung in der Anlagenliste genutzt.',
+                      'Param-Key aus Schema/CSV (z. B. Name, Anlagenbezeichnung). '
+                      'Unabhängig davon, welche Hierarchie-Ebenen aktiv sind.',
                 ),
                 onChanged: (val) {
                   setState(() => _displayNameParamKey = val);
@@ -751,9 +772,29 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
                 },
               ),
               const SizedBox(height: 12),
+              TextField(
+                controller: _listSubtitleParamKeyCtrl,
+                decoration: _themedInputDecoration(
+                  context,
+                  labelText: 'Untertitel-Attribut',
+                  helperText:
+                      'Zweite Zeile in der Anlagenliste (z. B. Hersteller). '
+                      'Leer lassen = kein Untertitel.',
+                ),
+                onChanged: (val) {
+                  setState(() => _listSubtitleParamKey = val);
+                  _scheduleAutoSave();
+                },
+              ),
+              const SizedBox(height: 12),
               _buildColumnSelector(
-                label: 'Alternativ: CSV-Spalte (nur Anlagen-Import)',
-                value: _displayNameSpalte ?? _level3.nameColumn,
+                label: 'Alternativ Titel: CSV-Spalte (nur Anlagen-Import)',
+                value: _displayNameSpalte ??
+                    (_level3.enabled
+                        ? _level3.nameColumn
+                        : (_level2.enabled
+                            ? _level2.nameColumn
+                            : _level1.nameColumn)),
                 onChanged: (v) {
                   setState(() => _displayNameSpalte = v);
                   _scheduleAutoSave();

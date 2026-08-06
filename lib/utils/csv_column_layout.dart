@@ -904,8 +904,8 @@ List<String> buildAnlageExportRowFromImportStructure({
       );
       if (value.isNotEmpty) {
         setExportCell(triplet.valueColumn, _cellValue(value));
-      } else {
-        // Kein User-Wert: Schema-art (z. B. „Allgemein“) oder Snapshot behalten.
+      } else if (!useGewerkeTriplets) {
+        // Volllayout mit ART-Spalte: Gruppentitel aus Schema wieder in ART schreiben.
         final exportCol = exportColForImportIndex(triplet.valueColumn);
         final already = (exportCol >= 0 && exportCol < row.length)
             ? row[exportCol].trim()
@@ -917,6 +917,7 @@ List<String> buildAnlageExportRowFromImportStructure({
           }
         }
       }
+      // useGewerkeTriplets: ART→WERT-Export – Gruppentitel nicht als Anlagenwert schreiben.
     }
   }
 

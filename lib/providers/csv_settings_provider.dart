@@ -160,10 +160,12 @@ class CsvSettings {
   final String exportDelimiter;
   final String groupingGewerkParamKey;
   final String groupingAnlageParamKey;
-  /// Expliziter Param-Key für Anzeige Ebene 3 (Gewerkevorlagen / Neuaufnahme), z. B. „Name“.
+  /// Param-Key für die Titelzeile in der Anlagenliste (unabhängig von Hierarchie-Ebenen).
   final String displayNameParamKey;
   /// Optional: Spalte aus Anlagen-CSV-Import (nur wenn importHeaderRow gesetzt ist).
   final int? displayNameSpalte;
+  /// Param-Key für die Untertitelzeile in der Anlagenliste. Leer = kein Untertitel.
+  final String listSubtitleParamKey;
 
   const CsvSettings({
     required this.level1,
@@ -192,6 +194,7 @@ class CsvSettings {
     this.groupingAnlageParamKey = '',
     this.displayNameParamKey = 'Name',
     this.displayNameSpalte,
+    this.listSubtitleParamKey = 'Hersteller',
   });
 
   /// True, wenn mindestens einmal ein Anlagen-CSV-Import durchgeführt wurde.
@@ -669,7 +672,66 @@ class CsvSettings {
     return false;
   }
 
-  /// Param-Key, der in der Anlagenübersicht als Beschriftung der Ebene 3 genutzt wird.
+  /// True, wenn [value] nur ein Platzhalter/Ebenen-Label ist (kein echter Anzeigename).
+  bool isPlaceholderDisplayValue(String? value) {
+    final t = value?.trim() ?? '';
+    if (t.isEmpty) return true;
+    if (t == 'Eintrag') return true;
+    if (t == labelGewerk || t == labelAnlage || t == labelBauteil) return true;
+    final leafLabel = resolveLeafLevelLabel().trim();
+    if (leafLabel.isNotEmpty && t == leafLabel) return true;
+    final underRoLabel = resolveDatensatzUnderRevisionsobjektLabel().trim();
+    if (underRoLabel.isNotEmpty && t == underRoLabel) return true;
+    for (var level = 1; level <= 3; level++) {
+      final headerLabel = hierarchyLevelHeaderLabel(level).trim();
+      if (headerLabel.isNotEmpty && t == headerLabel) return true;
+    }
+    return false;
+  }
+
+  /// True, wenn [value] kein eigenständiger Anzeigename ist (Platzhalter oder
+  /// identisch mit Hierarchie-/Schema-Wert, z. B. Revisionsobjekt).
+  bool isNonDistinctDisplayValue(
+    String? value,
+    Map<String, dynamic> params,
+  ) {
+    final t = value?.trim() ?? '';
+    if (isPlaceholderDisplayValue(t)) return true;
+
+    final schemaValue = schemaItemValueFromParams(params)?.trim() ?? '';
+    if (schemaValue.isNotEmpty &&
+        t.toLowerCase() == schemaValue.toLowerCase()) {
+      return true;
+    }
+    final roValue = revisionsobjektValueFromParams(params)?.trim() ?? '';
+    if (roValue.isNotEmpty && t.toLowerCase() == roValue.toLowerCase()) {
+      return true;
+    }
+
+    final enabled = enabledLevelsOrdered;
+    final leafNum = enabled.isEmpty
+        ? null
+        : levelNumberAtEnabledIndex(enabled.length - 1);
+    for (var level = 1; level <= 3; level++) {
+      // Blatt-Hierarchie-Wert nicht als „Duplikat“ werten (Import-Name).
+      if (leafNum != null && level == leafNum) continue;
+      final hv = hierarchyLevelValueFromParams(params, level)?.trim() ?? '';
+      if (hv.isNotEmpty && t.toLowerCase() == hv.toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Markiert Anlagen, die ohne echten Titel gespeichert wurden.
+  static const String listNamePlaceholderParamKey = '__listNamePlaceholder';
+
+  bool hasListNamePlaceholder(Map<String, dynamic> params) {
+    final v = params[listNamePlaceholderParamKey];
+    return v == true || v?.toString() == 'true';
+  }
+
+  /// Param-Key für die Titelzeile in der Anlagenliste.
   /// Priorität: expliziter Param-Key → Anzeige-Spalte → Blatt-Spalte → „Bezeichnung“.
   /// Niemals Hierarchie-/Ebene-Keys (sonst landet der Anzeigename in Ebene2).
   String? resolveDisplayNameParamKey() {
@@ -1385,26 +1447,35 @@ class CsvSettings {
       if (schemaKey.isEmpty) continue;
 
       final current = params[schemaKey]?.toString().trim() ?? '';
+      // Bei Gewerke-Tripletts (ATT + TYPE + ART) ist ART nur Gruppierungs-Metadatum
+      // im Schema – niemals Anlagen-Feldwert (sonst landet z. B. „Allgemein“ in allen Feldern).
       if (current.isEmpty) {
-        if (artVal.isNotEmpty) params[schemaKey] = artVal;
         continue;
       }
 
-      // Wert entspricht der TYPE-Zelle dieses Slots → ART übernehmen oder leeren.
+      // Wert entspricht der TYPE-Zelle dieses Slots → Typdefinition entfernen.
       if (typeVal.isNotEmpty && current == typeVal) {
-        if (artVal.isNotEmpty) {
-          params[schemaKey] = artVal;
-        } else {
-          params.remove(schemaKey);
-        }
+        params.remove(schemaKey);
         continue;
       }
 
-      // Wert ist irgendeine TYPE-Zelle dieser Zeile, ART leer → Typdefinition entfernen.
-      if (artVal.isEmpty && typeValsInRow.contains(current)) {
+      // Wert ist irgendeine TYPE-Zelle dieser Zeile → Typdefinition entfernen.
+      if (typeValsInRow.contains(current)) {
+        params.remove(schemaKey);
+        continue;
+      }
+
+      // Wert ist nur der ART-Gruppenname dieses Feldes → ebenfalls entfernen.
+      if (artVal.isNotEmpty && current == artVal) {
         params.remove(schemaKey);
       }
     }
+
+    // Schema-art als Gruppenlabel: falls Params bereits damit befüllt wurden, leeren.
+    clearParamsThatAreSchemaArtGroups(
+      params: params,
+      schemaFields: schemaFields,
+    );
 
     // Übrig gebliebene ATT*_TYPE / ATT*_OPTIONS Keys entfernen.
     final drop = params.keys
@@ -1413,6 +1484,33 @@ class CsvSettings {
         .toList();
     for (final k in drop) {
       params.remove(k);
+    }
+  }
+
+  /// Entfernt Param-Werte, die nur dem Schema-`art`-Gruppentitel entsprechen
+  /// (z. B. „Allgemein“) – ART ist Layout-Metadatum, kein Eingabewert.
+  static void clearParamsThatAreSchemaArtGroups({
+    required Map<String, dynamic> params,
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    if (schemaFields.isEmpty) return;
+    for (final field in schemaFields) {
+      if (field['isGlobal'] == true) continue;
+      final art = effectiveSchemaArtGroup(field);
+      if (art == null || art.isEmpty) continue;
+      final key = (field['key'] ?? '').toString().trim();
+      final label = (field['label'] ?? '').toString().trim();
+      for (final pk in params.keys.toList()) {
+        final pks = pk.toString();
+        if (pks.startsWith('__')) continue;
+        final matchesField = (key.isNotEmpty && paramKeysMatch(pks, key)) ||
+            (label.isNotEmpty && paramKeysMatch(pks, label));
+        if (!matchesField) continue;
+        final current = params[pk]?.toString().trim() ?? '';
+        if (current.isNotEmpty && paramKeysMatch(current, art)) {
+          params[pk] = '';
+        }
+      }
     }
   }
 
@@ -1572,17 +1670,20 @@ class CsvSettings {
     return null;
   }
 
-  /// Anzeigename für Ebene 3 aus Params (Neuaufnahme / Gewerkevorlagen).
+  /// Titelzeile der Anlagenliste aus Params (unabhängig von Hierarchie-Ebenen).
   String? displayNameValueFromParams(
     Map<String, dynamic> params, {
     List<Map<String, dynamic>> schemaFields = const [],
   }) {
+    bool usable(String? v) =>
+        v != null &&
+        v.isNotEmpty &&
+        !isNonDistinctDisplayValue(v, params);
+
     final explicit = displayNameParamKey.trim();
     if (explicit.isNotEmpty) {
       final fromExplicit = paramValueForKey(params, explicit);
-      if (fromExplicit != null && fromExplicit.isNotEmpty) {
-        return fromExplicit;
-      }
+      if (usable(fromExplicit)) return fromExplicit;
       for (final field in schemaFields) {
         final fieldKey = (field['key'] ?? '').toString();
         final fieldLabel = (field['label'] ?? fieldKey).toString();
@@ -1592,7 +1693,7 @@ class CsvSettings {
           continue;
         }
         final fromField = paramValueForKey(params, fieldKey);
-        if (fromField != null && fromField.isNotEmpty) return fromField;
+        if (usable(fromField)) return fromField;
       }
     }
 
@@ -1601,16 +1702,8 @@ class CsvSettings {
         configured.isNotEmpty &&
         !isUpperHierarchyParamKey(configured)) {
       final fromConfigured = paramValueForKey(params, configured);
-      if (fromConfigured != null && fromConfigured.isNotEmpty) {
-        return fromConfigured;
-      }
+      if (usable(fromConfigured)) return fromConfigured;
     }
-
-    final schemaValue = schemaItemValueFromParams(params)?.trim();
-    bool isSchemaDuplicate(String value) =>
-        schemaValue != null &&
-        schemaValue.isNotEmpty &&
-        schemaValue.toLowerCase() == value.trim().toLowerCase();
 
     for (final candidate in const [
       'Name',
@@ -1619,7 +1712,7 @@ class CsvSettings {
       'name',
     ]) {
       final v = paramValueForKey(params, candidate);
-      if (v != null && v.isNotEmpty && !isSchemaDuplicate(v)) return v;
+      if (usable(v)) return v;
     }
 
     for (final field in schemaFields) {
@@ -1628,11 +1721,7 @@ class CsvSettings {
       if (isUpperHierarchyParamKey(fieldKey)) continue;
       if (isLeafNameParamKey(fieldKey)) {
         final fromLeafField = paramValueForKey(params, fieldKey);
-        if (fromLeafField != null &&
-            fromLeafField.isNotEmpty &&
-            !isSchemaDuplicate(fromLeafField)) {
-          return fromLeafField;
-        }
+        if (usable(fromLeafField)) return fromLeafField;
         continue;
       }
     }
@@ -1642,16 +1731,27 @@ class CsvSettings {
         leafKey.isNotEmpty &&
         !isUpperHierarchyParamKey(leafKey)) {
       final fromLeaf = paramValueForKey(params, leafKey);
-      if (fromLeaf != null && fromLeaf.isNotEmpty && !isSchemaDuplicate(fromLeaf)) {
-        return fromLeaf;
-      }
+      if (usable(fromLeaf)) return fromLeaf;
     }
     return null;
   }
 
+  /// Untertitelzeile der Anlagenliste aus dem konfigurierten Param-Key.
+  String? listSubtitleValueFromParams(Map<String, dynamic> params) {
+    final key = listSubtitleParamKey.trim();
+    if (key.isEmpty) return null;
+    final value = paramValueForKey(params, key)?.trim();
+    if (value == null ||
+        value.isEmpty ||
+        isNonDistinctDisplayValue(value, params)) {
+      return null;
+    }
+    return value;
+  }
+
   void writeDisplayNameToParams(Map<String, dynamic> params, String value) {
     final v = value.trim();
-    if (v.isEmpty) return;
+    if (v.isEmpty || isNonDistinctDisplayValue(v, params)) return;
 
     final key = resolveDisplayNameParamKey()?.trim();
     if (key == null || key.isEmpty) return;
@@ -1663,6 +1763,19 @@ class CsvSettings {
       if (!paramKeysMatch(paramKey, key)) continue;
       if (mustNotReceiveDisplayName(paramKey)) continue;
       params[paramKey] = v;
+    }
+  }
+
+  /// Entfernt versehentlich gespeicherte Ebenen-/Schema-Platzhalter aus dem Titel-Param.
+  void clearPlaceholderDisplayNameFromParams(Map<String, dynamic> params) {
+    final key = resolveDisplayNameParamKey()?.trim();
+    if (key == null || key.isEmpty) return;
+    for (final entry in params.entries.toList()) {
+      final paramKey = entry.key.toString();
+      if (!paramKeysMatch(paramKey, key) && paramKey != key) continue;
+      if (isNonDistinctDisplayValue(entry.value?.toString(), params)) {
+        params[paramKey] = '';
+      }
     }
   }
 
@@ -1966,6 +2079,7 @@ class CsvSettings {
       'photoPaths',
       qrCodeNummerParamKey,
       '__etageName',
+      listNamePlaceholderParamKey,
       labelBauteil,
     };
     for (final h in importHeaderRow) {
@@ -2040,6 +2154,7 @@ class CsvSettings {
     String? groupingAnlageParamKey,
     String? displayNameParamKey,
     int? displayNameSpalte,
+    String? listSubtitleParamKey,
     bool clearAnlageBauteilSpalte = false,
     bool clearDisplayNameSpalte = false,
     bool clearAttributeRange = false,
@@ -2080,6 +2195,7 @@ class CsvSettings {
       displayNameSpalte: clearDisplayNameSpalte
           ? null
           : (displayNameSpalte ?? this.displayNameSpalte),
+      listSubtitleParamKey: listSubtitleParamKey ?? this.listSubtitleParamKey,
     );
   }
 
@@ -2112,6 +2228,7 @@ class CsvSettings {
       'groupingAnlageParamKey': groupingAnlageParamKey,
       'displayNameParamKey': displayNameParamKey,
       'displayNameSpalte': displayNameSpalte,
+      'listSubtitleParamKey': listSubtitleParamKey,
     };
   }
 
@@ -2178,6 +2295,8 @@ class CsvSettings {
       groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
       displayNameParamKey: json['displayNameParamKey'] as String? ?? 'Name',
       displayNameSpalte: json['displayNameSpalte'] as int?,
+      listSubtitleParamKey:
+          json['listSubtitleParamKey'] as String? ?? 'Hersteller',
     );
   }
 

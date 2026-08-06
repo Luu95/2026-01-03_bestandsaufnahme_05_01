@@ -80,19 +80,24 @@ class TemplateService {
   static const String _delimiter = ';';
 
   static String _detectDelimiterWithSettings(String csvString, int requiredMaxIndex) {
-    // WICHTIG: In der Parameter-Spalte kommen oft Kommata vor ("Brennstoff, Leistung..."),
-    // daher darf die Erkennung NICHT auf dem bloßen Zählen von ',' basieren.
-    // Stattdessen testen wir Kandidaten und wählen den, bei dem die meisten Zeilen
-    // genügend Spalten haben, um requiredMaxIndex sicher zu lesen.
+    // Header-Zeile ist maßgeblich: Datenzeilen enthalten oft Kommas in Labels
+    // (z.B. "Brandschutztüren, -tore, ..."), die ein Komma-Delimiter fälschlich
+    // höher bewerten würden und Gewerk/Ebene2 zu Fragmenten zerlegen.
+    final headerLine = csvString.split('\n').first;
+    final headerHint = CsvUtils.detectDelimiterFromLine(headerLine);
+    final headerAmbiguous =
+        headerLine.contains(';') && headerLine.contains(',');
+    if (!headerAmbiguous) {
+      return headerHint;
+    }
+
+    // Nur bei mehrdeutigem Header Kandidaten gegen requiredMaxIndex bewerten.
     const candidates = [';', '\t', ','];
 
-    String best = _delimiter;
+    String best = headerHint;
     int bestGoodRows = -1;
     int bestAvgLen = -1;
-
-    // Zusätzlich bewerten wir, ob in der Anlage/Bauteil-Spalte (Index requiredMaxIndex ist nur Min-Check)
-    // typischerweise 'a'/'b' vorkommt. Das ist ein sehr gutes Signal für korrektes Parsing.
-    // Der tatsächliche Index wird im Import anhand der Einstellungen geprüft.
+    int bestHeaderMatch = -1;
 
     for (final d in candidates) {
       try {
@@ -104,26 +109,36 @@ class TemplateService {
 
         if (parsed.isEmpty) continue;
 
-        // Prüfe nur die ersten N Zeilen für Performance
+        final headerLen = parsed[0].length;
         final sample = parsed.length > 30 ? parsed.sublist(0, 30) : parsed;
-        int good = 0;
-        int totalLen = 0;
+        var good = 0;
+        var totalLen = 0;
+        var headerMatch = 0;
         for (final row in sample) {
           totalLen += row.length;
           if (row.length > requiredMaxIndex) good++;
+          if (headerLen > 1 && (row.length - headerLen).abs() <= 2) {
+            headerMatch++;
+          }
         }
         final avgLen = sample.isEmpty ? 0 : (totalLen ~/ sample.length);
 
-        // Priorität: mehr "good rows", dann höhere durchschnittliche Spaltenanzahl,
-        // bei Gleichstand Semikolon bevorzugen.
-        final isBetter = good > bestGoodRows ||
-            (good == bestGoodRows && avgLen > bestAvgLen) ||
-            (good == bestGoodRows && avgLen == bestAvgLen && d == ';' && best != ';');
+        final isBetter = headerMatch > bestHeaderMatch ||
+            (headerMatch == bestHeaderMatch && good > bestGoodRows) ||
+            (headerMatch == bestHeaderMatch &&
+                good == bestGoodRows &&
+                avgLen > bestAvgLen) ||
+            (headerMatch == bestHeaderMatch &&
+                good == bestGoodRows &&
+                avgLen == bestAvgLen &&
+                d == ';' &&
+                best != ';');
 
         if (isBetter) {
           best = d;
           bestGoodRows = good;
           bestAvgLen = avgLen;
+          bestHeaderMatch = headerMatch;
         }
       } catch (e) {
         appLog('Delimiter-Kandidat $d fehlgeschlagen', error: e);
@@ -412,44 +427,69 @@ class TemplateService {
       requiredMaxIndex = scanStart + 2;
     }
 
-    // Delimiter-Sniffing anhand der konfigurierten Hierarchie-Spalten
-    const candidates = [';', '\t', ','];
-    String delimiter = _detectDelimiterWithSettings(csvString, requiredMaxIndex);
+    // Delimiter: Header-Zeile hat Vorrang (Datenzeilen enthalten oft Kommas in Labels).
+    // Nur wenn der Header mehrdeutig ist (; und ,), zusätzlich nach Hierarchie-Spalten bewerten.
+    final headerLine = csvString.split('\n').first;
+    final headerHasSemi = headerLine.contains(';');
+    final headerHasComma = headerLine.contains(',');
+    String delimiter;
+    if (headerHasSemi && !headerHasComma) {
+      delimiter = ';';
+    } else if (headerHasComma && !headerHasSemi) {
+      delimiter = ',';
+    } else if (headerLine.contains('\t') && !headerHasSemi && !headerHasComma) {
+      delimiter = '\t';
+    } else {
+      delimiter = _detectDelimiterWithSettings(csvString, requiredMaxIndex);
+      const candidates = [';', '\t', ','];
+      var bestScore = -1;
+      var bestConsistent = -1;
+      var bestDelimiter = delimiter;
+      for (final d in candidates) {
+        try {
+          final parsed = CsvToListConverter(
+            fieldDelimiter: d,
+            eol: '\n',
+            shouldParseNumbers: false,
+          ).convert(csvString);
+          if (parsed.length < 2) continue;
 
-    int bestScore = -1;
-    String bestDelimiter = delimiter;
-    for (final d in candidates) {
-      try {
-        final parsed = CsvToListConverter(
-          fieldDelimiter: d,
-          eol: '\n',
-          shouldParseNumbers: false,
-        ).convert(csvString);
-        if (parsed.length < 2) continue;
-
-        int score = 0;
-        final sample = parsed.length > 80 ? parsed.sublist(0, 80) : parsed;
-        for (var i = 1; i < sample.length; i++) {
-          final row = sample[i];
-          if (row.isEmpty) continue;
-          if (row.length <= level1Idx || row.length <= level2Idx) {
-            continue;
+          final headerLen = parsed[0].length;
+          var score = 0;
+          var consistent = 0;
+          final sample = parsed.length > 80 ? parsed.sublist(0, 80) : parsed;
+          for (var i = 1; i < sample.length; i++) {
+            final row = sample[i];
+            if (row.isEmpty) continue;
+            if (headerLen > 1 && (row.length - headerLen).abs() <= 2) {
+              consistent++;
+            }
+            if (row.length <= level1Idx || row.length <= level2Idx) {
+              continue;
+            }
+            final level1Val = row[level1Idx].toString().trim();
+            if (level1Val.isEmpty) continue;
+            final level2Val = row[level2Idx].toString().trim();
+            if (level2Val.isNotEmpty) score++;
           }
-          final level1Val = row[level1Idx].toString().trim();
-          if (level1Val.isEmpty) continue;
-          final level2Val = row[level2Idx].toString().trim();
-          if (level2Val.isNotEmpty) score++;
-        }
 
-        if (score > bestScore || (score == bestScore && d == ';' && bestDelimiter != ';')) {
-          bestScore = score;
-          bestDelimiter = d;
+          final isBetter = consistent > bestConsistent ||
+              (consistent == bestConsistent && score > bestScore) ||
+              (consistent == bestConsistent &&
+                  score == bestScore &&
+                  d == ';' &&
+                  bestDelimiter != ';');
+          if (isBetter) {
+            bestScore = score;
+            bestConsistent = consistent;
+            bestDelimiter = d;
+          }
+        } catch (e) {
+          appLog('Delimiter-Kandidat $d fehlgeschlagen', error: e);
         }
-      } catch (e) {
-        appLog('Delimiter-Kandidat $d fehlgeschlagen', error: e);
       }
+      delimiter = bestDelimiter;
     }
-    delimiter = bestDelimiter;
     final csvData = await compute(parseCsvRowsIsolate, {
       'csv': csvString,
       'delimiter': delimiter,
