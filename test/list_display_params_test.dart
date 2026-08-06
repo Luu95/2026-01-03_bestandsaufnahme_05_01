@@ -3,9 +3,8 @@ import 'package:bestandsaufnahme_01/providers/csv_settings_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 CsvSettings _settings({
-  String displayNameParamKey = 'Name',
-  String listSubtitleParamKey = 'Hersteller',
-  String labelAnlage = 'Anlage',
+  int listTitleInputFieldIndex = 1,
+  int listSubtitleInputFieldIndex = 0,
 }) {
   return CsvSettings(
     level1: const HierarchyLevelConfig(enabled: true, nameColumn: 0),
@@ -16,84 +15,82 @@ CsvSettings _settings({
     bauteilKuerzel: 'B,Bauteil',
     useDisciplineGrouping: true,
     labelGewerk: 'Gewerk',
-    labelAnlage: labelAnlage,
+    labelAnlage: 'Anlage',
     labelBauteil: 'Bauteil',
-    displayNameParamKey: displayNameParamKey,
-    listSubtitleParamKey: listSubtitleParamKey,
+    listTitleInputFieldIndex: listTitleInputFieldIndex,
+    listSubtitleInputFieldIndex: listSubtitleInputFieldIndex,
   );
 }
 
 void main() {
-  test('Platzhalter-Ebenen-Label blockiert nicht den echten Anzeigenamen', () {
-    final csv = _settings();
-    final params = <String, dynamic>{
-      'Name': 'Anlage',
-      'Anlagenbezeichnung': 'Pumpe 1',
+  final schema = [
+    {'key': 'Türnummer', 'label': 'Türnummer', 'type': 'text'},
+    {'key': 'Hersteller', 'label': 'Hersteller', 'type': 'text'},
+    {'key': 'Baujahr', 'label': 'Baujahr', 'type': 'text'},
+  ];
+
+  test('Eingabefeld 1 steuert den Listen-Titel', () {
+    final csv = _settings(listTitleInputFieldIndex: 1);
+    final params = {
+      'Türnummer': 'T-12',
+      'Hersteller': 'Wilo',
+      'Baujahr': '2020',
     };
-
-    expect(csv.isPlaceholderDisplayValue('Anlage'), isTrue);
-    expect(csv.displayNameValueFromParams(params), 'Pumpe 1');
-  });
-
-  test('Revisionsobjekt als Name wird als nicht-eigenständig erkannt', () {
-    final csv = _settings(
-      labelAnlage: 'Revisionsobjekt',
-    ).copyWith(
-      groupingAnlageParamKey: 'Revisionsobjekt',
-    );
-    // Simulate schema/RO value in params via hierarchy level 2 header
-    final params = <String, dynamic>{
-      'Revisionsobjekt':
-          'Brandschutztüren, -tore, rauchdichte Türen u. Tore',
-      'Name': 'Brandschutztüren, -tore, rauchdichte Türen u. Tore',
-      'Bezeichnung': 'Tür T-12',
-    };
-
     expect(
-      csv.isNonDistinctDisplayValue(params['Name']?.toString(), params),
-      isTrue,
+      csv.listTitleValueFromParams(params, schemaFields: schema),
+      'T-12',
     );
-    expect(csv.displayNameValueFromParams(params), 'Tür T-12');
   });
 
-  test('clearPlaceholderDisplayNameFromParams entfernt RO-Duplikat', () {
-    final csv = _settings();
-    final params = <String, dynamic>{
-      'Revisionsobjekt': 'Brandschutztüren',
-      'Name': 'Brandschutztüren',
+  test('Eingabefeld 2 als Titel', () {
+    final csv = _settings(listTitleInputFieldIndex: 2);
+    final params = {
+      'Türnummer': 'T-12',
+      'Hersteller': 'Wilo',
     };
-    // Ensure schema/RO resolution finds Revisionsobjekt
-    final withGrouping = csv.copyWith(groupingAnlageParamKey: 'Revisionsobjekt');
-    withGrouping.clearPlaceholderDisplayNameFromParams(params);
-    expect(params['Name'], '');
-  });
-
-  test('writeDisplayNameToParams schreibt keine Platzhalter', () {
-    final csv = _settings();
-    final params = <String, dynamic>{};
-    csv.writeDisplayNameToParams(params, 'Anlage');
-    expect(params.containsKey('Name'), isFalse);
-
-    csv.writeDisplayNameToParams(params, 'Pumpe 1');
-    expect(params['Name'], 'Pumpe 1');
-  });
-
-  test('listSubtitleValueFromParams nutzt konfigurierten Key', () {
-    final csv = _settings(listSubtitleParamKey: 'Fabrikat');
     expect(
-      csv.listSubtitleValueFromParams({'Fabrikat': 'Wilo', 'Hersteller': 'X'}),
+      csv.listTitleValueFromParams(params, schemaFields: schema),
       'Wilo',
     );
-    expect(csv.listSubtitleValueFromParams({'Hersteller': 'X'}), isNull);
-
-    final emptySub = _settings(listSubtitleParamKey: '');
-    expect(emptySub.listSubtitleValueFromParams({'Hersteller': 'X'}), isNull);
   });
 
-  test('JSON roundtrip behält listSubtitleParamKey', () {
-    final csv = _settings(listSubtitleParamKey: 'Typ');
+  test('Leeres Eingabefeld → Unbekannte Anlage', () {
+    final csv = _settings(listTitleInputFieldIndex: 1);
+    expect(
+      csv.listTitleValueFromParams({}, schemaFields: schema),
+      CsvSettings.unknownAnlageListLabel,
+    );
+    expect(
+      csv.listTitleValueFromParams({'Türnummer': ''}, schemaFields: schema),
+      CsvSettings.unknownAnlageListLabel,
+    );
+  });
+
+  test('Untertitel = Eingabefeld 2, 0 = keiner', () {
+    final withSub = _settings(listSubtitleInputFieldIndex: 2);
+    final params = {
+      'Türnummer': 'T-12',
+      'Hersteller': 'Wilo',
+    };
+    expect(
+      withSub.listSubtitleValueFromParams(params, schemaFields: schema),
+      'Wilo',
+    );
+
+    final noSub = _settings(listSubtitleInputFieldIndex: 0);
+    expect(
+      noSub.listSubtitleValueFromParams(params, schemaFields: schema),
+      isNull,
+    );
+  });
+
+  test('JSON roundtrip Feldindizes', () {
+    final csv = _settings(
+      listTitleInputFieldIndex: 1,
+      listSubtitleInputFieldIndex: 2,
+    );
     final restored = CsvSettings.fromJson(csv.toJson());
-    expect(restored.listSubtitleParamKey, 'Typ');
-    expect(restored.displayNameParamKey, 'Name');
+    expect(restored.listTitleInputFieldIndex, 1);
+    expect(restored.listSubtitleInputFieldIndex, 2);
   });
 }

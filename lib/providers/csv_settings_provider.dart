@@ -160,12 +160,14 @@ class CsvSettings {
   final String exportDelimiter;
   final String groupingGewerkParamKey;
   final String groupingAnlageParamKey;
-  /// Param-Key für die Titelzeile in der Anlagenliste (unabhängig von Hierarchie-Ebenen).
+  /// Param-Key für Anzeige/Vorlagen (Legacy; Listen-Titel nutzt [listTitleInputFieldIndex]).
   final String displayNameParamKey;
   /// Optional: Spalte aus Anlagen-CSV-Import (nur wenn importHeaderRow gesetzt ist).
   final int? displayNameSpalte;
-  /// Param-Key für die Untertitelzeile in der Anlagenliste. Leer = kein Untertitel.
-  final String listSubtitleParamKey;
+  /// Welches Eingabefeld (1-basiert, Dialogreihenfolge) als Listen-Titel dient.
+  final int listTitleInputFieldIndex;
+  /// Welches Eingabefeld (1-basiert) als Listen-Untertitel dient. 0 = keiner.
+  final int listSubtitleInputFieldIndex;
 
   const CsvSettings({
     required this.level1,
@@ -194,7 +196,8 @@ class CsvSettings {
     this.groupingAnlageParamKey = '',
     this.displayNameParamKey = 'Name',
     this.displayNameSpalte,
-    this.listSubtitleParamKey = 'Hersteller',
+    this.listTitleInputFieldIndex = 1,
+    this.listSubtitleInputFieldIndex = 0,
   });
 
   /// True, wenn mindestens einmal ein Anlagen-CSV-Import durchgeführt wurde.
@@ -1670,7 +1673,100 @@ class CsvSettings {
     return null;
   }
 
-  /// Titelzeile der Anlagenliste aus Params (unabhängig von Hierarchie-Ebenen).
+  /// Listen-Titel, wenn das gewählte Eingabefeld leer ist.
+  static const String unknownAnlageListLabel = 'Unbekannte Anlage';
+
+  /// Eingabefelder in Dialogreihenfolge (ohne Hierarchie-/Blatt-Spalten).
+  List<Map<String, dynamic>> listInputFieldsFromSchema(
+    List<Map<String, dynamic>> schemaFields,
+  ) {
+    final filtered = filterSchemaFieldsForDialog(schemaFields);
+    final result = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    final leaf = leafNameParamKey?.trim() ?? '';
+    for (final field in filtered) {
+      final key = (field['key'] ?? '').toString().trim();
+      if (key.isEmpty) continue;
+      if (isAnlagenCsvColumnParamKey(key)) continue;
+      if (isEbeneHierarchyHeader(key)) continue;
+      if (isUpperHierarchyParamKey(key)) continue;
+      if (isHierarchyParamKey(key)) continue;
+      // CSV-Blattspalte ausblenden (wie im Dialog), Anzeige-Param „Name“ bleibt.
+      if (leaf.isNotEmpty && paramKeysMatch(key, leaf)) continue;
+      final norm = key.toLowerCase();
+      if (seen.contains(norm)) continue;
+      seen.add(norm);
+      result.add(Map<String, dynamic>.from(field));
+    }
+    return result;
+  }
+
+  /// Wert des n-ten Eingabefelds (1-basiert). Null wenn leer/fehlend.
+  String? valueAtListInputFieldIndex(
+    Map<String, dynamic> params, {
+    required int fieldIndex1Based,
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    if (fieldIndex1Based < 1) return null;
+
+    final fields = listInputFieldsFromSchema(schemaFields);
+    if (fields.isNotEmpty) {
+      if (fieldIndex1Based > fields.length) return null;
+      final key = (fields[fieldIndex1Based - 1]['key'] ?? '').toString();
+      final v = paramValueForKey(params, key)?.trim() ?? '';
+      if (v.isEmpty) return null;
+      return v;
+    }
+
+    // Ohne Schema: stabile Reihenfolge über nicht-reservierte Params.
+    final leaf = leafNameParamKey?.trim() ?? '';
+    final keys = <String>[];
+    for (final entry in params.entries) {
+      final key = entry.key.toString().trim();
+      if (key.isEmpty || key.startsWith('_')) continue;
+      if (matchesReservedDialogParamKey(key)) continue;
+      if (isAnlagenCsvColumnParamKey(key)) continue;
+      if (isEbeneHierarchyHeader(key)) continue;
+      if (isUpperHierarchyParamKey(key)) continue;
+      if (isHierarchyParamKey(key)) continue;
+      if (leaf.isNotEmpty && paramKeysMatch(key, leaf)) continue;
+      keys.add(key);
+    }
+    keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (fieldIndex1Based > keys.length) return null;
+    final v = params[keys[fieldIndex1Based - 1]]?.toString().trim() ?? '';
+    if (v.isEmpty) return null;
+    return v;
+  }
+
+  /// Listen-Titel aus dem konfigurierten Eingabefeld (sonst [unknownAnlageListLabel]).
+  String listTitleValueFromParams(
+    Map<String, dynamic> params, {
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    final v = valueAtListInputFieldIndex(
+      params,
+      fieldIndex1Based: listTitleInputFieldIndex < 1 ? 1 : listTitleInputFieldIndex,
+      schemaFields: schemaFields,
+    );
+    if (v != null && v.isNotEmpty) return v;
+    return unknownAnlageListLabel;
+  }
+
+  /// Listen-Untertitel aus dem konfigurierten Eingabefeld (null wenn Index 0/leer).
+  String? listSubtitleValueFromParams(
+    Map<String, dynamic> params, {
+    List<Map<String, dynamic>> schemaFields = const [],
+  }) {
+    if (listSubtitleInputFieldIndex < 1) return null;
+    return valueAtListInputFieldIndex(
+      params,
+      fieldIndex1Based: listSubtitleInputFieldIndex,
+      schemaFields: schemaFields,
+    );
+  }
+
+  /// Titelzeile nur aus dem Legacy-Param-Key (Vorlagen / Anzeigename-Schreiben).
   String? displayNameValueFromParams(
     Map<String, dynamic> params, {
     List<Map<String, dynamic>> schemaFields = const [],
@@ -1680,73 +1776,34 @@ class CsvSettings {
         v.isNotEmpty &&
         !isNonDistinctDisplayValue(v, params);
 
+    final keys = <String>{};
     final explicit = displayNameParamKey.trim();
-    if (explicit.isNotEmpty) {
-      final fromExplicit = paramValueForKey(params, explicit);
-      if (usable(fromExplicit)) return fromExplicit;
+    if (explicit.isNotEmpty && !mustNotReceiveDisplayName(explicit)) {
+      keys.add(explicit);
+    }
+    final configured = resolveDisplayNameParamKey()?.trim() ?? '';
+    if (configured.isNotEmpty &&
+        !isUpperHierarchyParamKey(configured) &&
+        !mustNotReceiveDisplayName(configured)) {
+      keys.add(configured);
+    }
+
+    for (final key in keys) {
+      final direct = paramValueForKey(params, key);
+      if (usable(direct)) return direct;
       for (final field in schemaFields) {
         final fieldKey = (field['key'] ?? '').toString();
         final fieldLabel = (field['label'] ?? fieldKey).toString();
         if (fieldKey.isEmpty) continue;
-        if (!paramKeysMatch(fieldKey, explicit) &&
-            !paramKeysMatch(fieldLabel, explicit)) {
+        if (!paramKeysMatch(fieldKey, key) &&
+            !paramKeysMatch(fieldLabel, key)) {
           continue;
         }
         final fromField = paramValueForKey(params, fieldKey);
         if (usable(fromField)) return fromField;
       }
     }
-
-    final configured = resolveDisplayNameParamKey();
-    if (configured != null &&
-        configured.isNotEmpty &&
-        !isUpperHierarchyParamKey(configured)) {
-      final fromConfigured = paramValueForKey(params, configured);
-      if (usable(fromConfigured)) return fromConfigured;
-    }
-
-    for (final candidate in const [
-      'Name',
-      'Anlagenbezeichnung',
-      'Bezeichnung',
-      'name',
-    ]) {
-      final v = paramValueForKey(params, candidate);
-      if (usable(v)) return v;
-    }
-
-    for (final field in schemaFields) {
-      final fieldKey = (field['key'] ?? '').toString();
-      if (fieldKey.isEmpty) continue;
-      if (isUpperHierarchyParamKey(fieldKey)) continue;
-      if (isLeafNameParamKey(fieldKey)) {
-        final fromLeafField = paramValueForKey(params, fieldKey);
-        if (usable(fromLeafField)) return fromLeafField;
-        continue;
-      }
-    }
-
-    final leafKey = resolveNameParamKey();
-    if (leafKey != null &&
-        leafKey.isNotEmpty &&
-        !isUpperHierarchyParamKey(leafKey)) {
-      final fromLeaf = paramValueForKey(params, leafKey);
-      if (usable(fromLeaf)) return fromLeaf;
-    }
     return null;
-  }
-
-  /// Untertitelzeile der Anlagenliste aus dem konfigurierten Param-Key.
-  String? listSubtitleValueFromParams(Map<String, dynamic> params) {
-    final key = listSubtitleParamKey.trim();
-    if (key.isEmpty) return null;
-    final value = paramValueForKey(params, key)?.trim();
-    if (value == null ||
-        value.isEmpty ||
-        isNonDistinctDisplayValue(value, params)) {
-      return null;
-    }
-    return value;
   }
 
   void writeDisplayNameToParams(Map<String, dynamic> params, String value) {
@@ -2154,7 +2211,8 @@ class CsvSettings {
     String? groupingAnlageParamKey,
     String? displayNameParamKey,
     int? displayNameSpalte,
-    String? listSubtitleParamKey,
+    int? listTitleInputFieldIndex,
+    int? listSubtitleInputFieldIndex,
     bool clearAnlageBauteilSpalte = false,
     bool clearDisplayNameSpalte = false,
     bool clearAttributeRange = false,
@@ -2195,7 +2253,10 @@ class CsvSettings {
       displayNameSpalte: clearDisplayNameSpalte
           ? null
           : (displayNameSpalte ?? this.displayNameSpalte),
-      listSubtitleParamKey: listSubtitleParamKey ?? this.listSubtitleParamKey,
+      listTitleInputFieldIndex:
+          listTitleInputFieldIndex ?? this.listTitleInputFieldIndex,
+      listSubtitleInputFieldIndex:
+          listSubtitleInputFieldIndex ?? this.listSubtitleInputFieldIndex,
     );
   }
 
@@ -2228,7 +2289,8 @@ class CsvSettings {
       'groupingAnlageParamKey': groupingAnlageParamKey,
       'displayNameParamKey': displayNameParamKey,
       'displayNameSpalte': displayNameSpalte,
-      'listSubtitleParamKey': listSubtitleParamKey,
+      'listTitleInputFieldIndex': listTitleInputFieldIndex,
+      'listSubtitleInputFieldIndex': listSubtitleInputFieldIndex,
     };
   }
 
@@ -2295,8 +2357,11 @@ class CsvSettings {
       groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
       displayNameParamKey: json['displayNameParamKey'] as String? ?? 'Name',
       displayNameSpalte: json['displayNameSpalte'] as int?,
-      listSubtitleParamKey:
-          json['listSubtitleParamKey'] as String? ?? 'Hersteller',
+      listTitleInputFieldIndex: json['listTitleInputFieldIndex'] as int? ?? 1,
+      listSubtitleInputFieldIndex: json['listSubtitleInputFieldIndex'] as int? ??
+          ((json['listSubtitleParamKey'] as String?)?.trim().isNotEmpty == true
+              ? 2
+              : 0),
     );
   }
 

@@ -1028,83 +1028,23 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   String? _resolveDisplayNameValue(Anlage anlage, Disziplin disc) {
     final csv = _liveCsvSettings();
     if (csv == null) return null;
-
-    final explicitKey =
-        widget.displayNameParamKey?.trim() ?? csv.displayNameParamKey.trim();
-    if (explicitKey.isNotEmpty) {
-      final direct = csv.paramValueForKey(anlage.params, explicitKey);
-      if (direct != null &&
-          direct.isNotEmpty &&
-          !csv.isNonDistinctDisplayValue(direct, anlage.params)) {
-        return direct;
-      }
-      for (final field in disc.schema) {
-        final fieldKey = (field['key'] ?? '').toString();
-        final fieldLabel = (field['label'] ?? fieldKey).toString();
-        if (fieldKey.isEmpty) continue;
-        if (!CsvSettings.paramKeysMatch(fieldKey, explicitKey) &&
-            !CsvSettings.paramKeysMatch(fieldLabel, explicitKey)) {
-          continue;
-        }
-        final fromField = csv.paramValueForKey(anlage.params, fieldKey);
-        if (fromField != null &&
-            fromField.isNotEmpty &&
-            !csv.isNonDistinctDisplayValue(fromField, anlage.params)) {
-          return fromField;
-        }
-      }
-    }
-
-    return csv.displayNameValueFromParams(
+    final ro = (csv.revisionsobjektValueFromParams(anlage.params) ??
+            csv.schemaItemValueFromParams(anlage.params) ??
+            '')
+        .trim();
+    final schemaFields = disc.effectiveSchemaFor(
+      revisionsobjekt: ro.isNotEmpty ? ro : null,
+    );
+    // Immer String (mind. „Unbekannte Anlage“) – für die Liste.
+    return csv.listTitleValueFromParams(
       anlage.params,
-      schemaFields: disc.schema,
+      schemaFields: schemaFields,
     );
   }
 
-  bool _isHierarchyLevelLabel(String text, CsvSettings csv) {
-    final t = text.trim();
-    if (t.isEmpty) return false;
-    if (t == csv.labelGewerk || t == csv.labelAnlage || t == csv.labelBauteil) {
-      return true;
-    }
-    for (var level = 1; level <= 3; level++) {
-      if (t == csv.hierarchyLevelHeaderLabel(level)) return true;
-    }
-    return false;
-  }
-
   String _resolveListDisplayName(Anlage anlage) {
-    final csv = _liveCsvSettings();
-    final fromParams = _resolveDisplayNameValue(anlage, anlage.discipline);
-    if (fromParams != null && fromParams.isNotEmpty) {
-      return fromParams;
-    }
-
-    final name = anlage.name.trim();
-    if (csv != null) {
-      // Leerspeichern / RO-Duplikat: nicht denselben Text wie die Gruppe zeigen.
-      if (csv.hasListNamePlaceholder(anlage.params) ||
-          csv.isNonDistinctDisplayValue(name, anlage.params)) {
-        for (final field in anlage.discipline.schema) {
-          final fieldKey = (field['key'] ?? '').toString();
-          if (fieldKey.isEmpty) continue;
-          if (csv.isUpperHierarchyParamKey(fieldKey)) continue;
-          if (csv.mustNotReceiveDisplayName(fieldKey)) continue;
-          final v = csv.paramValueForKey(anlage.params, fieldKey);
-          if (v != null &&
-              v.isNotEmpty &&
-              !csv.isNonDistinctDisplayValue(v, anlage.params)) {
-            return v;
-          }
-        }
-        return 'Eintrag';
-      }
-      if (csv.isPlaceholderDisplayValue(name) ||
-          _isHierarchyLevelLabel(name, csv)) {
-        return 'Eintrag';
-      }
-    }
-    return name.isNotEmpty ? name : 'Eintrag';
+    return _resolveDisplayNameValue(anlage, anlage.discipline) ??
+        CsvSettings.unknownAnlageListLabel;
   }
 
   String? _resolvePreviewText(
@@ -1120,7 +1060,17 @@ class SystemsPageState extends ConsumerState<SystemsPage>
   String? _resolveListSubtitle(Anlage anlage) {
     final csv = _liveCsvSettings();
     if (csv == null) return null;
-    return csv.listSubtitleValueFromParams(anlage.params);
+    final ro = (csv.revisionsobjektValueFromParams(anlage.params) ??
+            csv.schemaItemValueFromParams(anlage.params) ??
+            '')
+        .trim();
+    final schemaFields = anlage.discipline.effectiveSchemaFor(
+      revisionsobjekt: ro.isNotEmpty ? ro : null,
+    );
+    return csv.listSubtitleValueFromParams(
+      anlage.params,
+      schemaFields: schemaFields,
+    );
   }
 
   String? _resolveTypeHint(Anlage anlage) => null;

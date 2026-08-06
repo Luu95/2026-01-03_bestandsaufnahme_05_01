@@ -53,7 +53,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   String _groupingAnlageParamKey = '';
   String _displayNameParamKey = 'Name';
   int? _displayNameSpalte;
-  String _listSubtitleParamKey = 'Hersteller';
+  int _listTitleInputFieldIndex = 1;
+  int _listSubtitleInputFieldIndex = 0;
 
   /// Attribut-Dreiergruppen: Name, Typ, Wert/Art (z. B. ATT1 … ATT1_WERT).
   List<AttributeTripletColumn> _attributeQuadrupletColumns = [];
@@ -80,7 +81,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
   late final TextEditingController _groupingGewerkParamKeyCtrl;
   late final TextEditingController _groupingAnlageParamKeyCtrl;
   late final TextEditingController _displayNameParamKeyCtrl;
-  late final TextEditingController _listSubtitleParamKeyCtrl;
+  late final TextEditingController _listTitleFieldIndexCtrl;
+  late final TextEditingController _listSubtitleFieldIndexCtrl;
   late final TextEditingController _foto1SpalteLabelCtrl;
   late final TextEditingController _foto2SpalteLabelCtrl;
   late final TextEditingController _foto3SpalteLabelCtrl;
@@ -123,8 +125,10 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _groupingGewerkParamKeyCtrl = TextEditingController(text: _groupingGewerkParamKey);
     _groupingAnlageParamKeyCtrl = TextEditingController(text: _groupingAnlageParamKey);
     _displayNameParamKeyCtrl = TextEditingController(text: _displayNameParamKey);
-    _listSubtitleParamKeyCtrl =
-        TextEditingController(text: _listSubtitleParamKey);
+    _listTitleFieldIndexCtrl =
+        TextEditingController(text: '$_listTitleInputFieldIndex');
+    _listSubtitleFieldIndexCtrl =
+        TextEditingController(text: '$_listSubtitleInputFieldIndex');
     _foto1SpalteLabelCtrl = TextEditingController(text: _foto1SpalteLabel ?? '');
     _foto2SpalteLabelCtrl = TextEditingController(text: _foto2SpalteLabel ?? '');
     _foto3SpalteLabelCtrl = TextEditingController(text: _foto3SpalteLabel ?? '');
@@ -146,7 +150,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
     _groupingGewerkParamKeyCtrl.dispose();
     _groupingAnlageParamKeyCtrl.dispose();
     _displayNameParamKeyCtrl.dispose();
-    _listSubtitleParamKeyCtrl.dispose();
+    _listTitleFieldIndexCtrl.dispose();
+    _listSubtitleFieldIndexCtrl.dispose();
     _foto1SpalteLabelCtrl.dispose();
     _foto2SpalteLabelCtrl.dispose();
     _foto3SpalteLabelCtrl.dispose();
@@ -217,11 +222,18 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         selection: TextSelection.collapsed(offset: _displayNameParamKey.length),
       );
     }
-    if (_listSubtitleParamKeyCtrl.text != _listSubtitleParamKey) {
-      _listSubtitleParamKeyCtrl.value = TextEditingValue(
-        text: _listSubtitleParamKey,
-        selection:
-            TextSelection.collapsed(offset: _listSubtitleParamKey.length),
+    final titleIdx = '$_listTitleInputFieldIndex';
+    if (_listTitleFieldIndexCtrl.text != titleIdx) {
+      _listTitleFieldIndexCtrl.value = TextEditingValue(
+        text: titleIdx,
+        selection: TextSelection.collapsed(offset: titleIdx.length),
+      );
+    }
+    final subIdx = '$_listSubtitleInputFieldIndex';
+    if (_listSubtitleFieldIndexCtrl.text != subIdx) {
+      _listSubtitleFieldIndexCtrl.value = TextEditingValue(
+        text: subIdx,
+        selection: TextSelection.collapsed(offset: subIdx.length),
       );
     }
     final f1 = _foto1SpalteLabel ?? '';
@@ -336,7 +348,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         _groupingAnlageParamKey = settings.groupingAnlageParamKey;
         _displayNameParamKey = settings.displayNameParamKey;
         _displayNameSpalte = settings.displayNameSpalte;
-        _listSubtitleParamKey = settings.listSubtitleParamKey;
+        _listTitleInputFieldIndex = settings.listTitleInputFieldIndex;
+        _listSubtitleInputFieldIndex = settings.listSubtitleInputFieldIndex;
         _mappingCsvHeaders = settings.importHeaderRow.isNotEmpty
             ? List<String>.from(settings.importHeaderRow)
             : null;
@@ -532,7 +545,8 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
         groupingAnlageParamKey: _groupingAnlageParamKey,
         displayNameParamKey: _displayNameParamKey,
         displayNameSpalte: _displayNameSpalte,
-        listSubtitleParamKey: _listSubtitleParamKey,
+        listTitleInputFieldIndex: _listTitleInputFieldIndex,
+        listSubtitleInputFieldIndex: _listSubtitleInputFieldIndex,
       );
       await notifier.save(settings);
 
@@ -753,53 +767,42 @@ class _CsvSettingsPageState extends ConsumerState<CsvSettingsPage> {
           ),
           const SizedBox(height: 12),
           ExpansionTile(
-            title: const Text('Anlagenliste – angezeigte Attribute'),
+            title: const Text('Anlagenliste – angezeigte Eingabefelder'),
             childrenPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             children: [
               TextField(
-                controller: _displayNameParamKeyCtrl,
+                controller: _listTitleFieldIndexCtrl,
+                keyboardType: TextInputType.number,
                 decoration: _themedInputDecoration(
                   context,
-                  labelText: 'Titel-Attribut',
+                  labelText: 'Titel = Eingabefeld Nr.',
                   helperText:
-                      'Param-Key aus Schema/CSV (z. B. Name, Anlagenbezeichnung). '
-                      'Unabhängig davon, welche Hierarchie-Ebenen aktiv sind.',
+                      'Nummer des Eingabefelds im Anlagendialog (1 = erstes Feld). '
+                      'Leer → „Unbekannte Anlage“.',
                 ),
                 onChanged: (val) {
-                  setState(() => _displayNameParamKey = val);
+                  final n = int.tryParse(val.trim()) ?? 1;
+                  setState(() => _listTitleInputFieldIndex = n < 1 ? 1 : n);
                   _scheduleAutoSave();
                 },
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: _listSubtitleParamKeyCtrl,
+                controller: _listSubtitleFieldIndexCtrl,
+                keyboardType: TextInputType.number,
                 decoration: _themedInputDecoration(
                   context,
-                  labelText: 'Untertitel-Attribut',
+                  labelText: 'Untertitel = Eingabefeld Nr.',
                   helperText:
-                      'Zweite Zeile in der Anlagenliste (z. B. Hersteller). '
-                      'Leer lassen = kein Untertitel.',
+                      'Zweite Zeile in der Liste. 0 = kein Untertitel.',
                 ),
                 onChanged: (val) {
-                  setState(() => _listSubtitleParamKey = val);
+                  final n = int.tryParse(val.trim()) ?? 0;
+                  setState(
+                      () => _listSubtitleInputFieldIndex = n < 0 ? 0 : n);
                   _scheduleAutoSave();
                 },
-              ),
-              const SizedBox(height: 12),
-              _buildColumnSelector(
-                label: 'Alternativ Titel: CSV-Spalte (nur Anlagen-Import)',
-                value: _displayNameSpalte ??
-                    (_level3.enabled
-                        ? _level3.nameColumn
-                        : (_level2.enabled
-                            ? _level2.nameColumn
-                            : _level1.nameColumn)),
-                onChanged: (v) {
-                  setState(() => _displayNameSpalte = v);
-                  _scheduleAutoSave();
-                },
-                csvHeaders: _mappingCsvHeaders,
               ),
             ],
           ),

@@ -570,52 +570,37 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
     return CsvSettings.paramKeysMatch(key, leaf);
   }
 
-  /// Anzeigename der Anlage (Schema-Feld / CSV-Blattspalte).
+  /// Anzeigename der Anlage für [Anlage.name] = konfiguriertes Eingabefeld.
   String _resolvePersistedName() {
     final csv = _csvSettings;
-    if (csv != null) {
-      final fromDisplay = csv.displayNameValueFromParams(
-        _params,
-        schemaFields: _currentDiscipline.schema,
-      )?.trim();
-      if (fromDisplay != null &&
-          fromDisplay.isNotEmpty &&
-          !csv.isNonDistinctDisplayValue(fromDisplay, _params)) {
-        return fromDisplay;
-      }
-      final leafKey = csv.leafNameParamKey;
-      if (leafKey != null && leafKey.isNotEmpty) {
-        final fromParams = csv.paramValueForKey(_params, leafKey);
-        if (fromParams != null &&
-            fromParams.isNotEmpty &&
-            !csv.isNonDistinctDisplayValue(fromParams, _params)) {
-          return fromParams;
-        }
-      }
-    }
-
-    final ro = (widget.initialRevisionsobjekt?.trim().isNotEmpty == true
-            ? widget.initialRevisionsobjekt!.trim()
-            : _resolveRevisionsobjektFromParams()?.trim()) ??
+    if (csv == null) return '';
+    final ro = _resolveRevisionsobjektFromParams()?.trim() ??
+        widget.initialRevisionsobjekt?.trim() ??
         '';
-
-    bool isStale(String candidate) {
-      final t = candidate.trim();
-      if (t.isEmpty) return true;
-      if (csv != null && csv.isNonDistinctDisplayValue(t, _params)) {
-        return true;
-      }
-      if (ro.isNotEmpty && t.toLowerCase() == ro.toLowerCase()) return true;
-      return false;
+    final schema = _currentDiscipline.effectiveSchemaFor(
+      revisionsobjekt: ro.isNotEmpty ? ro : null,
+    );
+    // Dialog-Filter analog zu sichtbaren Eingabefeldern
+    final inputFields = csv.listInputFieldsFromSchema(
+      schema.where((f) {
+        final key = (f['key'] ?? '').toString();
+        if (key.isEmpty) return true;
+        return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
+      }).toList(),
+    );
+    final index = csv.listTitleInputFieldIndex < 1 ? 1 : csv.listTitleInputFieldIndex;
+    if (inputFields.isEmpty || index > inputFields.length) {
+      // Fallback über generische Auflösung
+      final title = csv.listTitleValueFromParams(
+        _params,
+        schemaFields: schema,
+      );
+      return title == CsvSettings.unknownAnlageListLabel ? '' : title;
     }
-
-    if (widget.existingAnlage != null) {
-      final existing = widget.existingAnlage!.name.trim();
-      if (!isStale(existing)) return existing;
-    }
-    final initial = widget.initialName?.trim();
-    if (initial != null && !isStale(initial)) return initial;
-    return '';
+    final key = (inputFields[index - 1]['key'] ?? '').toString();
+    final v = csv.paramValueForKey(_params, key)?.trim() ?? '';
+    if (v.isEmpty) return '';
+    return v;
   }
 
   void _applyLockedLocationParams() {
@@ -3025,44 +3010,17 @@ class _GenericGewerkDialogState extends ConsumerState<GenericAnlageDialog> {
 
                         var name = _resolvePersistedName();
                         final csv = _csvSettings;
-                        // Platzhalter / Revisionsobjekt nie in Titel-Params schreiben –
-                        // sonst blockiert die Listenzeile spätere echte Eingaben.
                         if (csv != null) {
                           csv.clearPlaceholderDisplayNameFromParams(_params);
                         }
-                        final ro = (widget.initialRevisionsobjekt?.trim().isNotEmpty ==
-                                    true
-                                ? widget.initialRevisionsobjekt!.trim()
-                                : _resolveRevisionsobjektFromParams()?.trim()) ??
-                            '';
-                        final hasRealName = name.isNotEmpty &&
-                            (csv == null ||
-                                !csv.isNonDistinctDisplayValue(
-                                    name, _params)) &&
-                            (ro.isEmpty ||
-                                name.toLowerCase() != ro.toLowerCase());
+                        final hasRealName = name.isNotEmpty;
                         if (!hasRealName) {
-                          name = 'Eintrag';
+                          name = CsvSettings.unknownAnlageListLabel;
                           _params[CsvSettings.listNamePlaceholderParamKey] =
                               true;
                         } else {
                           _params.remove(
                               CsvSettings.listNamePlaceholderParamKey);
-                        }
-                        if (csv != null && hasRealName) {
-                          csv.writeDisplayNameToParams(_params, name);
-                          final leafKey = csv.leafNameParamKey?.trim();
-                          final displayKey =
-                              csv.resolveDisplayNameParamKey()?.trim();
-                          if (leafKey != null &&
-                              leafKey.isNotEmpty &&
-                              displayKey != null &&
-                              !CsvSettings.paramKeysMatch(
-                                  leafKey, displayKey) &&
-                              !csv.mustNotReceiveDisplayName(leafKey) &&
-                              !csv.isNonDistinctDisplayValue(name, _params)) {
-                            _params[leafKey] = name;
-                          }
                         }
                         _applyLockedLocationParams();
 
