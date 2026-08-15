@@ -1090,6 +1090,24 @@ class DatabaseService {
     return await _db.getTemplatesByProjectIdAndGewerk(projectId, gewerk);
   }
 
+  /// Distinct Gewerk-Labels aus Vorlagen (ohne Parameter-JSON).
+  Future<List<String>> getDistinctTemplateGewerke(String projectId) async {
+    return await _db.getDistinctTemplateGewerke(projectId);
+  }
+
+  /// Distinct Anlagentypen eines Gewerks aus Vorlagen (ohne Parameter-JSON).
+  Future<List<String>> getDistinctTemplateAnlagentypen(
+    String projectId,
+    String gewerk,
+  ) async {
+    return await _db.getDistinctTemplateAnlagentypen(projectId, gewerk);
+  }
+
+  /// Schnellcheck: Projekt hat Vorlagen.
+  Future<bool> hasTemplatesForProject(String projectId) async {
+    return await _db.hasTemplatesForProject(projectId);
+  }
+
   /// Fügt ein Template in die Datenbank ein
   Future<void> insertTemplate(
     String projectId,

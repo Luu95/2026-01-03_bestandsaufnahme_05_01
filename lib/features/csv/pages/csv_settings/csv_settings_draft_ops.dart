@@ -41,10 +41,14 @@ abstract final class CsvSettingsDraftOps {
     if (CsvSettings.headerLooksLikeAnlagenWertFormat(headers)) {
       final pairs = CsvSettings.detectAnlagenAttributePairsFromHeader(headers);
       if (pairs.isEmpty) return settings;
-      if (_pairsMatch(settings.attributeColumnPairs, pairs)) return settings;
+      final asTriplets =
+          pairs.map(AttributeTripletColumn.fromPair).toList(growable: false);
+      if (_tripletsMatch(settings.canonicalAttributeTriplets, asTriplets)) {
+        return settings;
+      }
       return settings.copyWith(
-        attributeColumnPairs: pairs,
-        attributeTripletColumns: const [],
+        attributeColumnPairs: const [],
+        attributeTripletColumns: asTriplets,
       );
     }
 
@@ -57,7 +61,10 @@ abstract final class CsvSettingsDraftOps {
       )) {
         return settings;
       }
-      return settings.copyWith(attributeTripletColumns: triplets);
+      return settings.copyWith(
+        attributeColumnPairs: const [],
+        attributeTripletColumns: triplets,
+      );
     }
 
     return settings;
@@ -107,14 +114,15 @@ abstract final class CsvSettingsDraftOps {
     );
   }
 
-  static bool _pairsMatch(
-    List<AttributeColumnPair> current,
-    List<AttributeColumnPair> detected,
+  static bool _tripletsMatch(
+    List<AttributeTripletColumn> current,
+    List<AttributeTripletColumn> detected,
   ) {
     if (detected.length != current.length) return false;
     for (var i = 0; i < current.length; i++) {
       if (current[i].nameColumn != detected[i].nameColumn ||
-          current[i].valueColumn != detected[i].valueColumn) {
+          current[i].typeColumn != detected[i].typeColumn ||
+          current[i].artColumn != detected[i].artColumn) {
         return false;
       }
     }

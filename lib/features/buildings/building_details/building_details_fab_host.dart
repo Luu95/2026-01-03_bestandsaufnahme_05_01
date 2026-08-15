@@ -14,6 +14,7 @@ import 'package:bestandsaufnahme_01/features/systems/widgets/systems_list_tile_s
 import 'package:bestandsaufnahme_01/features/buildings/building_details/building_details_anlage_actions.dart';
 import 'package:bestandsaufnahme_01/features/buildings/building_details/building_details_floor_actions.dart';
 import 'package:bestandsaufnahme_01/features/buildings/building_details/building_details_selection_actions.dart';
+import 'package:bestandsaufnahme_01/core/logging/app_log.dart';
 
 /// AppBar-Actions + FAB der Gebäude-Seite (Abschnitt 6).
 mixin BuildingDetailsFabHost<T extends ConsumerStatefulWidget>
@@ -105,7 +106,6 @@ mixin BuildingDetailsFabHost<T extends ConsumerStatefulWidget>
           : 'Anlage';
       return FloatingActionButton(
         onPressed: () async {
-          await ensureDisciplinesFromTemplatesIfNeeded();
           if (!mounted) return;
           final discipline = await resolveDisciplineForAddOrMaterialize();
           if (discipline == null) {
@@ -201,7 +201,13 @@ mixin BuildingDetailsFabHost<T extends ConsumerStatefulWidget>
                   ?.currentState
                   ?.hasOnlyBauteileSelected() ??
               false;
-        } catch (_) {}
+        } catch (e, st) {
+          appLog(
+            'FAB: hasOnlyBauteile für $activeLabel nicht ermittelbar',
+            error: e,
+            stackTrace: st,
+          );
+        }
 
         final csvSettings = fabProject.id.isNotEmpty
             ? ref.read(csvSettingsProvider(fabProject.id))

@@ -160,25 +160,27 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
     final disciplines = await db.getDisciplinesByBuildingId(widget.currentBuildingId);
 
-    // Vorlagen-Gewerke ergänzen (ohne vorherigen „Gewerk wählen“-Dialog)
+    // Vorlagen-Gewerke als Shells (Label only) – Schema kommt beim Materialize.
     var available = List<Disziplin>.from(disciplines);
     if (projectId != null && projectId.isNotEmpty) {
-      final templateRows = await db.getTemplatesByProjectId(projectId);
-      if (templateRows.isNotEmpty) {
-        final virtual =
-            TemplateService.buildVirtualDisciplinesFromTemplateRows(templateRows);
+      final gewerkLabels = await db.getDistinctTemplateGewerke(projectId);
+      if (gewerkLabels.isNotEmpty) {
         final existingLabels = {
           for (final d in available) d.label.trim().toLowerCase(),
         };
-        for (final v in virtual) {
-          final key = v.label.trim().toLowerCase();
-          if (key.isEmpty || existingLabels.contains(key)) continue;
-          available.add(v);
-          existingLabels.add(key);
+        final missing = <String>[
+          for (final label in gewerkLabels)
+            if (label.trim().isNotEmpty &&
+                !existingLabels.contains(label.trim().toLowerCase()))
+              label.trim(),
+        ];
+        if (missing.isNotEmpty) {
+          available
+            ..addAll(TemplateService.disciplineShells(missing))
+            ..sort(
+              (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()),
+            );
         }
-        available.sort(
-          (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()),
-        );
       }
     }
 
@@ -199,6 +201,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       await _loadHierarchyTargets(
         db,
         disciplines: available,
+        projectId: projectId,
       );
     }
 
@@ -214,6 +217,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
     DatabaseService db, {
     String? disciplineLabel,
     List<Disziplin>? disciplines,
+    String? projectId,
   }) async {
     final csv = _csvSettings;
     final roKey = widget.revisionsobjektGroupingKey!.trim();
@@ -252,18 +256,19 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       targets.putIfAbsent('', () => {}).add(ro.trim());
     }
 
-    final projectId = await db.getProjectIdByBuildingId(widget.currentBuildingId);
-    if (projectId != null && projectId.isNotEmpty) {
-      final templates = await TemplateService.loadTemplatesFromDatabase(
+    var resolvedProjectId = projectId ?? widget.projectId;
+    if (resolvedProjectId == null || resolvedProjectId.isEmpty) {
+      resolvedProjectId =
+          await db.getProjectIdByBuildingId(widget.currentBuildingId);
+    }
+    if (resolvedProjectId != null && resolvedProjectId.isNotEmpty) {
+      final typen = await TemplateService.templateAnlagentypenForGewerk(
         db,
-        projectId,
-        gewerk: label,
+        resolvedProjectId,
+        label,
       );
-      for (final t in templates) {
-        final typ = t.anlagentyp.trim();
-        if (typ.isNotEmpty) {
-          targets.putIfAbsent('', () => {}).add(typ);
-        }
+      for (final typ in typen) {
+        targets.putIfAbsent('', () => {}).add(typ);
       }
     }
 
@@ -355,6 +360,10 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
         sourceKeys.intersection(targetKeys).isNotEmpty;
   }
 
+  /// Shell = noch nicht materialisierte Vorlagen-Disziplin (kein Schema).
+  bool _isDisciplineShell(Disziplin d) =>
+      d.schema.isEmpty && d.revisionsobjektSchemas.isEmpty;
+
   bool get _canExecuteHierarchyMove {
     if (!_hasHierarchyMove) return true;
     final ro = _effectiveRevisionsobjekt?.trim() ?? '';
@@ -423,12 +432,15 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
       if (projectId != null && projectId.isNotEmpty) {
         final existing =
             await db.getDisciplinesByBuildingId(widget.currentBuildingId);
-        final exists = existing.any(
-          (d) =>
-              d.label.trim().toLowerCase() ==
-              discipline.label.trim().toLowerCase(),
-        );
-        if (!exists) {
+        Disziplin? match;
+        final want = discipline.label.trim().toLowerCase();
+        for (final d in existing) {
+          if (d.label.trim().toLowerCase() == want) {
+            match = d;
+            break;
+          }
+        }
+        if (match == null || _isDisciplineShell(match)) {
           discipline = await TemplateService.materializeDisciplineFromTemplates(
             dbService: db,
             buildingId: widget.currentBuildingId,
@@ -499,6 +511,41 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
 
       // Schema-Kompatibilität prüfen
       if (_selectedDiscipline!.label != widget.currentDiscipline.label) {
+        if (_isDisciplineShell(_selectedDiscipline!)) {
+          final projectId =
+              await db.getProjectIdByBuildingId(widget.currentBuildingId);
+          if (projectId == null || projectId.isEmpty) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Ziel-Gewerk hat kein Schema und keine Vorlagen zum Nachladen.',
+                ),
+              ),
+            );
+            setState(() => _isMoving = false);
+            return;
+          }
+          try {
+            _selectedDiscipline =
+                await TemplateService.materializeDisciplineFromTemplates(
+              dbService: db,
+              buildingId: widget.currentBuildingId,
+              projectId: projectId,
+              gewerk: _selectedDiscipline!.label,
+            );
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Schema für Ziel-Gewerk konnte nicht geladen werden: $e'),
+              ),
+            );
+            setState(() => _isMoving = false);
+            return;
+          }
+        }
+
         final isCompatible = _areSchemasCompatible(
           widget.currentDiscipline,
           _selectedDiscipline!,
@@ -721,6 +768,7 @@ class _MoveAnlagenDialogState extends ConsumerState<MoveAnlagenDialog> {
                     ref.read(databaseServiceProvider),
                     disciplineLabel: val.label,
                     disciplines: _availableDisciplines,
+                    projectId: widget.projectId,
                   );
                 }
               },

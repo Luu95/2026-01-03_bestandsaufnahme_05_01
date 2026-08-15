@@ -95,57 +95,17 @@ class AnlageValidationService {
     Anlage anlage, {
     CsvSettings? csvSettings,
   }) {
-    final ro = _resolveRevisionsobjekt(anlage, csvSettings);
-    final discipline = anlage.discipline;
-
-    List<Map<String, dynamic>> fields;
-    if (ro != null && ro.isNotEmpty) {
-      fields = discipline.effectiveSchemaFor(revisionsobjekt: ro);
-      final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
-      if (nonGlobal.isEmpty) {
-        final legacy = discipline.legacyIndividualSchemaFields;
-        if (legacy.isNotEmpty) {
-          fields = [...discipline.globalSchemaFields, ...legacy];
-        }
-      }
-    } else {
-      fields = List<Map<String, dynamic>>.from(discipline.schema);
-    }
-
-    fields = CsvSettings.filterSchemaFieldsForDialog(fields);
-
-    if (csvSettings != null) {
-      fields = fields.where((f) {
-        final key = (f['key'] ?? '').toString();
-        if (key.isEmpty) return true;
-        return !csvSettings.isHierarchyParamKey(key) &&
-            !csvSettings.isLeafNameParamKey(key);
-      }).toList();
-    }
-
-    // Import: Felder nur in Params, noch nicht im Disziplin-Schema
-    if (fields.where((f) => f['isGlobal'] != true).isEmpty) {
-      final fromParams = CsvSettings.schemaFieldsFromParams(
-        anlage.params,
-        settings: csvSettings,
-      );
-      if (fromParams.isNotEmpty) {
-        fields = CsvSettings.filterSchemaFieldsForDialog([
-          ...discipline.globalSchemaFields,
-          ...fromParams,
-        ]);
-        if (csvSettings != null) {
-          fields = fields.where((f) {
-            final key = (f['key'] ?? '').toString();
-            if (key.isEmpty) return true;
-            return !csvSettings.isHierarchyParamKey(key) &&
-                !csvSettings.isLeafNameParamKey(key);
-          }).toList();
-        }
-      }
-    }
-
-    return fields;
+    return SchemaResolver.resolveAsMaps(
+      SchemaResolveInput(
+        discipline: anlage.discipline,
+        revisionsobjekt: _resolveRevisionsobjekt(anlage, csvSettings),
+        params: anlage.params,
+        csvSettings: csvSettings,
+        importHeaders: csvSettings?.importHeaderRow ?? const [],
+        purpose: SchemaResolvePurpose.validation,
+        allowLastResortInference: true,
+      ),
+    );
   }
 
   /// Ermittelt das Revisionsobjekt aus CSV-Settings, Legacy-Keys oder einzigem RO.

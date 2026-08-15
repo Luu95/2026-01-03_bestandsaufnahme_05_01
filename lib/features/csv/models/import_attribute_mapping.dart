@@ -1,31 +1,64 @@
-/// Ergebnis der Header-Analyse: Zweier- oder Dreier-Mapping.
+/// Ergebnis der Header-Analyse: kanonisch immer Triplets + Dialekt.
 ///
-/// - [pairs] = Anlagen-Format (Name + Wert)
-/// - [triplets] = Gewerke-Format (Name + Typ + Wert/Art)
-/// - [CsvSettings.resolveImportAttributeMapping] wählt genau einen Dialekt
+/// Pair-Dialekt wird als Triplets mit `typeColumn: -1` gespeichert;
+/// [pairs] ist nur noch eine abgeleitete Sicht für ältere Aufrufer.
 
 import 'package:bestandsaufnahme_01/features/csv/models/attribute_column_pair.dart';
 import 'package:bestandsaufnahme_01/features/csv/models/attribute_triplet_column.dart';
 
-/// Ergebnis der Header-Analyse: Zweier- oder Dreier-Mapping für einen Import.
-class ImportAttributeMapping {
-  /// Erkannte bzw. konfigurierte Name/Wert-Paare (Anlagen-Dialekt).
-  final List<AttributeColumnPair> pairs;
+/// Dialekt der Attribut-Spalten.
+enum AttributeDialect {
+  /// Anlagen: Name + Wert (ATT / ATT_WERT).
+  anlagenPair,
 
-  /// Erkannte bzw. konfigurierte Dreiergruppen (Gewerke-Dialekt).
+  /// Gewerke: Name + Typ + Wert/Art.
+  gewerkeTriplet,
+}
+
+/// Ergebnis der Header-Analyse für einen Import.
+class ImportAttributeMapping {
+  /// Kanonische Attributgruppen (Pair-Dialekt: typeColumn = -1).
   final List<AttributeTripletColumn> triplets;
 
+  /// Erkannter bzw. konfigurierter Dialekt.
+  final AttributeDialect dialect;
+
   const ImportAttributeMapping({
-    this.pairs = const [],
     this.triplets = const [],
+    this.dialect = AttributeDialect.gewerkeTriplet,
   });
 
-  /// True, wenn weder Paare noch Triplets gesetzt sind.
-  bool get isEmpty => pairs.isEmpty && triplets.isEmpty;
+  /// Pair-Liste aus Pair-Dialekt-Triplets (Kompatibilität).
+  factory ImportAttributeMapping.fromPairs(List<AttributeColumnPair> pairs) {
+    return ImportAttributeMapping(
+      triplets: pairs.map(AttributeTripletColumn.fromPair).toList(),
+      dialect: AttributeDialect.anlagenPair,
+    );
+  }
 
-  /// True, wenn der Pair-Dialekt aktiv ist (Vorrang vor Triplets).
-  bool get isPair => pairs.isNotEmpty;
+  /// Echte Gewerke-Triplets.
+  factory ImportAttributeMapping.fromTriplets(
+    List<AttributeTripletColumn> triplets,
+  ) {
+    return ImportAttributeMapping(
+      triplets: triplets,
+      dialect: AttributeDialect.gewerkeTriplet,
+    );
+  }
 
-  /// True, wenn nur der Triplet-Dialekt aktiv ist.
-  bool get isTriplet => triplets.isNotEmpty && pairs.isEmpty;
+  /// True, wenn keine Gruppen gesetzt sind.
+  bool get isEmpty => triplets.isEmpty;
+
+  /// True, wenn Pair-Dialekt aktiv.
+  bool get isPair =>
+      dialect == AttributeDialect.anlagenPair && triplets.isNotEmpty;
+
+  /// True, wenn Triplet-Dialekt aktiv.
+  bool get isTriplet =>
+      dialect == AttributeDialect.gewerkeTriplet && triplets.isNotEmpty;
+
+  /// Abgeleitete Paare (leer bei Triplet-Dialekt).
+  List<AttributeColumnPair> get pairs => isPair
+      ? triplets.map((t) => t.toPair()).toList(growable: false)
+      : const [];
 }

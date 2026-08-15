@@ -81,4 +81,28 @@ class SchemaField {
   /// Konvertiert typisierte Felder zurück in Maps.
   static List<Map<String, dynamic>> listToMaps(List<SchemaField> fields) =>
       fields.map((f) => f.toMap()).toList();
+
+  /// True bei nicht-globalen (ATT-gebundenen) Feldern.
+  bool get isNonGlobal => !isGlobal;
+
+  /// Kopie mit optional überschriebenen Feldern.
+  SchemaField copyWith({
+    String? key,
+    String? label,
+    String? type,
+    bool? isGlobal,
+    int? attSlot,
+    String? art,
+    List<String>? options,
+  }) {
+    return SchemaField(
+      key: key ?? this.key,
+      label: label ?? this.label,
+      type: type ?? this.type,
+      isGlobal: isGlobal ?? this.isGlobal,
+      attSlot: attSlot ?? this.attSlot,
+      art: art ?? this.art,
+      options: options ?? this.options,
+    );
+  }
 }

@@ -90,11 +90,11 @@ class _TemplateStyleExportLayout {
 }
 
 enum _AnlagenExportRowMode {
-  /// Export strikt nach gespeichertem [CsvSettings.importHeaderRow].
+  /// Policy 1: gespeicherter Import-Header (1:1).
   importHeader,
-  /// Gewerkevorlage ohne vorherigen Anlagen-CSV-Import.
+  /// Policy 2: Template-/Triplet-Layout ohne Anlagen-Import-Header.
   templateStyle,
-  /// Spalten-Mapping ohne Import-Header.
+  /// Policy 3 (Fallback): konfiguriertes Spalten-Mapping.
   columnMapped,
 }
 
@@ -673,7 +673,7 @@ class CsvService {
     final useQrColumn = csvSettings.hasQrCodeExportColumn;
     final useExtra = useFotoColumns || useQrColumn;
 
-    // 1:1-Export: gespeicherter Import-Header ist maßgeblich (kein Template-Umbau).
+    // Policy: Import-Header → Template/Triplet-Layout → Spalten-Mapping.
     if (csvSettings.importHeaderRow.isNotEmpty) {
       final keys = List<String>.from(csvSettings.importHeaderRow);
       final qrAppended = useQrColumn && _isQrAppended(keys, qrLabel);
@@ -692,7 +692,8 @@ class CsvService {
       );
     }
 
-    if (csvSettings.attributeTripletColumns.isNotEmpty) {
+    // Policy 2: echte Gewerke-Triplets → Template-Style-Export.
+    if (csvSettings.canonicalAttributeTriplets.any((t) => !t.isPairDialect)) {
       final layout = await _resolveTemplateStyleExportLayout(
         anlagen: orderedAnlagen,
         csvSettings: csvSettings,
@@ -960,7 +961,8 @@ class CsvService {
     }
   }
 
-  /// Gemeinsamer Slot-Writer: Param-Key auflösen, ATT-Slot speichern, optional Wert setzen.
+  /// Gemeinsamer Slot-Writer: nur Schema-Key + ATT-Slot, nie CSV-Spalten-Keys
+  /// (`ATT*_WERT` o.ä.) als Top-Level-Params – die gehören nur in `__csvRowCells`.
   static void _writeAttributeSlotFromRow({
     required Map<String, dynamic> params,
     required List<Map<String, dynamic>> schemaFields,
@@ -969,7 +971,6 @@ class CsvService {
     required int valueColumn,
     required List<dynamic> row,
     required List<String> headerRow,
-    bool alsoStoreUnderValueHeader = false,
   }) {
     if (valueColumn >= 0 &&
         valueColumn < headerRow.length &&
@@ -1003,14 +1004,7 @@ class CsvService {
     if (valueColumn < 0) return;
     final cellValue = CsvUtils.safeCellTrimmed(row, valueColumn);
     if (cellValue.isEmpty) return;
-    final parsed = _parseDynamicValue(cellValue);
-    params[paramKey] = parsed;
-    if (alsoStoreUnderValueHeader && valueColumn < headerRow.length) {
-      final valueHeader = headerRow[valueColumn].trim();
-      if (valueHeader.isNotEmpty) {
-        params[valueHeader] = parsed;
-      }
-    }
+    params[paramKey] = _parseDynamicValue(cellValue);
   }
 
   /// Dünner Wrapper: Schema-Felder aus Paar-Zeile (gemeinsamer Helfer).
@@ -1061,7 +1055,6 @@ class CsvService {
         valueColumn: pair.valueColumn,
         row: row,
         headerRow: headerRow,
-        alsoStoreUnderValueHeader: true,
       );
     }
   }
@@ -1279,8 +1272,10 @@ class CsvService {
         headerRow: headerRow,
         settings: settings,
       );
+      // Pair-Dialekt: nur pairs anwenden; Triplet-Dialekt: nur triplets.
       final attributePairs = importMapping.pairs;
-      final attributeTriplets = importMapping.triplets;
+      final attributeTriplets =
+          importMapping.isPair ? const <AttributeTripletColumn>[] : importMapping.triplets;
 
       // EAV: Spalten, die nicht zu Hierarchie-Ebenen oder Attribut-Spalten gehören.
       final reservedIndices = _reservedImportIndices(

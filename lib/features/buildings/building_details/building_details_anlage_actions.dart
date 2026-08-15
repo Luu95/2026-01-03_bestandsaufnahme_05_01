@@ -114,24 +114,6 @@ mixin BuildingDetailsAnlageActions<T extends ConsumerStatefulWidget>
         : (lastExpandedDiscipline ?? anlageDisciplines.first);
   }
 
-  Future<void> ensureDisciplinesFromTemplatesIfNeeded() async {
-    if (anlageProject.id.isEmpty) return;
-    final dbService = ref.read(databaseServiceProvider);
-    final templates =
-        await dbService.getTemplatesByProjectId(anlageProject.id);
-    if (templates.isEmpty) return;
-    // Nur Schemata in bestehende Disziplinen mergen – keine leeren Shells.
-    final existing =
-        await dbService.getDisciplinesByBuildingId(anlageBuilding.id);
-    if (existing.isEmpty) return;
-    await TemplateService.ensureDisciplinesFromTemplates(
-      dbService,
-      anlageBuilding.id,
-      anlageProject.id,
-    );
-    await reloadDisciplinesForAnlage(refreshSystemsPages: true);
-  }
-
   /// Plus: Start-Disziplin für den Platzierungsdialog (Gewerk + Ebene 2).
   Future<Disziplin?> resolveDisciplineForAddOrMaterialize() async {
     if (anlageDisciplines.isNotEmpty) {
@@ -141,14 +123,10 @@ mixin BuildingDetailsAnlageActions<T extends ConsumerStatefulWidget>
       return null;
     }
     final dbService = ref.read(databaseServiceProvider);
-    final templateRows =
-        await dbService.getTemplatesByProjectId(anlageProject.id);
-    if (templateRows.isEmpty || !mounted) return null;
-
-    final virtual =
-        TemplateService.buildVirtualDisciplinesFromTemplateRows(templateRows);
-    if (virtual.isEmpty) return null;
-    return virtual.first;
+    final labels =
+        await dbService.getDistinctTemplateGewerke(anlageProject.id);
+    if (labels.isEmpty || !mounted) return null;
+    return TemplateService.disciplineShell(labels.first);
   }
 
   Future<void> openAnlageErfassungAfterPlacement({

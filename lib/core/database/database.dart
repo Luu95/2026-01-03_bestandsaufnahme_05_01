@@ -343,6 +343,57 @@ class AppDatabase extends _$AppDatabase {
             ..where((t) => t.projectId.equals(projectId) & t.gewerk.equals(gewerk)))
           .get();
 
+  /// Nur Gewerk-Namen (ohne `parameter`-Blobs) – für schnelle Placement-Auswahl.
+  Future<List<String>> getDistinctTemplateGewerke(String projectId) async {
+    final rows = await (selectOnly(templates)
+          ..addColumns([templates.gewerk])
+          ..where(templates.projectId.equals(projectId))
+          ..groupBy([templates.gewerk]))
+        .get();
+    final labels = <String>{};
+    for (final row in rows) {
+      final g = row.read(templates.gewerk)?.trim() ?? '';
+      if (g.isNotEmpty) labels.add(g);
+    }
+    final list = labels.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  /// Nur Anlagentypen eines Gewerks (ohne `parameter`-Blobs).
+  Future<List<String>> getDistinctTemplateAnlagentypen(
+    String projectId,
+    String gewerk,
+  ) async {
+    final g = gewerk.trim();
+    if (g.isEmpty) return const [];
+    final rows = await (selectOnly(templates)
+          ..addColumns([templates.anlagentyp])
+          ..where(
+            templates.projectId.equals(projectId) & templates.gewerk.equals(g),
+          )
+          ..groupBy([templates.anlagentyp]))
+        .get();
+    final types = <String>{};
+    for (final row in rows) {
+      final t = row.read(templates.anlagentyp)?.trim() ?? '';
+      if (t.isNotEmpty) types.add(t);
+    }
+    final list = types.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return list;
+  }
+
+  /// Ob das Projekt mindestens eine Gewerkevorlage hat (ohne Zeilen zu laden).
+  Future<bool> hasTemplatesForProject(String projectId) async {
+    final row = await (selectOnly(templates)
+          ..addColumns([templates.id])
+          ..where(templates.projectId.equals(projectId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row != null;
+  }
+
   Future<int> insertTemplate(TemplatesCompanion template) => into(templates).insert(template);
 
   Future<int> deleteTemplatesByProjectId(String projectId) =>

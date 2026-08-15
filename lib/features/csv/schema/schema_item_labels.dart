@@ -122,8 +122,6 @@ extension CsvSettingsSchemaItemLabels on CsvSettings {
 
   /// Kopiert Legacy-Keys (Revisionsobjekt/Anlagentyp/…) auf den konfigurierten
   /// Schema-Item-Key und entfernt die Legacy-Einträge. Idempotent.
-  ///
-  /// Aufruf: Dialog öffnen / Import-Cleanup – danach reichen Level-Keys.
   void migrateLegacySchemaItemKeys(Map<String, dynamic> params) {
     final target = resolveSchemaItemParamKey()?.trim() ?? '';
     if (target.isEmpty) return;

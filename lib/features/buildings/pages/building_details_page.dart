@@ -22,7 +22,6 @@ import 'package:bestandsaufnahme_01/app/navigation/route_observer.dart';
 import 'package:bestandsaufnahme_01/features/csv/providers/csv_settings_provider.dart';
 import 'package:bestandsaufnahme_01/features/projects/providers/database_provider.dart';
 import 'package:bestandsaufnahme_01/features/projects/providers/projects_provider.dart';
-import 'package:bestandsaufnahme_01/features/systems/services/template_service.dart';
 import 'package:bestandsaufnahme_01/app/theme/app_theme.dart';
 import 'package:bestandsaufnahme_01/core/logging/app_log.dart';
 import 'package:bestandsaufnahme_01/features/csv/utils/csv_column_layout.dart';
@@ -406,16 +405,10 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
     var disciplines = await dbService.getDisciplinesByBuildingId(_building.id);
     var hasTemplates = false;
     if (_currentProject.id.isNotEmpty) {
-      final templates =
-          await dbService.getTemplatesByProjectId(_currentProject.id);
-      hasTemplates = templates.isNotEmpty;
-      if (hasTemplates && disciplines.isNotEmpty) {
-        disciplines = await TemplateService.ensureDisciplinesFromTemplates(
-          dbService,
-          _building.id,
-          _currentProject.id,
-        );
-      }
+      hasTemplates =
+          await dbService.hasTemplatesForProject(_currentProject.id);
+      // Kein voller Schema-Merge mehr bei jedem Laden – das blockiert Plus/Reload
+      // bei großen Vorlagen. Schema kommt beim Prefill/Materialize.
     }
     var initialized = await dbService.isDisciplinesInitialized(_building.id);
 
@@ -444,9 +437,9 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
           for (final a in anlagen) a.discipline.label.trim().toLowerCase(),
         };
         final templateGewerke = {
-          for (final t
-              in await dbService.getTemplatesByProjectId(_currentProject.id))
-            if (t.gewerk.trim().isNotEmpty) t.gewerk.trim().toLowerCase(),
+          for (final g
+              in await dbService.getDistinctTemplateGewerke(_currentProject.id))
+            if (g.trim().isNotEmpty) g.trim().toLowerCase(),
         };
         disciplines = disciplines.where((d) {
           final key = d.label.trim().toLowerCase();
@@ -947,7 +940,6 @@ class _BuildingDetailsPageState extends ConsumerState<BuildingDetailsPage>
               },
               onImportCsv: importCsv,
               onAddAnlage: () async {
-                await ensureDisciplinesFromTemplatesIfNeeded();
                 if (!mounted) return;
                 final discipline = await resolveDisciplineForAddOrMaterialize();
                 if (discipline == null || !mounted) return;

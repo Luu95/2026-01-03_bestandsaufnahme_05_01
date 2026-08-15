@@ -7,6 +7,7 @@ import 'package:bestandsaufnahme_01/features/systems/models/anlage.dart';
 import 'package:bestandsaufnahme_01/features/csv/models/csv_hierarchy_level.dart';
 import 'package:bestandsaufnahme_01/features/systems/models/disziplin_schnittstelle.dart';
 import 'package:bestandsaufnahme_01/features/csv/providers/csv_settings_provider.dart';
+import 'package:bestandsaufnahme_01/features/csv/models/import_attribute_mapping.dart';
 import 'package:bestandsaufnahme_01/features/csv/utils/csv_column_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,10 +59,12 @@ void main() {
       );
       expect(mapping.pairs, isNotEmpty);
       expect(mapping.pairs.length, 2);
-      expect(mapping.triplets, isEmpty);
+      expect(mapping.triplets, isNotEmpty);
+      expect(mapping.triplets.every((t) => t.isPairDialect), isTrue);
       expect(mapping.isPair, isTrue);
       expect(mapping.isTriplet, isFalse);
       expect(mapping.isEmpty, isFalse);
+      expect(mapping.dialect, AttributeDialect.anlagenPair);
     });
 
     test('erkennt Gewerke-Triplet-Header (ATT + TYPE + ART)', () {

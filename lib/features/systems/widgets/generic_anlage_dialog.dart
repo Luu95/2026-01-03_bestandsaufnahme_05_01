@@ -814,30 +814,21 @@ class _GenericAnlageDialogState extends ConsumerState<GenericAnlageDialog> {
       return;
     }
     if (currentHasFields) {
-      // Flat-Schema der Anlage in RO-Map spiegeln, damit effectiveSchemaFor greift.
-      final resolvedKey = TemplateService.resolveRevisionsobjektKeyForValue(
-            _currentDiscipline,
-            ro,
-            templates: _gewerkTemplates.isNotEmpty ? _gewerkTemplates : null,
-          ) ??
-          ro;
-      final roFields = _currentDiscipline.legacyIndividualSchemaFields;
-      if (roFields.isEmpty) return;
-      final mergedRo = Map<String, List<Map<String, dynamic>>>.from(
-        _currentDiscipline.revisionsobjektSchemas,
+      final result = SchemaResolver.resolve(
+        SchemaResolveInput(
+          discipline: _currentDiscipline,
+          revisionsobjekt: ro,
+          params: _params,
+          csvSettings: _csvSettings,
+          templates: _gewerkTemplates,
+          importHeaders: _csvSettings?.importHeaderRow ?? const [],
+          purpose: SchemaResolvePurpose.dialog,
+          allowLastResortInference: false,
+        ),
       );
-      mergedRo[resolvedKey] = TemplateService.mergeSchemaFieldLists(
-        mergedRo[resolvedKey] ?? const [],
-        roFields,
-      );
-      _currentDiscipline = Disziplin(
-        label: _currentDiscipline.label,
-        icon: _currentDiscipline.icon,
-        color: _currentDiscipline.color,
-        schema: _currentDiscipline.schema,
-        groupingKey: _currentDiscipline.groupingKey,
-        revisionsobjektSchemas: mergedRo,
-      );
+      if (result.promotedDiscipline != null) {
+        _currentDiscipline = result.promotedDiscipline!;
+      }
     }
   }
 
@@ -1476,11 +1467,10 @@ class _GenericAnlageDialogState extends ConsumerState<GenericAnlageDialog> {
         : _currentDiscipline.schema;
 
     final csv = _csvSettings;
-    AnlageParamsCleanup.applyForDialogOpen(
+    CsvSettings.ensureAttSlotsForDialog(
       params: _params,
       schemaFields: schemaFields,
       importHeaders: csv?.importHeaderRow ?? const [],
-      csvSettings: csv,
     );
 
     final filteredRoSchemas = <String, List<Map<String, dynamic>>>{};
@@ -1506,7 +1496,7 @@ class _GenericAnlageDialogState extends ConsumerState<GenericAnlageDialog> {
       _controllers.remove(k);
     }
 
-    // Nach Repair: sichtbare Controller an bereinigte Params anpassen
+    // Controller an Params anpassen (keine ATT-Spalten-Keys als Felder)
     // (fuzzy Key-Match wie bei der Feldanzeige – nicht nur exakter Map-Key).
     for (final entry in _controllers.entries) {
       final key = entry.key;
@@ -1526,136 +1516,23 @@ class _GenericAnlageDialogState extends ConsumerState<GenericAnlageDialog> {
 
   /// Nur Felder für das aktuelle Revisionsobjekt (nicht alle RO-Schemata aus der DB).
   List<Map<String, dynamic>> _dialogSchemaFields() {
-    final ro = _resolveRevisionsobjektFromParams();
-    final roTrimmed = ro?.trim() ?? '';
-
-    var discipline = _currentDiscipline;
-    if (roTrimmed.isNotEmpty) {
-      discipline = _disciplineWithSchemaForRevisionsobjekt(roTrimmed);
-    }
-
-    var fields = roTrimmed.isNotEmpty
-        ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
-        : List<Map<String, dynamic>>.from(discipline.schema);
-
-    // Wenn RO gesetzt ist, aber revisionsobjektSchemas keinen Eintrag hat,
-    // effectiveSchemaFor liefert nur Globals – Flat-Schema der Anlage nutzen.
-    final nonGlobalAfterRo = fields.where((f) => f['isGlobal'] != true).toList();
-    if (roTrimmed.isNotEmpty && nonGlobalAfterRo.isEmpty) {
-      final flatNonGlobal = discipline.legacyIndividualSchemaFields;
-      if (flatNonGlobal.isNotEmpty) {
-        fields = [
-          ...discipline.globalSchemaFields,
-          ...flatNonGlobal,
-        ];
-      }
-    }
-
-    fields = CsvSettings.filterSchemaFieldsForDialog(fields);
-    fields = fields.where((f) {
-      final key = (f['key'] ?? '').toString();
-      if (key.isEmpty) return true;
-      return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
-    }).toList();
-
-    // ATT-Namen aus Import-CSV / Vorlagen-Zellen ergänzen (auch leere ART-Werte).
-    var fromCsvCells = const <Map<String, dynamic>>[];
-    final cellsRaw = _params[CsvSettings.csvRowCellsParamKey];
-    if (cellsRaw is Map && cellsRaw.isNotEmpty) {
-      final cellHeaders = cellsRaw.keys.map((k) => k.toString()).toList();
-      fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
-        _params,
-        importHeaders: cellHeaders,
-      );
-      if (fromCsvCells.isEmpty &&
-          _csvSettings != null &&
-          _csvSettings!.importHeaderRow.isNotEmpty) {
-        fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
-          _params,
-          importHeaders: _csvSettings!.importHeaderRow,
-        );
-      }
-    } else if (_csvSettings != null &&
-        _csvSettings!.importHeaderRow.isNotEmpty) {
-      fromCsvCells = CsvSettings.schemaFieldsFromCsvAttRowCells(
-        _params,
-        importHeaders: _csvSettings!.importHeaderRow,
-      );
-    }
-    if (fromCsvCells.isNotEmpty) {
-      // CSV zuerst, bestehendes Schema überschreibt Metadaten gleicher Keys.
-      fields = TemplateService.mergeSchemaFieldLists(fromCsvCells, fields);
-      fields = CsvSettings.filterSchemaFieldsForDialog(fields);
-      fields = fields.where((f) {
-        final key = (f['key'] ?? '').toString();
-        if (key.isEmpty) return true;
-        return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
-      }).toList();
-    }
-
-    final nonGlobal = fields.where((f) => f['isGlobal'] != true).toList();
-    if (nonGlobal.isEmpty) {
-      // Vorlage als Feldquelle (nicht nur Enrichment) – auch wenn _schema leer war
-      // und nur __csvRowCells in der Vorlage stehen.
-      final template = roTrimmed.isNotEmpty
-          ? TemplateService.findTemplateForRevisionsobjekt(
-              _gewerkTemplates,
-              roTrimmed,
-            )
-          : null;
-      final fromTemplate = TemplateService.getSchemaFromTemplateParameter(
-        template?.parameter,
+    final ro = _resolveRevisionsobjektFromParams()?.trim() ?? '';
+    final result = SchemaResolver.resolve(
+      SchemaResolveInput(
+        discipline: _currentDiscipline,
+        revisionsobjekt: ro.isEmpty ? null : ro,
+        params: _params,
+        csvSettings: _csvSettings,
+        templates: _gewerkTemplates,
         importHeaders: _csvSettings?.importHeaderRow ?? const [],
-      );
-      if (fromTemplate.isNotEmpty) {
-        var recovered = CsvSettings.filterSchemaFieldsForDialog(fromTemplate);
-        recovered = recovered.where((f) {
-          final key = (f['key'] ?? '').toString();
-          if (key.isEmpty) return true;
-          return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
-        }).toList();
-        if (recovered.where((f) => f['isGlobal'] != true).isNotEmpty) {
-          return [
-            ...discipline.globalSchemaFields,
-            ...recovered.where((f) => f['isGlobal'] != true),
-          ];
-        }
-      }
-
-      final fromParams = CsvSettings.schemaFieldsFromParams(
-        _params,
-        settings: _csvSettings,
-      );
-      final combined = TemplateService.mergeSchemaFieldLists(
-        fromCsvCells,
-        fromParams,
-      );
-      if (combined.isNotEmpty) {
-        final masterSchema = roTrimmed.isNotEmpty
-            ? discipline.effectiveSchemaFor(revisionsobjekt: roTrimmed)
-            : discipline.schema;
-        final templateMaster = fromTemplate;
-        final mergedMaster = TemplateService.mergeSchemaFieldLists(
-          masterSchema,
-          templateMaster,
-        );
-        // Auch Flat-Schema der Anlage als Master (Dropdowns/art).
-        final withFlat = TemplateService.mergeSchemaFieldLists(
-          mergedMaster,
-          discipline.legacyIndividualSchemaFields,
-        );
-        final enriched = TemplateService.enrichSchemaFieldsFromMaster(
-          combined,
-          withFlat,
-        );
-        return enriched.where((f) {
-          final key = (f['key'] ?? '').toString();
-          if (key.isEmpty) return true;
-          return !_isHierarchyParamKey(key) && !_isLeafNameField(key);
-        }).toList();
-      }
+        purpose: SchemaResolvePurpose.dialog,
+        allowLastResortInference: true,
+      ),
+    );
+    if (result.promotedDiscipline != null) {
+      _currentDiscipline = result.promotedDiscipline!;
     }
-    return fields;
+    return result.asMaps;
   }
 
   String _textForSchemaField(String key, String label) {
@@ -2396,11 +2273,10 @@ class _GenericAnlageDialogState extends ConsumerState<GenericAnlageDialog> {
 
                         final saveParams = Map<String, dynamic>.from(_params);
                         final schemaForSave = _dialogSchemaFields();
-                        AnlageParamsCleanup.applyForDialogSave(
+                        CsvSettings.ensureAttSlotsForDialog(
                           params: saveParams,
                           schemaFields: schemaForSave,
                           importHeaders: csv?.importHeaderRow ?? const [],
-                          csvSettings: csv,
                         );
 
                         // Erstelle Anlage

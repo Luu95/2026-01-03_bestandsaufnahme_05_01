@@ -1,49 +1,14 @@
 /// Orchestriert Anlagen-CSV-Import: Parsen über [CsvService], Schema-Sync und Persistenz.
-/// Dedupliziert nach `lfdNummer` und bereinigt Import-Parameter vor dem Speichern.
+/// Dedupliziert nach `lfdNummer`. Params kommen bereits sauber vom Parser
+/// (Schema-Keys + ATT-Slots + `__csvRowCells`).
 
 import 'package:bestandsaufnahme_01/core/database/database_service.dart';
 import 'package:bestandsaufnahme_01/features/systems/models/anlage.dart';
-import 'package:bestandsaufnahme_01/features/systems/models/disziplin_schnittstelle.dart';
 import 'package:bestandsaufnahme_01/features/csv/providers/csv_settings_provider.dart';
 import 'package:bestandsaufnahme_01/core/logging/app_log.dart';
-import 'package:bestandsaufnahme_01/features/csv/utils/csv_column_layout.dart';
 import 'package:bestandsaufnahme_01/features/systems/services/anlage_validation_service.dart';
 import 'package:bestandsaufnahme_01/features/csv/services/csv_service.dart';
 import 'package:bestandsaufnahme_01/features/systems/services/template_service.dart';
-
-/// Migriert Legacy-Param-Keys und repariert Schema-/Zellen-Metadaten nach dem Import.
-void _migrateAnlageParams(
-  Map<String, dynamic> params,
-  Disziplin discipline, {
-  List<String> importHeaders = const [],
-  CsvSettings? csvSettings,
-}) {
-  String? revisionsobjekt;
-  for (final ro in discipline.revisionsobjektNames) {
-    for (final entry in params.entries) {
-      if (entry.value?.toString().trim() == ro) {
-        revisionsobjekt = ro;
-        break;
-      }
-    }
-    if (revisionsobjekt != null) break;
-  }
-  final schemaFields = discipline.effectiveSchemaFor(
-    revisionsobjekt: revisionsobjekt,
-  );
-  if (!hasCsvRowCellsForExport(params)) {
-    CsvSettings.migrateParamsFromAnlagenColumnKeys(
-      params: params,
-      schemaFields: schemaFields,
-    );
-  }
-  AnlageParamsCleanup.repairAndClear(
-    params: params,
-    schemaFields: schemaFields,
-    importHeaders: importHeaders,
-    csvSettings: csvSettings,
-  );
-}
 
 /// Ergebnis des Speicherns importierter Anlagen in die Datenbank.
 class AnlagenCsvPersistResult {
@@ -77,8 +42,6 @@ class AnlagenCsvImportService {
     required DatabaseService dbService,
     required String buildingId,
     required List<Anlage> anlagen,
-    List<String> importHeaders = const [],
-    CsvSettings? csvSettings,
   }) async {
     int savedCount = 0;
     int skippedCount = 0;
@@ -109,12 +72,6 @@ class AnlagenCsvImportService {
           final cleanedParams = Map<String, dynamic>.from(anlage.params);
           cleanedParams.remove('__parentLfdNummer');
           cleanedParams.remove('__etageName');
-          _migrateAnlageParams(
-            cleanedParams,
-            anlage.discipline,
-            importHeaders: importHeaders,
-            csvSettings: csvSettings,
-          );
           // Importierte Werte sind nicht bestätigt – keinen Listen-Haken setzen.
           AnlageValidationService.stripFieldConfirmationMeta(cleanedParams);
 
@@ -134,12 +91,6 @@ class AnlagenCsvImportService {
         } else {
           final cleanedParams = Map<String, dynamic>.from(anlage.params);
           cleanedParams.remove('__etageName');
-          _migrateAnlageParams(
-            cleanedParams,
-            anlage.discipline,
-            importHeaders: importHeaders,
-            csvSettings: csvSettings,
-          );
 
           pendingInserts.add(Anlage(
             id: anlage.id,
@@ -202,23 +153,25 @@ class AnlagenCsvImportService {
 
     final header = importResult.importHeaderRow;
     final keepManual = csvSettings.hasManualAttributeRange;
-    // Ein Dialekt speichern (Pair ODER Triplet), nicht beide Listen parallel füllen.
+    // Kanonisch nur Triplets speichern (Pair-Dialekt: typeColumn = -1).
     final mapping = CsvSettings.resolveImportAttributeMapping(
       headerRow: header,
       settings: csvSettings,
     );
     await saveSettings(
-      csvSettings.copyWith(
-        importHeaderRow: header,
-        exportDelimiter: importResult.detectedDelimiter,
-        attributeColumnPairs: keepManual
-            ? csvSettings.attributeColumnPairs
-            : (mapping.isPair ? mapping.pairs : const []),
-        attributeTripletColumns: keepManual
-            ? csvSettings.attributeTripletColumns
-            : (mapping.isTriplet
-                ? mapping.triplets
-                : (mapping.isPair ? const [] : csvSettings.attributeTripletColumns)),
+      CsvSettings.canonicalizeAttributeMapping(
+        csvSettings.copyWith(
+          importHeaderRow: header,
+          exportDelimiter: importResult.detectedDelimiter,
+          attributeColumnPairs: keepManual
+              ? csvSettings.attributeColumnPairs
+              : const [],
+          attributeTripletColumns: keepManual
+              ? csvSettings.attributeTripletColumns
+              : (mapping.isEmpty
+                  ? csvSettings.attributeTripletColumns
+                  : mapping.triplets),
+        ),
       ),
     );
 
@@ -229,13 +182,10 @@ class AnlagenCsvImportService {
       projectId,
     );
 
-    final settingsForPersist = await CsvSettings.loadForProject(projectId);
     return persistImportedAnlagen(
       dbService: dbService,
       buildingId: buildingId,
       anlagen: importResult.anlagen,
-      importHeaders: header,
-      csvSettings: settingsForPersist,
     );
   }
 }

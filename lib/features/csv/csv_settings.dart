@@ -1,8 +1,8 @@
-/// CSV-Einstellungen: Mapping, Hierarchie, Repair und Persistenz.
+/// CSV-Einstellungen: Mapping, Hierarchie und Persistenz.
 ///
 /// Einstieg: Modelle unter `lib/features/csv/models/`; Instanz-Logik als Extensions
-/// (`part`): hierarchy/, display/, schema/, params/. Cleanup:
-/// [AnlageParamsCleanup]. Riverpod: `lib/features/csv/providers/csv_settings_provider.dart`.
+/// (`part`): hierarchy/, display/, schema/, params/. ATT-Slots:
+/// [AnlageAttSlots]. Riverpod: `lib/features/csv/providers/csv_settings_provider.dart`.
 ///
 /// Inhaltsverzeichnis:
 /// 1–2 Felder/Konstruktor (diese Datei)
@@ -10,7 +10,7 @@
 /// 4 Display-Instanz → display/display_name.dart (+ static hier)
 /// 5 ATT-Header & Mapping (diese Datei)
 /// 6 Dialog-Schema (diese Datei)
-/// 7 Params-Repair → params/anlage_params_repair.dart (dünne Wrapper hier)
+/// 7 ATT-Slots → params/anlage_att_slots.dart (dünne Wrapper hier)
 /// 8 Listen-Titel-Instanz → display/list_title.dart (+ static hier)
 /// 9 Schema-Item-Instanz → schema/schema_item_labels.dart (+ static hier)
 /// 10 Persistenz (diese Datei)
@@ -29,7 +29,7 @@ part 'hierarchy/hierarchy_keys.dart';
 part 'display/display_name.dart';
 part 'display/list_title.dart';
 part 'schema/schema_item_labels.dart';
-part 'params/anlage_params_repair.dart';
+part 'params/anlage_att_slots.dart';
 
 /// Projektbezogene CSV-Import-/Export-Konfiguration inkl. ATT-Mapping und Schema-Helfern.
 class CsvSettings {
@@ -422,6 +422,7 @@ class CsvSettings {
   ) {
     if (triplets.isEmpty || headers.isEmpty) return false;
     for (final g in triplets) {
+      if (g.isPairDialect) return false;
       if (g.nameColumn < 0 || g.nameColumn >= headers.length) return false;
       if (g.typeColumn < 0 || g.typeColumn >= headers.length) return false;
       final typeToken = normalizeAttHeaderToken(headers[g.typeColumn]);
@@ -438,7 +439,50 @@ class CsvSettings {
     return true;
   }
 
+  /// Pair-Dialekt-Triplets bzw. legacy [attributeColumnPairs] → Paare.
+  List<AttributeColumnPair> get effectiveAttributePairs {
+    final fromTriplets = attributeTripletColumns
+        .where((t) => t.isPairDialect)
+        .map((t) => t.toPair())
+        .toList();
+    if (fromTriplets.isNotEmpty) return fromTriplets;
+    return attributeColumnPairs;
+  }
+
+  /// Kanonische Gruppen: Triplets, ggf. aus Pairs normalisiert.
+  List<AttributeTripletColumn> get canonicalAttributeTriplets {
+    if (attributeTripletColumns.isNotEmpty) return attributeTripletColumns;
+    if (attributeColumnPairs.isEmpty) return const [];
+    return attributeColumnPairs
+        .map(AttributeTripletColumn.fromPair)
+        .toList(growable: false);
+  }
+
+  /// Pairs → Triplets (typeColumn=-1); echte Triplets haben Vorrang.
+  static CsvSettings canonicalizeAttributeMapping(CsvSettings settings) {
+    final triplets = settings.attributeTripletColumns;
+    final pairs = settings.attributeColumnPairs;
+    if (pairs.isEmpty) return settings;
+
+    final hasRealTriplets =
+        triplets.any((t) => !t.isPairDialect);
+    if (hasRealTriplets) {
+      // Alte Pair-Liste droppen – Triplet-Dialekt ist kanonisch.
+      return settings.copyWith(attributeColumnPairs: const []);
+    }
+    if (triplets.isNotEmpty) {
+      // Bereits Pair-Triplets gespeichert.
+      return settings.copyWith(attributeColumnPairs: const []);
+    }
+    return settings.copyWith(
+      attributeColumnPairs: const [],
+      attributeTripletColumns:
+          pairs.map(AttributeTripletColumn.fromPair).toList(growable: false),
+    );
+  }
+
   /// Wählt Paar- oder Triplet-Mapping passend zum Import-Header.
+  /// Ergebnis ist immer kanonisch: Triplets + [AttributeDialect].
   static ImportAttributeMapping resolveImportAttributeMapping({
     required List<String> headerRow,
     required CsvSettings settings,
@@ -451,11 +495,21 @@ class CsvSettings {
                 startColumn: settings.attributeStartColumn!,
                 count: settings.attributeCount!,
               );
-        return ImportAttributeMapping(pairs: const [], triplets: manual);
+        final dialect = manual.any((t) => t.isPairDialect)
+            ? AttributeDialect.anlagenPair
+            : AttributeDialect.gewerkeTriplet;
+        return ImportAttributeMapping(triplets: manual, dialect: dialect);
       }
+      final canon = canonicalizeAttributeMapping(settings);
+      if (canon.attributeTripletColumns.isEmpty) {
+        return const ImportAttributeMapping();
+      }
+      final dialect = canon.attributeTripletColumns.every((t) => t.isPairDialect)
+          ? AttributeDialect.anlagenPair
+          : AttributeDialect.gewerkeTriplet;
       return ImportAttributeMapping(
-        pairs: settings.attributeColumnPairs,
-        triplets: settings.attributeTripletColumns,
+        triplets: canon.attributeTripletColumns,
+        dialect: dialect,
       );
     }
 
@@ -468,10 +522,7 @@ class CsvSettings {
     if (headerLooksLikeAnlagenWertFormat(headerRow)) {
       final detected = detectAnlagenAttributePairsFromHeader(headerRow);
       if (detected.isNotEmpty) {
-        return ImportAttributeMapping(
-          pairs: detected,
-          triplets: const [],
-        );
+        return ImportAttributeMapping.fromPairs(detected);
       }
       return manualOrSettings();
     }
@@ -479,21 +530,19 @@ class CsvSettings {
     if (headerLooksLikeGewerkeTripletFormat(headerRow)) {
       final detected = detectTripletsFromHeader(headerRow);
       if (detected.isNotEmpty) {
-        return ImportAttributeMapping(pairs: const [], triplets: detected);
+        return ImportAttributeMapping.fromTriplets(detected);
       }
       if (tripletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
-        return ImportAttributeMapping(
-          pairs: const [],
-          triplets: settings.attributeTripletColumns,
+        return ImportAttributeMapping.fromTriplets(
+          settings.attributeTripletColumns,
         );
       }
       return manualOrSettings();
     }
 
     if (tripletsMatchHeader(settings.attributeTripletColumns, headerRow)) {
-      return ImportAttributeMapping(
-        pairs: const [],
-        triplets: settings.attributeTripletColumns,
+      return ImportAttributeMapping.fromTriplets(
+        settings.attributeTripletColumns,
       );
     }
 
@@ -799,72 +848,42 @@ class CsvSettings {
     return parts.length >= 2;
   }
 
-  // --- Abschnitt: 7 Params-Migrate / Repair ---
-  // Implementierung: lib/features/csv/params/anlage_params_repair.dart
+  // --- Abschnitt: 7 ATT-Slots / Schema-art ---
+  // Primärer Schreibpfad für Werte: CsvService. Implementierung: params/anlage_att_slots.dart
 
-  /// Wrapper → [AnlageParamsRepair.migrateParamsFromAnlagenColumnKeys].
-  static void migrateParamsFromAnlagenColumnKeys({
-    required Map<String, dynamic> params,
-    List<Map<String, dynamic>> schemaFields = const [],
-  }) =>
-      AnlageParamsRepair.migrateParamsFromAnlagenColumnKeys(
-        params: params,
-        schemaFields: schemaFields,
-      );
-
-  /// Wrapper → [AnlageParamsRepair.repairParamsMistakenlyFilledFromTypeColumns].
-  static void repairParamsMistakenlyFilledFromTypeColumns({
-    required Map<String, dynamic> params,
-    required List<String> importHeaders,
-    List<Map<String, dynamic>> schemaFields = const [],
-  }) =>
-      AnlageParamsRepair.repairParamsMistakenlyFilledFromTypeColumns(
-        params: params,
-        importHeaders: importHeaders,
-        schemaFields: schemaFields,
-      );
-
-  /// Wrapper → [AnlageParamsRepair.clearParamsThatAreSchemaArtGroups].
-  static void clearParamsThatAreSchemaArtGroups({
-    required Map<String, dynamic> params,
-    List<Map<String, dynamic>> schemaFields = const [],
-  }) =>
-      AnlageParamsRepair.clearParamsThatAreSchemaArtGroups(
-        params: params,
-        schemaFields: schemaFields,
-      );
-
-  /// Wrapper → [AnlageParamsRepair.clearParamsThatLookLikeTypeDefinitions].
-  static void clearParamsThatLookLikeTypeDefinitions({
-    required Map<String, dynamic> params,
-    List<Map<String, dynamic>> schemaFields = const [],
-  }) =>
-      AnlageParamsRepair.clearParamsThatLookLikeTypeDefinitions(
-        params: params,
-        schemaFields: schemaFields,
-      );
-
-  /// Wrapper → [AnlageParamsRepair.effectiveSchemaArtGroup].
+  /// Wrapper → [AnlageAttSlots.effectiveSchemaArtGroup].
   static String? effectiveSchemaArtGroup(Map<String, dynamic> fieldDef) =>
-      AnlageParamsRepair.effectiveSchemaArtGroup(fieldDef);
+      AnlageAttSlots.effectiveSchemaArtGroup(fieldDef);
 
-  /// Wrapper → [AnlageParamsRepair.writeAttSlotsFromSchemaFields].
+  /// Wrapper → [AnlageAttSlots.writeFromSchemaFields].
   static void writeAttSlotsFromSchemaFields(
     Map<String, dynamic> params,
     List<Map<String, dynamic>> schemaFields,
   ) =>
-      AnlageParamsRepair.writeAttSlotsFromSchemaFields(params, schemaFields);
+      AnlageAttSlots.writeFromSchemaFields(params, schemaFields);
 
-  /// Wrapper → [AnlageParamsRepair.writeAttSlotsFromImportHeader].
+  /// Wrapper → [AnlageAttSlots.writeFromImportHeader].
   static void writeAttSlotsFromImportHeader({
     required Map<String, dynamic> params,
     required List<String> importHeaders,
     required List<Map<String, dynamic>> schemaFields,
   }) =>
-      AnlageParamsRepair.writeAttSlotsFromImportHeader(
+      AnlageAttSlots.writeFromImportHeader(
         params: params,
         importHeaders: importHeaders,
         schemaFields: schemaFields,
+      );
+
+  /// Wrapper → [AnlageAttSlots.ensureForDialog].
+  static void ensureAttSlotsForDialog({
+    required Map<String, dynamic> params,
+    required List<Map<String, dynamic>> schemaFields,
+    List<String> importHeaders = const [],
+  }) =>
+      AnlageAttSlots.ensureForDialog(
+        params: params,
+        schemaFields: schemaFields,
+        importHeaders: importHeaders,
       );
 
   // --- Abschnitt: 8 Listen-Titel (static) ---
@@ -988,6 +1007,12 @@ class CsvSettings {
 
   /// Serialisiert die Einstellungen für SharedPreferences.
   Map<String, dynamic> toJson() {
+    final canon = canonicalizeAttributeMapping(this);
+    // Soft-Rollback: Pair-Dialekt zusätzlich als attributeColumnPairs schreiben.
+    final pairView = canon.attributeTripletColumns
+        .where((t) => t.isPairDialect)
+        .map((t) => t.toPair().toJson())
+        .toList();
     return {
       'level1': level1.toJson(),
       'level2': level2.toJson(),
@@ -999,9 +1024,9 @@ class CsvSettings {
       'labelGewerk': labelGewerk,
       'labelAnlage': labelAnlage,
       'labelBauteil': labelBauteil,
-      'attributeColumnPairs': attributeColumnPairs.map((p) => p.toJson()).toList(),
+      'attributeColumnPairs': pairView,
       'attributeTripletColumns':
-          attributeTripletColumns.map((t) => t.toJson()).toList(),
+          canon.attributeTripletColumns.map((t) => t.toJson()).toList(),
       'attributeStartColumn': attributeStartColumn,
       'attributeCount': attributeCount,
       'foto1SpalteLabel': foto1SpalteLabel,
@@ -1051,43 +1076,53 @@ class CsvSettings {
         }
       }
     }
-    return CsvSettings(
-      level1: HierarchyLevelConfig.fromJson(
-        json['level1'] is Map ? Map<String, dynamic>.from(json['level1'] as Map) : null,
+    return canonicalizeAttributeMapping(
+      CsvSettings(
+        level1: HierarchyLevelConfig.fromJson(
+          json['level1'] is Map
+              ? Map<String, dynamic>.from(json['level1'] as Map)
+              : null,
+        ),
+        level2: HierarchyLevelConfig.fromJson(
+          json['level2'] is Map
+              ? Map<String, dynamic>.from(json['level2'] as Map)
+              : null,
+        ),
+        level3: HierarchyLevelConfig.fromJson(
+          json['level3'] is Map
+              ? Map<String, dynamic>.from(json['level3'] as Map)
+              : null,
+        ),
+        delimiterMode: json['delimiterMode'] as String? ?? 'auto',
+        anlageKuerzel: json['anlageKuerzel'] as String? ?? 'A,Anlage',
+        bauteilKuerzel: json['bauteilKuerzel'] as String? ?? 'B,Bauteil',
+        useDisciplineGrouping: json['useDisciplineGrouping'] as bool? ?? true,
+        labelGewerk: json['labelGewerk'] as String? ?? 'Gewerk',
+        labelAnlage: json['labelAnlage'] as String? ?? 'Anlage',
+        labelBauteil: json['labelBauteil'] as String? ?? 'Bauteil',
+        attributeColumnPairs: pairs,
+        attributeTripletColumns: triplets,
+        attributeStartColumn: json['attributeStartColumn'] as int?,
+        attributeCount: json['attributeCount'] as int?,
+        foto1SpalteLabel: json['foto1SpalteLabel'] as String?,
+        foto2SpalteLabel: json['foto2SpalteLabel'] as String?,
+        foto3SpalteLabel: json['foto3SpalteLabel'] as String?,
+        foto4SpalteLabel: json['foto4SpalteLabel'] as String?,
+        qrCodeNummerSpalteLabel: json['qrCodeNummerSpalteLabel'] as String?,
+        importHeaderRow: _parseStringList(json['importHeaderRow']),
+        exportDelimiter: json['exportDelimiter'] as String? ?? ';',
+        groupingGewerkParamKey: json['groupingGewerkParamKey'] as String? ?? '',
+        groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
+        displayNameParamKey: json['displayNameParamKey'] as String? ?? 'Name',
+        displayNameSpalte: json['displayNameSpalte'] as int?,
+        listTitleInputFieldIndex: json['listTitleInputFieldIndex'] as int? ?? 1,
+        listSubtitleInputFieldIndex:
+            json['listSubtitleInputFieldIndex'] as int? ??
+                ((json['listSubtitleParamKey'] as String?)?.trim().isNotEmpty ==
+                        true
+                    ? 2
+                    : 0),
       ),
-      level2: HierarchyLevelConfig.fromJson(
-        json['level2'] is Map ? Map<String, dynamic>.from(json['level2'] as Map) : null,
-      ),
-      level3: HierarchyLevelConfig.fromJson(
-        json['level3'] is Map ? Map<String, dynamic>.from(json['level3'] as Map) : null,
-      ),
-      delimiterMode: json['delimiterMode'] as String? ?? 'auto',
-      anlageKuerzel: json['anlageKuerzel'] as String? ?? 'A,Anlage',
-      bauteilKuerzel: json['bauteilKuerzel'] as String? ?? 'B,Bauteil',
-      useDisciplineGrouping: json['useDisciplineGrouping'] as bool? ?? true,
-      labelGewerk: json['labelGewerk'] as String? ?? 'Gewerk',
-      labelAnlage: json['labelAnlage'] as String? ?? 'Anlage',
-      labelBauteil: json['labelBauteil'] as String? ?? 'Bauteil',
-      attributeColumnPairs: pairs,
-      attributeTripletColumns: triplets,
-      attributeStartColumn: json['attributeStartColumn'] as int?,
-      attributeCount: json['attributeCount'] as int?,
-      foto1SpalteLabel: json['foto1SpalteLabel'] as String?,
-      foto2SpalteLabel: json['foto2SpalteLabel'] as String?,
-      foto3SpalteLabel: json['foto3SpalteLabel'] as String?,
-      foto4SpalteLabel: json['foto4SpalteLabel'] as String?,
-      qrCodeNummerSpalteLabel: json['qrCodeNummerSpalteLabel'] as String?,
-      importHeaderRow: _parseStringList(json['importHeaderRow']),
-      exportDelimiter: json['exportDelimiter'] as String? ?? ';',
-      groupingGewerkParamKey: json['groupingGewerkParamKey'] as String? ?? '',
-      groupingAnlageParamKey: json['groupingAnlageParamKey'] as String? ?? '',
-      displayNameParamKey: json['displayNameParamKey'] as String? ?? 'Name',
-      displayNameSpalte: json['displayNameSpalte'] as int?,
-      listTitleInputFieldIndex: json['listTitleInputFieldIndex'] as int? ?? 1,
-      listSubtitleInputFieldIndex: json['listSubtitleInputFieldIndex'] as int? ??
-          ((json['listSubtitleParamKey'] as String?)?.trim().isNotEmpty == true
-              ? 2
-              : 0),
     );
   }
 
@@ -1161,9 +1196,10 @@ class CsvSettings {
     CsvSettings settings,
   ) async {
     final prefs = await SharedPreferences.getInstance();
+    final canon = canonicalizeAttributeMapping(settings);
     await prefs.setString(
       'csv_settings_$projectId',
-      json.encode(settings.toJson()),
+      json.encode(canon.toJson()),
     );
   }
 

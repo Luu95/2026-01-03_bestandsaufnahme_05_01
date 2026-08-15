@@ -250,11 +250,7 @@ extension CsvSettingsHierarchy on CsvSettings {
         indices.add(level.idColumn!);
       }
     }
-    for (final pair in attributeColumnPairs) {
-      indices.add(pair.nameColumn);
-      indices.add(pair.valueColumn);
-    }
-    for (final group in attributeTripletColumns) {
+    for (final group in canonicalAttributeTriplets) {
       indices.addAll(group.columnIndices);
     }
     return indices;

@@ -289,35 +289,18 @@ class TemplateService {
   }
 
   /// Lädt Vorlagen aus der Datenbank (projektbezogen).
-  /// [gewerk]: optionaler Filter – exakt, sonst case-insensitive / Teilstring.
+  /// [gewerk]: optional – exakt, sonst case-insensitive, sonst Teilstring-Match.
   static Future<List<Template>> loadTemplatesFromDatabase(
     DatabaseService dbService,
     String projectId, {
     String? gewerk,
   }) async {
-    final allRows = await dbService.getTemplatesByProjectId(projectId);
-    final gewerkFilter = gewerk?.trim() ?? '';
-    final templateRows = gewerkFilter.isEmpty
-        ? allRows
-        : () {
-            final exact = allRows
-                .where((r) => r.gewerk.trim() == gewerkFilter)
-                .toList();
-            if (exact.isNotEmpty) return exact;
-            final lower = gewerkFilter.toLowerCase();
-            final ci = allRows
-                .where((r) => r.gewerk.trim().toLowerCase() == lower)
-                .toList();
-            if (ci.isNotEmpty) return ci;
-            // Teilstring: „ITC 08 Klass.…“ ↔ kürzerer Gewerk-Name in der Vorlage
-            return allRows.where((r) {
-              final g = r.gewerk.trim().toLowerCase();
-              if (g.isEmpty) return false;
-              return g.contains(lower) || lower.contains(g);
-            }).toList();
-          }();
-
-    return templateRows
+    final rows = await _templateRowsForGewerk(
+      dbService,
+      projectId,
+      gewerk: gewerk,
+    );
+    return rows
         .map((row) => Template(
               gewerk: row.gewerk,
               anlageBauteil: row.anlageBauteil,
@@ -325,6 +308,95 @@ class TemplateService {
               bezeichnung: row.bezeichnung,
               parameter: row.parameter,
             ))
+        .toList();
+  }
+
+  /// Leere Disziplin nur mit Label – für Dropdowns, bevor Schema materialisiert wird.
+  static Disziplin disciplineShell(String gewerk) {
+    final label = gewerk.trim();
+    return Disziplin(
+      label: label,
+      icon: Icons.folder_open,
+      color: AppPalette.primary,
+      schema: const [],
+      revisionsobjektSchemas: const {},
+    );
+  }
+
+  /// Shells für mehrere Gewerk-Labels (sortiert, dedupliziert).
+  static List<Disziplin> disciplineShells(Iterable<String> gewerkLabels) {
+    final labels = <String>{};
+    for (final raw in gewerkLabels) {
+      final g = raw.trim();
+      if (g.isNotEmpty) labels.add(g);
+    }
+    final sorted = labels.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return sorted.map(disciplineShell).toList();
+  }
+
+  /// Anlagentypen eines Gewerks aus Vorlagen (ohne Parameter-Blobs).
+  static Future<List<String>> templateAnlagentypenForGewerk(
+    DatabaseService dbService,
+    String projectId,
+    String gewerk,
+  ) async {
+    final label = gewerk.trim();
+    if (label.isEmpty) return const [];
+
+    final exact =
+        await dbService.getDistinctTemplateAnlagentypen(projectId, label);
+    if (exact.isNotEmpty) return exact;
+
+    final candidates = await dbService.getDistinctTemplateGewerke(projectId);
+    final matched = matchGewerkLabel(candidates, label);
+    if (matched == null || matched == label) return const [];
+    return dbService.getDistinctTemplateAnlagentypen(projectId, matched);
+  }
+
+  /// Findet den besten Gewerk-Match: exakt → case-insensitive → Teilstring.
+  static String? matchGewerkLabel(Iterable<String> candidates, String query) {
+    final q = query.trim();
+    if (q.isEmpty) return null;
+    final lower = q.toLowerCase();
+
+    for (final c in candidates) {
+      if (c.trim() == q) return c.trim();
+    }
+    for (final c in candidates) {
+      if (c.trim().toLowerCase() == lower) return c.trim();
+    }
+    for (final c in candidates) {
+      final t = c.trim().toLowerCase();
+      if (t.isEmpty) continue;
+      if (t.contains(lower) || lower.contains(t)) return c.trim();
+    }
+    return null;
+  }
+
+  /// Template-Zeilen für ein Gewerk (oder alle, wenn [gewerk] leer).
+  static Future<List<TemplateDb>> _templateRowsForGewerk(
+    DatabaseService dbService,
+    String projectId, {
+    String? gewerk,
+  }) async {
+    final filter = gewerk?.trim() ?? '';
+    if (filter.isEmpty) {
+      return dbService.getTemplatesByProjectId(projectId);
+    }
+
+    final exact =
+        await dbService.getTemplatesByProjectIdAndGewerk(projectId, filter);
+    if (exact.isNotEmpty) return exact;
+
+    final allRows = await dbService.getTemplatesByProjectId(projectId);
+    final matchedLabel = matchGewerkLabel(
+      allRows.map((r) => r.gewerk),
+      filter,
+    );
+    if (matchedLabel == null) return const [];
+    return allRows
+        .where((r) => r.gewerk.trim().toLowerCase() == matchedLabel.toLowerCase())
         .toList();
   }
 
@@ -521,7 +593,7 @@ class TemplateService {
     // aber keine neuen Gewerke mehr automatisch anlegen.
     if (buildingId != null) {
       try {
-        await _syncDisciplineSchemasFromTemplates(dbService, buildingId, projectId);
+        await ensureDisciplinesFromTemplates(dbService, buildingId, projectId);
       } catch (e) {
         appLog('Fehler beim Sync der Disziplinen aus Vorlagen: $e');
         // Fehler wird ignoriert, damit der Import nicht fehlschlägt
@@ -531,31 +603,12 @@ class TemplateService {
     return count;
   }
 
-  static Disziplin _defaultDisciplineForGewerk(String gewerk) {
-    return Disziplin(
-      label: gewerk,
-      icon: Icons.folder_open,
-      color: AppPalette.primary,
-      schema: const [],
-      revisionsobjektSchemas: const {},
-    );
-  }
-
   /// Einzigartige Gewerk-Namen aus Projekt-Vorlagen (sortiert).
   static Future<List<String>> templateGewerkLabels(
     DatabaseService dbService,
     String projectId,
-  ) async {
-    final rows = await dbService.getTemplatesByProjectId(projectId);
-    final labels = <String>{};
-    for (final row in rows) {
-      final g = row.gewerk.trim();
-      if (g.isNotEmpty) labels.add(g);
-    }
-    final list = labels.toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    return list;
-  }
+  ) =>
+      dbService.getDistinctTemplateGewerke(projectId);
 
   /// Baut Disziplin-Objekte aus Vorlagen (nur Schema, ohne DB-Persistenz).
   /// Für CSV-Einstellungen / Plus-Auswahl – nicht für die Technik-Liste.
@@ -574,7 +627,7 @@ class TemplateService {
     return sorted
         .map(
           (gewerk) => _mergeTemplateSchemasIntoDiscipline(
-            base: _defaultDisciplineForGewerk(gewerk),
+            base: disciplineShell(gewerk),
             gewerk: gewerk,
             templateRows: templateRows,
             schemaByGewerkAndTyp: schemaByGewerkAndTyp,
@@ -689,7 +742,7 @@ class TemplateService {
         ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       for (final gewerk in sortedNewGewerke) {
         if (byLabel.containsKey(gewerk)) continue;
-        final base = _defaultDisciplineForGewerk(gewerk);
+        final base = disciplineShell(gewerk);
         result.add(
           _mergeTemplateSchemasIntoDiscipline(
             base: base,
@@ -709,7 +762,7 @@ class TemplateService {
     return result;
   }
 
-  /// Legt bei Bedarf ein einzelnes Gewerk aus Vorlagen an (Plus-Button).
+  /// Speichert ein einzelnes Gewerk inkl. Schema aus Vorlagen (upsert, nicht full replace).
   static Future<Disziplin> materializeDisciplineFromTemplates({
     required DatabaseService dbService,
     required String buildingId,
@@ -720,6 +773,7 @@ class TemplateService {
     if (label.isEmpty) {
       throw ArgumentError('Gewerk darf nicht leer sein');
     }
+
     final existing = await dbService.getDisciplinesByBuildingId(buildingId);
     Disziplin? match;
     for (final d in existing) {
@@ -728,45 +782,34 @@ class TemplateService {
         break;
       }
     }
-    if (match != null) {
-      final synced = await ensureDisciplinesFromTemplates(
-        dbService,
-        buildingId,
-        projectId,
-      );
-      for (final d in synced) {
-        if (d.label.trim().toLowerCase() == label.toLowerCase()) {
-          return d;
-        }
-      }
-      return match;
+
+    final templateRows = await _templateRowsForGewerk(
+      dbService,
+      projectId,
+      gewerk: label,
+    );
+    if (templateRows.isEmpty) {
+      if (match != null) return match;
+      throw StateError('Keine Vorlagen für Gewerk „$label“ gefunden');
     }
 
-    final templateRows = await dbService.getTemplatesByProjectId(projectId);
     final csvSettings = await CsvSettings.loadForProject(projectId);
     final schemaByGewerkAndTyp = _schemaByGewerkAndTypFromRows(
       templateRows,
       importHeaders: csvSettings.importHeaderRow,
     );
-    final created = _mergeTemplateSchemasIntoDiscipline(
-      base: _defaultDisciplineForGewerk(label),
-      gewerk: label,
+    final mergeGewerk = templateRows.first.gewerk.trim();
+    final synced = _mergeTemplateSchemasIntoDiscipline(
+      base: match ?? disciplineShell(label),
+      gewerk: mergeGewerk,
       templateRows: templateRows,
       schemaByGewerkAndTyp: schemaByGewerkAndTyp,
     );
-    final next = [...existing, created];
-    await dbService.replaceDisciplines(buildingId, next);
-    appLog('Gewerk aus Vorlage materialisiert: $label');
-    return created;
-  }
-
-  /// Aktualisiert die Disziplin-Schemata aus den importierten Vorlagen (pro Revisionsobjekt).
-  static Future<void> _syncDisciplineSchemasFromTemplates(
-    DatabaseService dbService,
-    String buildingId,
-    String projectId,
-  ) async {
-    await ensureDisciplinesFromTemplates(dbService, buildingId, projectId);
+    await dbService.upsertDiscipline(buildingId, synced);
+    if (match == null) {
+      appLog('Gewerk aus Vorlage materialisiert: $label');
+    }
+    return synced;
   }
 
   /// Lädt Vorlagen aus einer CSV-Datei (ohne Speichern in DB - für temporäre Verwendung)

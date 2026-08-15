@@ -25,14 +25,10 @@ int maxConfiguredColumnIndex(CsvSettings csvSettings) {
   if (csvSettings.displayNameSpalte != null) {
     bump(csvSettings.displayNameSpalte!);
   }
-  for (final group in csvSettings.attributeTripletColumns) {
+  for (final group in csvSettings.canonicalAttributeTriplets) {
     for (final col in group.columnIndices) {
       bump(col);
     }
-  }
-  for (final pair in csvSettings.attributeColumnPairs) {
-    bump(pair.nameColumn);
-    bump(pair.valueColumn);
   }
   if (csvSettings.hasQrCodeExportColumn) {
     final qrIdx = csvSettings.columnIndexForLabel(
@@ -362,28 +358,23 @@ List<Map<String, dynamic>> orderedAttributeSchemaFieldsForExport({
   required CsvSettings csvSettings,
   required Map<String, dynamic> params,
 }) {
-  final ro = _revisionsobjektForExport(csvSettings, params);
-  final result = <Map<String, dynamic>>[];
+  final result = SchemaResolver.resolveAsMaps(
+    SchemaResolveInput(
+      discipline: discipline,
+      revisionsobjekt: _revisionsobjektForExport(csvSettings, params),
+      params: params,
+      csvSettings: csvSettings,
+      importHeaders: csvSettings.importHeaderRow,
+      purpose: SchemaResolvePurpose.export,
+      allowLastResortInference: true,
+    ),
+  );
+  final ordered = <Map<String, dynamic>>[];
   final seen = <String>{};
-
-  for (final field in discipline.effectiveSchemaFor(revisionsobjekt: ro)) {
-    _appendExportSchemaField(result, seen, field, csvSettings);
+  for (final field in result) {
+    _appendExportSchemaField(ordered, seen, field, csvSettings);
   }
-
-  if (result.isEmpty) {
-    for (final field in discipline.legacyIndividualSchemaFields) {
-      _appendExportSchemaField(result, seen, field, csvSettings);
-    }
-  }
-
-  for (final field in CsvSettings.schemaFieldsFromParams(
-    params,
-    settings: csvSettings,
-  )) {
-    _appendExportSchemaField(result, seen, field, csvSettings);
-  }
-
-  return result;
+  return ordered;
 }
 
 List<String> _lookupKeysForPairSlot({
@@ -508,10 +499,8 @@ List<AttributeColumnPair> _effectiveAttributePairs(
   CsvSettings csvSettings,
   List<String> headers,
 ) {
-  // Gespeichertes Mapping hat Vorrang; Detection nur als Fallback.
-  if (csvSettings.attributeColumnPairs.isNotEmpty) {
-    return csvSettings.attributeColumnPairs;
-  }
+  final stored = csvSettings.effectiveAttributePairs;
+  if (stored.isNotEmpty) return stored;
   if (headers.isNotEmpty) {
     final fromImport = CsvSettings.detectAnlagenAttributePairsFromHeader(headers);
     if (fromImport.isNotEmpty) return fromImport;
@@ -523,9 +512,10 @@ List<AttributeTripletColumn> _effectiveAttributeTriplets(
   CsvSettings csvSettings,
   List<String> headers,
 ) {
-  if (csvSettings.attributeTripletColumns.isNotEmpty) {
-    return csvSettings.attributeTripletColumns;
-  }
+  final stored = csvSettings.canonicalAttributeTriplets
+      .where((t) => !t.isPairDialect)
+      .toList();
+  if (stored.isNotEmpty) return stored;
   if (headers.isNotEmpty) {
     final detected = CsvSettings.detectTripletsFromHeader(headers);
     if (detected.isNotEmpty) return detected;
