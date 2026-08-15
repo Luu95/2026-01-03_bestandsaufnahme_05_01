@@ -1,29 +1,28 @@
-// lib/main.dart
-
+/// App-Einstieg: initialisiert Binding, Drift-DB und Riverpod-[ProviderScope].
+/// Startet [MyApp] mit Theme, RouteObserver und [RootPage] als Home.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'database/database.dart' as db;
-import 'database/database_service.dart';
+import 'package:bestandsaufnahme_01/core/database/database.dart' as db;
+import 'package:bestandsaufnahme_01/core/database/database_service.dart';
 
-import 'providers/database_provider.dart';
-import 'providers/projects_provider.dart';
-import 'providers/settings_provider.dart';
-import 'pages/building_details_page.dart';
-import 'navigation/route_observer.dart';
-import 'theme/app_theme.dart';
-import 'services/ocr_service.dart';
+import 'package:bestandsaufnahme_01/features/projects/providers/database_provider.dart';
+import 'package:bestandsaufnahme_01/features/projects/providers/projects_provider.dart';
+import 'package:bestandsaufnahme_01/features/projects/providers/settings_provider.dart';
+import 'package:bestandsaufnahme_01/features/buildings/pages/building_details_page.dart';
+import 'package:bestandsaufnahme_01/app/navigation/route_observer.dart';
+import 'package:bestandsaufnahme_01/app/theme/app_theme.dart';
+import 'package:bestandsaufnahme_01/features/media/services/ocr_service.dart';
 
+/// Startet die App mit geteilter Datenbank-Instanz (Provider-Overrides).
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Datenbank initialisieren
+
+  // Eine DB-Instanz für die gesamte App-Laufzeit (nicht pro Provider neu öffnen).
   final database = db.AppDatabase();
   final dbService = DatabaseService(database);
-  
- 
-  
+
   runApp(
     ProviderScope(
       overrides: [
@@ -35,7 +34,7 @@ void main() async {
   );
 }
 
-/// MyApp: Einstiegspunkt für die Flutter‐App
+/// Root-Widget: Theme, Lifecycle (OCR-Cleanup) und [MaterialApp].
 class MyApp extends ConsumerStatefulWidget {
   const MyApp({Key? key}) : super(key: key);
 
@@ -59,6 +58,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // OCR-Ressourcen freigeben, wenn die App beendet wird.
     if (state == AppLifecycleState.detached) {
       OcrService.dispose();
     }
@@ -89,7 +89,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   }
 }
 
-/// RootPage lädt die gespeicherten Projekte und zeigt das Haupt‐Interface an
+/// Startseite: lädt Projekte und zeigt Lade-/Fehlerzustand oder [BuildingDetailsPage].
 class RootPage extends ConsumerWidget {
   const RootPage({Key? key}) : super(key: key);
 

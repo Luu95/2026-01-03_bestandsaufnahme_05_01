@@ -1,6 +1,6 @@
-import 'package:bestandsaufnahme_01/utils/anlage_list_sort.dart';
-import 'package:bestandsaufnahme_01/utils/csv_column_layout.dart';
-import 'package:bestandsaufnahme_01/providers/csv_settings_provider.dart';
+import 'package:bestandsaufnahme_01/features/systems/utils/anlage_list_sort.dart';
+import 'package:bestandsaufnahme_01/features/csv/utils/csv_column_layout.dart';
+import 'package:bestandsaufnahme_01/features/csv/providers/csv_settings_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

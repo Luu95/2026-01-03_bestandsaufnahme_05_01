@@ -1,5 +1,5 @@
-import 'package:bestandsaufnahme_01/models/csv_hierarchy_level.dart';
-import 'package:bestandsaufnahme_01/providers/csv_settings_provider.dart';
+import 'package:bestandsaufnahme_01/features/csv/models/csv_hierarchy_level.dart';
+import 'package:bestandsaufnahme_01/features/csv/providers/csv_settings_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 CsvSettings _settings({int titleField = 1, int subtitleField = 0}) {
